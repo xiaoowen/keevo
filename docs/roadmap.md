@@ -23,14 +23,14 @@
 | ✅ | 加密规范 `spec/crypto.md` v0.1 草案 + 测试向量 | 由独立的 Python 参考实现生成向量，CI 自动比对 |
 | ✅ | 修订模型规范 `spec/revisions.md` v0.1 草案 | 修订图、记录级 HLC、因果优先合并、墓碑；M1 的数据模型直接基于它 |
 | ✅ | `spec/vault-format.md` v0.1 草案 | 条目详情、概要、保险库元数据的明文结构 |
-| ☐ | `spec/ipc.md` | 桌面应用与扩展、CLI 的本地通信协议 |
+| ✅ | `spec/ipc.md` v0.1 草案 | 分帧、对端身份校验、Noise 配对（XX + SAS）与会话（IK）、会话内消息与最小披露 |
 | ✅ | `keevo-crypto` | 2SKD、加密信封、密钥包裹、密钥集、账户密钥编码；含 RFC 已知答案测试与跨实现向量测试 |
 | ✅ | `keevo-format`、`keevo-store`、`keevo-core` | 记录映射与因果合并（含 300 组多设备随机模拟）、SQLite schema v1、账户创建 / 解锁 / 锁定与条目读写 |
 | ☐ | iCloud 技术验证 | 需要 Apple 开发者账号与完整 Xcode：在 Developer ID 签名下验证专属容器的读写、按需下载和变化通知；同时验证 Dropbox、OneDrive 同步文件夹中按需下载文件的行为 |
 | ◐ | 打通 UniFFI → Swift | 已完成：`keevo-ffi`、SwiftUI 空壳应用、Swift 端冒烟测试（创建 → 锁定 → 解锁 → 读写条目）。待做：钥匙串保存账户密钥与 Touch ID，需要签名与 Xcode 工程，放到 M1.1 |
-| ☐ | 扩展骨架 + Native Messaging 全链路原型 | 含代码签名校验与 Noise 配对 |
+| ◐ | 扩展骨架 + Native Messaging 全链路原型 | 已完成：`keevo-crypto` 的 Noise 模块与 `keevo-ipc` 协议状态机，进程内端到端测试覆盖配对、会话、最小披露、撤销与窃取私钥等场景。待做：native host 二进制、Chrome 扩展骨架、代码签名校验 |
 | ☐ | 设计系统 v0 | 设计令牌、核心组件；锁屏、主窗口、条目详情、扩展弹窗、内联菜单的高保真稿 |
-| ✅ | CI | 格式、clippy、测试（Linux + macOS）、密码学边界、测试向量比对、cargo-deny、cargo-vet、macOS 冒烟测试、5 个模糊测试目标 |
+| ✅ | CI | 格式、clippy、测试（Linux + macOS）、密码学边界、测试向量比对、cargo-deny、cargo-vet、macOS 冒烟测试、6 个模糊测试目标 |
 | ✅ | 治理文件 | 多许可证落地（App Store 附加许可为草案，待法律审阅）、`CONTRIBUTING.md`（DCO）、`SECURITY.md`、`CODE_OF_CONDUCT.md`、ADR 模板、CODEOWNERS、PR 模板 |
 
 **退出标准**：

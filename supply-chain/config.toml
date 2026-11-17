@@ -20,6 +20,10 @@ url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/audits.toml"
 
 [[exemptions.aead]]
+version = "0.4.3"
+criteria = "safe-to-deploy"
+
+[[exemptions.aead]]
 version = "0.6.1"
 criteria = "safe-to-deploy"
 
@@ -53,6 +57,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.autocfg]]
 version = "1.5.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.base64]]
+version = "0.23.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.base64ct]]
@@ -91,6 +99,14 @@ criteria = "safe-to-deploy"
 version = "1.0.5"
 criteria = "safe-to-deploy"
 
+[[exemptions.chacha20]]
+version = "0.9.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.chacha20poly1305]]
+version = "0.9.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.chacha20poly1305]]
 version = "0.11.0"
 criteria = "safe-to-deploy"
@@ -119,12 +135,32 @@ criteria = "safe-to-deploy"
 version = "0.5.4"
 criteria = "safe-to-deploy"
 
+[[exemptions.cpufeatures]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.crypto-common]]
+version = "0.1.7"
+criteria = "safe-to-deploy"
+
 [[exemptions.crypto-common]]
 version = "0.2.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.ctutils]]
 version = "0.4.8"
+criteria = "safe-to-deploy"
+
+[[exemptions.curve25519-dalek]]
+version = "4.1.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.curve25519-dalek-derive]]
+version = "0.1.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.digest]]
+version = "0.9.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.digest]]
@@ -151,8 +187,12 @@ criteria = "safe-to-deploy"
 version = "3.3.2"
 criteria = "safe-to-deploy"
 
+[[exemptions.generic-array]]
+version = "0.14.5"
+criteria = "safe-to-deploy"
+
 [[exemptions.getrandom]]
-version = "0.4.3"
+version = "0.2.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.glob]]
@@ -236,6 +276,10 @@ version = "0.2.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.poly1305]]
+version = "0.7.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.poly1305]]
 version = "0.9.1"
 criteria = "safe-to-deploy"
 
@@ -244,7 +288,7 @@ version = "1.0.107"
 criteria = "safe-to-deploy"
 
 [[exemptions.r-efi]]
-version = "6.0.0"
+version = "5.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rsqlite-vfs]]
@@ -307,6 +351,10 @@ criteria = "safe-to-deploy"
 version = "0.3.3"
 criteria = "safe-to-deploy"
 
+[[exemptions.snow]]
+version = "0.10.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.sqlite-wasm-rs]]
 version = "0.6.3"
 criteria = "safe-to-deploy"
@@ -365,6 +413,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.universal-hash]]
 version = "0.6.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.version_check]]
+version = "0.9.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.windows-sys]]

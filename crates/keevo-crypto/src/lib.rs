@@ -18,6 +18,7 @@
 //! - [`derive_account_unlock_key`]：双因子密钥派生（2SKD），得到 AUK。
 //! - [`AccountKeyset`]：账户密钥集，由 AUK 封装。
 //! - [`seal`] / [`open`]：加密信封；[`SymmetricKey::wrap_key`] / [`SymmetricKey::unwrap_key`]：密钥包裹。
+//! - [`Handshake`] / [`Transport`]：本地 IPC 的 Noise 握手与传输加密（`spec/ipc.md`）。
 
 mod envelope;
 mod error;
@@ -26,6 +27,7 @@ mod id;
 mod kdf;
 mod key;
 mod keyset;
+mod noise;
 mod padding;
 mod random;
 mod secret_key;
@@ -45,6 +47,7 @@ pub use id::{Id128, KeyId};
 pub use kdf::KdfParams;
 pub use key::SymmetricKey;
 pub use keyset::AccountKeyset;
+pub use noise::{Handshake, MAX_NOISE_MESSAGE, StaticKeypair, Transport};
 pub use secret_key::AccountSecretKey;
 pub use two_skd::{MAX_PASSWORD_LEN, derive_account_unlock_key};
 

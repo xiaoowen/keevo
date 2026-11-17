@@ -69,7 +69,7 @@ flowchart LR
 | `keevo-store` | 本地持久化：SQLite schema、迁移、事务、备份 |
 | `keevo-core` | 账户、保险库与条目操作；解锁状态机；内存搜索索引；密码生成器；TOTP；网址匹配（Public Suffix List）；导入导出；安全中心检查；密钥引用解析 |
 | `keevo-ssh` | SSH 密钥生成与解析；SSH agent 协议实现 |
-| `keevo-ipc` | 本地 IPC 协议：消息定义、帧格式、Noise 会话。由 App、native host、CLI 共用，也用于局域网配对 |
+| `keevo-ipc` | 本地 IPC 协议（[spec/ipc.md](../spec/ipc.md)）：帧格式、消息定义、配对与会话状态机。不做 I/O，由 App、native host、CLI 共用。Noise 握手本身在 `keevo-crypto` 中，局域网配对（M2）也复用它 |
 | `keevo-sync`（M2） | 同步引擎：日志段、快照、修订图合并、签名与哈希链校验、高水位线。定义 `SyncStore` trait，包含列出文件、读取、原子创建、删除自己的文件、监听变化。文件夹实现写在 Rust 中；iCloud 实现写在 Swift 侧，通过 UniFFI 回调接口注入 |
 | `keevo-ffi` | 通过 UniFFI 导出给 Swift |
 | `keevo-native-host` | Native Messaging 宿主二进制 |

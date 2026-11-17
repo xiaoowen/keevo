@@ -13,6 +13,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 keevo-crypto = { path = "../crates/keevo-crypto" }
 keevo-format = { path = "../crates/keevo-format" }
+keevo-ipc = { path = "../crates/keevo-ipc" }
 
 # 独立 workspace：模糊测试需要 nightly，不进入主 workspace 的常规构建
 [workspace]
@@ -49,6 +50,13 @@ bench = false
 [[bin]]
 name = "overview_decode"
 path = "fuzz_targets/overview_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ipc_service_frames"
+path = "fuzz_targets/ipc_service_frames.rs"
 test = false
 doc = false
 bench = false

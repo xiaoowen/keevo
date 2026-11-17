@@ -7,7 +7,7 @@
 | [crypto.md](crypto.md)：账户密钥、KDF、2SKD、密钥集、加密信封 | 0.1 | 草案，待外部评审 | [test-vectors/crypto-v1.json](test-vectors/crypto-v1.json) |
 | [revisions.md](revisions.md)：修订图、记录、HLC、合并 | 0.1 | 草案，待评审 | JSON 向量计划中；参考实现带多设备随机模拟测试 |
 | [vault-format.md](vault-format.md)：条目与保险库的明文结构 | 0.1 | 草案，待评审 | 计划中（M1.1） |
-| ipc.md：桌面应用与扩展、CLI 的本地通信 | — | 计划中（M0 第 4 周） | — |
+| [ipc.md](ipc.md)：桌面应用与扩展、CLI 的本地通信 | 0.1 | 草案，待评审 | 计划中（扩展侧实现落地后提供跨实现向量） |
 
 ## 规则
 

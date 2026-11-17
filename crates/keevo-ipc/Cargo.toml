@@ -1,0 +1,19 @@
+[package]
+name = "keevo-ipc"
+description = "本地通信协议（spec/ipc.md）：分帧、消息、配对与会话状态机。由桌面应用、native host 与 CLI 共用。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64 = "0.23"
+keevo-crypto = { path = "../keevo-crypto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zeroize = "1"
+
+[lints]
+workspace = true
