@@ -1,0 +1,44 @@
+{
+  "$description": "浅色主题的语义令牌。值引用 base.json 中的原始色板。",
+  "bg": {
+    "canvas":   { "$type": "color", "$value": "{color.neutral.0}",   "$description": "内容区、窗口背景" },
+    "surface":  { "$type": "color", "$value": "{color.neutral.50}",  "$description": "侧边栏、分组背景" },
+    "raised":   { "$type": "color", "$value": "{color.neutral.0}",   "$description": "浮层、弹窗、菜单" },
+    "sunken":   { "$type": "color", "$value": "{color.neutral.100}", "$description": "代码块、秘密值底色" },
+    "hover":    { "$type": "color", "$value": "{color.neutral.100}" },
+    "selected": { "$type": "color", "$value": "{color.teal.100}" }
+  },
+  "fg": {
+    "primary":   { "$type": "color", "$value": "{color.neutral.850}" },
+    "secondary": { "$type": "color", "$value": "{color.neutral.600}" },
+    "tertiary":  { "$type": "color", "$value": "{color.neutral.400}", "$description": "占位符、禁用。不用于正文" },
+    "on-accent": { "$type": "color", "$value": "{color.neutral.0}" }
+  },
+  "border": {
+    "subtle":  { "$type": "color", "$value": "{color.neutral.150}", "$description": "分隔线（装饰性）" },
+    "control": { "$type": "color", "$value": "{color.neutral.400}", "$description": "输入框等控件的边界，需 ≥ 3:1" }
+  },
+  "accent": {
+    "fill":       { "$type": "color", "$value": "{color.teal.600}", "$description": "主按钮底色，配 fg.on-accent" },
+    "fill-hover": { "$type": "color", "$value": "{color.teal.700}" },
+    "fg":         { "$type": "color", "$value": "{color.teal.700}", "$description": "品牌色文字、链接、图标" },
+    "subtle":     { "$type": "color", "$value": "{color.teal.50}" }
+  },
+  "focus": {
+    "ring": { "$type": "color", "$value": "{color.teal.500}" }
+  },
+  "status": {
+    "danger":  { "fg": { "$type": "color", "$value": "{color.red.600}" },   "bg": { "$type": "color", "$value": "{color.red.50}" } },
+    "warning": { "fg": { "$type": "color", "$value": "{color.amber.700}" }, "bg": { "$type": "color", "$value": "{color.amber.50}" } },
+    "success": { "fg": { "$type": "color", "$value": "{color.green.600}" }, "bg": { "$type": "color", "$value": "{color.green.50}" } },
+    "info":    { "fg": { "$type": "color", "$value": "{color.blue.600}" },  "bg": { "$type": "color", "$value": "{color.blue.50}" } }
+  },
+  "secret": {
+    "$description": "大字显示时逐字符分色（docs/ux.md §5）：数字与符号用不同颜色，便于手动抄写",
+    "digit":  { "$type": "color", "$value": "{color.blue.600}" },
+    "symbol": { "$type": "color", "$value": "{color.red.600}" }
+  },
+  "shadow": {
+    "color": { "$type": "color", "$value": "#0000001F" }
+  }
+}

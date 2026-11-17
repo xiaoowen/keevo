@@ -14,7 +14,7 @@ struct KeevoApp: App {
 
     var body: some Scene {
         WindowGroup("Keevo") {
-            RootView()
+            RootView().tinted
                 .environment(model)
                 .frame(minWidth: 860, minHeight: 540)
         }
@@ -46,5 +46,12 @@ struct RootView: View {
         case .locked: LockView()
         case .unlocked: MainView()
         }
+    }
+}
+
+extension RootView {
+    /// 全局使用 Keevo 品牌色作为强调色。
+    var tinted: some View {
+        self.tint(KV.Colors.accentFill)
     }
 }

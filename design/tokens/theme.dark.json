@@ -1,0 +1,43 @@
+{
+  "$description": "深色主题的语义令牌。",
+  "bg": {
+    "canvas":   { "$type": "color", "$value": "{color.neutral.850}" },
+    "surface":  { "$type": "color", "$value": "{color.neutral.900}" },
+    "raised":   { "$type": "color", "$value": "{color.neutral.800}" },
+    "sunken":   { "$type": "color", "$value": "{color.neutral.950}" },
+    "hover":    { "$type": "color", "$value": "{color.neutral.800}" },
+    "selected": { "$type": "color", "$value": "{color.teal.900}" }
+  },
+  "fg": {
+    "primary":   { "$type": "color", "$value": "{color.neutral.50}" },
+    "secondary": { "$type": "color", "$value": "{color.neutral.350}" },
+    "tertiary":  { "$type": "color", "$value": "{color.neutral.500}" },
+    "on-accent": { "$type": "color", "$value": "{color.neutral.0}" }
+  },
+  "border": {
+    "subtle":  { "$type": "color", "$value": "{color.neutral.750}" },
+    "control": { "$type": "color", "$value": "{color.neutral.500}" }
+  },
+  "accent": {
+    "fill":       { "$type": "color", "$value": "{color.teal.600}" },
+    "fill-hover": { "$type": "color", "$value": "{color.teal.700}" },
+    "fg":         { "$type": "color", "$value": "{color.teal.300}" },
+    "subtle":     { "$type": "color", "$value": "{color.teal.950}" }
+  },
+  "focus": {
+    "ring": { "$type": "color", "$value": "{color.teal.400}" }
+  },
+  "status": {
+    "danger":  { "fg": { "$type": "color", "$value": "{color.red.400}" },   "bg": { "$type": "color", "$value": "{color.red.950}" } },
+    "warning": { "fg": { "$type": "color", "$value": "{color.amber.300}" }, "bg": { "$type": "color", "$value": "{color.amber.950}" } },
+    "success": { "fg": { "$type": "color", "$value": "{color.green.300}" }, "bg": { "$type": "color", "$value": "{color.green.950}" } },
+    "info":    { "fg": { "$type": "color", "$value": "{color.blue.300}" },  "bg": { "$type": "color", "$value": "{color.blue.950}" } }
+  },
+  "secret": {
+    "digit":  { "$type": "color", "$value": "{color.blue.300}" },
+    "symbol": { "$type": "color", "$value": "{color.red.400}" }
+  },
+  "shadow": {
+    "color": { "$type": "color", "$value": "#00000066" }
+  }
+}

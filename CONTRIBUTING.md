@@ -34,7 +34,10 @@ cargo deny check                            # 安全公告、许可证、来源
 cargo vet                                   # 供应链审计
 scripts/build-macos.sh --smoke              # macOS 空壳应用 + Swift 端冒烟测试
 scripts/build-extension.sh --test           # 浏览器扩展 + 端到端测试（需要 wasm32 目标与 wasm-bindgen-cli 0.2.130）
+python3 design/build_tokens.py              # 修改 design/tokens 后重新生成 CSS 与 Swift，并校验对比度
 ```
+
+**视觉改动**：颜色、间距、字体一律改 `design/tokens/*.json`，不要在 CSS 或 Swift 中写死数值。
 
 模糊测试需要 nightly 与 cargo-fuzz：
 

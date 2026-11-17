@@ -45,6 +45,7 @@ crates/keevo-macos/    代码签名校验（唯一允许 unsafe 的 crate）
 apps/macos/            macOS 应用（M0：SwiftUI 空壳 + 端到端冒烟测试）
 apps/browser-extension/  Chrome 扩展（M0 原型）
 spec/                  可审计的规范、独立参考实现与测试向量
+design/                设计系统：令牌（单一来源）、生成脚本与对比度报告
 fuzz/                  模糊测试目标（nightly + cargo-fuzz）
 tools/                 构建工具
 docs/                  设计文档与架构决策记录（ADR）

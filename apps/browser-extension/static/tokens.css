@@ -1,0 +1,156 @@
+/* 由 design/build_tokens.py 从 design/tokens/*.json 生成，请勿手改。 */
+
+:root {
+  color-scheme: light dark;
+
+  --kv-space-0: 0px;
+  --kv-space-0-5: 2px;
+  --kv-space-1: 4px;
+  --kv-space-1-5: 6px;
+  --kv-space-2: 8px;
+  --kv-space-3: 12px;
+  --kv-space-4: 16px;
+  --kv-space-5: 20px;
+  --kv-space-6: 24px;
+  --kv-space-8: 32px;
+  --kv-space-10: 40px;
+  --kv-space-12: 48px;
+  --kv-radius-xs: 3px;
+  --kv-radius-sm: 5px;
+  --kv-radius-md: 8px;
+  --kv-radius-lg: 12px;
+  --kv-radius-xl: 16px;
+  --kv-radius-full: 999px;
+
+  --kv-font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", sans-serif;
+  --kv-font-mono: ui-monospace, "SF Mono", "Menlo", monospace;
+  --kv-type-caption: 400 11px/14px var(--kv-font-sans);
+  --kv-type-footnote: 400 12px/16px var(--kv-font-sans);
+  --kv-type-body: 400 13px/18px var(--kv-font-sans);
+  --kv-type-body-strong: 600 13px/18px var(--kv-font-sans);
+  --kv-type-headline: 600 15px/20px var(--kv-font-sans);
+  --kv-type-title: 600 20px/26px var(--kv-font-sans);
+  --kv-type-large-title: 700 26px/32px var(--kv-font-sans);
+  --kv-type-mono: 500 13px/18px var(--kv-font-mono);
+  --kv-type-mono-large: 500 18px/24px var(--kv-font-mono);
+  --kv-type-large-type: 500 28px/36px var(--kv-font-mono);
+
+  --kv-duration-fast: 120ms;
+  --kv-duration-base: 200ms;
+  --kv-duration-slow: 320ms;
+  --kv-easing-standard: cubic-bezier(0.2, 0, 0, 1);
+  --kv-easing-exit: cubic-bezier(0.4, 0, 1, 1);
+
+  --kv-site-1: #127F71;
+  --kv-site-2: #2F6FB8;
+  --kv-site-3: #7A4FC4;
+  --kv-site-4: #A83A6B;
+  --kv-site-5: #B4532A;
+  --kv-site-6: #8A5A00;
+  --kv-site-7: #5E6A16;
+  --kv-site-8: #4A5568;
+
+  --kv-bg-canvas: #FFFFFF;
+  --kv-bg-surface: #F5F5F7;
+  --kv-bg-raised: #FFFFFF;
+  --kv-bg-sunken: #ECECEF;
+  --kv-bg-hover: #ECECEF;
+  --kv-bg-selected: #D3F4EC;
+  --kv-fg-primary: #1C1C1E;
+  --kv-fg-secondary: #636366;
+  --kv-fg-tertiary: #8E8E95;
+  --kv-fg-on-accent: #FFFFFF;
+  --kv-border-subtle: #E3E3E8;
+  --kv-border-control: #8E8E95;
+  --kv-accent-fill: #127F71;
+  --kv-accent-fill-hover: #0F665B;
+  --kv-accent-fg: #0F665B;
+  --kv-accent-subtle: #EEFBF8;
+  --kv-focus-ring: #1E9C8A;
+  --kv-status-danger-fg: #C4321F;
+  --kv-status-danger-bg: #FEF2F1;
+  --kv-status-warning-fg: #8A5409;
+  --kv-status-warning-bg: #FFF8EB;
+  --kv-status-success-fg: #227838;
+  --kv-status-success-bg: #EFFAF1;
+  --kv-status-info-fg: #285FC0;
+  --kv-status-info-bg: #EFF6FF;
+  --kv-secret-digit: #285FC0;
+  --kv-secret-symbol: #C4321F;
+  --kv-shadow-color: #0000001F;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --kv-bg-canvas: #1C1C1E;
+    --kv-bg-surface: #161618;
+    --kv-bg-raised: #2C2C2E;
+    --kv-bg-sunken: #0E0E10;
+    --kv-bg-hover: #2C2C2E;
+    --kv-bg-selected: #0D403B;
+    --kv-fg-primary: #F5F5F7;
+    --kv-fg-secondary: #A1A1A6;
+    --kv-fg-tertiary: #7C7C82;
+    --kv-border-subtle: #3A3A3C;
+    --kv-border-control: #7C7C82;
+    --kv-accent-fg: #72D4C2;
+    --kv-accent-subtle: #062623;
+    --kv-focus-ring: #3FB9A6;
+    --kv-status-danger-fg: #F07264;
+    --kv-status-danger-bg: #3A1A17;
+    --kv-status-warning-fg: #F9C259;
+    --kv-status-warning-bg: #33260E;
+    --kv-status-success-fg: #85D198;
+    --kv-status-success-bg: #12301A;
+    --kv-status-info-fg: #8DB8F5;
+    --kv-status-info-bg: #142540;
+    --kv-secret-digit: #8DB8F5;
+    --kv-secret-symbol: #F07264;
+    --kv-shadow-color: #00000066;
+  }
+}
+
+@media (prefers-color-scheme: light) and (prefers-contrast: more) {
+  :root {
+    --kv-fg-secondary: #48484A;
+    --kv-fg-tertiary: #636366;
+    --kv-border-subtle: #B8B8BF;
+    --kv-border-control: #636366;
+    --kv-accent-fill: #0F665B;
+    --kv-accent-fill-hover: #0F514A;
+    --kv-accent-fg: #0F514A;
+    --kv-focus-ring: #0F665B;
+    --kv-status-danger-fg: #7F2318;
+    --kv-status-warning-fg: #6B420C;
+    --kv-status-success-fg: #1D5F2F;
+    --kv-status-info-fg: #224D9B;
+    --kv-secret-digit: #1B3D7A;
+    --kv-secret-symbol: #7F2318;
+  }
+}
+
+@media (prefers-color-scheme: dark) and (prefers-contrast: more) {
+  :root {
+    --kv-bg-canvas: #000000;
+    --kv-bg-surface: #0E0E10;
+    --kv-fg-primary: #FFFFFF;
+    --kv-fg-secondary: #D2D2D7;
+    --kv-fg-tertiary: #A1A1A6;
+    --kv-border-subtle: #636366;
+    --kv-border-control: #A1A1A6;
+    --kv-accent-fg: #A8E8DA;
+    --kv-focus-ring: #72D4C2;
+    --kv-status-danger-fg: #F7A39A;
+    --kv-status-info-fg: #B9D3FA;
+    --kv-secret-digit: #B9D3FA;
+    --kv-secret-symbol: #F7A39A;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --kv-duration-fast: 0ms;
+    --kv-duration-base: 0ms;
+    --kv-duration-slow: 0ms;
+  }
+}

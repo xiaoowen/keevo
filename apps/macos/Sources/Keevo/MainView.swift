@@ -37,13 +37,16 @@ struct MainView: View {
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } content: {
             List(visibleItems, id: \.id, selection: $selectedItem) { item in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.title).font(.body.weight(.medium))
-                    if !item.subtitle.isEmpty {
-                        Text(item.subtitle).font(.callout).foregroundStyle(.secondary)
+                HStack(spacing: KV.Space.s2) {
+                    SiteIcon(title: item.title, url: item.urls.first)
+                    VStack(alignment: .leading, spacing: KV.Space.s0_5) {
+                        Text(item.title).font(KV.Typography.bodyStrong)
+                        if !item.subtitle.isEmpty {
+                            Text(item.subtitle).font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
+                        }
                     }
                 }
-                .padding(.vertical, 2)
+                .padding(.vertical, KV.Space.s0_5)
             }
             .searchable(text: $search, prompt: "搜索标题、用户名、网址")
             .overlay {
@@ -80,6 +83,11 @@ struct MainView: View {
     }
 }
 
+private struct LargeTypeItem: Identifiable {
+    let value: String
+    var id: String { "large-type" }
+}
+
 private struct SecretKeyItem: Identifiable {
     let value: String
     var id: String { "secret-key" }
@@ -90,26 +98,38 @@ struct ItemDetailView: View {
     let item: ItemEntry
     @ViewState private var fields: [FieldEntry] = []
     @ViewState private var revealed: Set<String> = []
+    @ViewState private var largeType: LargeTypeItem?
 
     var body: some View {
         Form {
             Section {
-                Text(item.title).font(.title2.weight(.semibold))
+                HStack(spacing: KV.Space.s3) {
+                    SiteIcon(title: item.title, url: item.urls.first, size: 40)
+                    VStack(alignment: .leading, spacing: KV.Space.s0_5) {
+                        Text(item.title).font(KV.Typography.title)
+                        if !item.subtitle.isEmpty {
+                            Text(item.subtitle).font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
+                        }
+                    }
+                }
             }
             Section {
                 ForEach(fields, id: \.id) { field in
                     LabeledContent(field.label) {
                         HStack(spacing: 8) {
-                            if field.concealed && !revealed.contains(field.id) {
-                                Text("••••••••").foregroundStyle(.secondary)
-                            } else {
-                                Text(field.value)
-                                    .textSelection(.enabled)
-                                    .font(field.concealed ? .body.monospaced() : .body)
-                            }
                             if field.concealed {
+                                SecretText(value: field.value, revealed: revealed.contains(field.id))
                                 Button(revealed.contains(field.id) ? "隐藏" : "显示") { toggle(field.id) }
                                     .buttonStyle(.borderless)
+                                Button { largeType = LargeTypeItem(value: field.value) } label: {
+                                    Image(systemName: "textformat.size")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("大字显示")
+                            } else {
+                                Text(field.value)
+                                    .font(KV.Typography.body)
+                                    .textSelection(.enabled)
                             }
                             Button { Clipboard.copy(field.value) } label: { Image(systemName: "doc.on.doc") }
                                 .buttonStyle(.borderless)
@@ -125,7 +145,8 @@ struct ItemDetailView: View {
         .formStyle(.grouped)
         .onAppear { fields = model.fields(of: item.id) }
         // 切换条目或离开视图时丢弃已解密的字段
-        .onDisappear { fields = []; revealed = [] }
+        .onDisappear { fields = []; revealed = []; largeType = nil }
+        .sheet(item: $largeType) { item in LargeTypeView(value: item.value) }
     }
 
     private func toggle(_ id: String) {

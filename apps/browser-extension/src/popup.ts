@@ -18,6 +18,33 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, cls?: 
   return e;
 }
 
+const SITE_COLORS = 8;
+
+/**
+ * 网站图标：首字母 + 按域名选取的颜色，与 macOS 应用共用同一算法（design/README.md「网站图标」）：
+ * key = 去掉 www. 的小写主机名，index = FNV-1a-32(UTF-8(key)) mod 8。
+ */
+function siteIcon(title: string, origin: string): HTMLElement {
+  let key = title;
+  try {
+    const host = new URL(origin).hostname.toLowerCase();
+    key = host.startsWith("www.") ? host.slice(4) : host;
+  } catch {
+    // 没有网址时按标题取色
+  }
+  let hash = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(key)) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  const source = title.trim() || key;
+  const [first] = new Intl.Segmenter().segment(source);
+  const icon = el("div", (first?.segment ?? "?").toUpperCase(), "site-icon");
+  icon.style.background = `var(--kv-site-${(hash % SITE_COLORS) + 1})`;
+  icon.setAttribute("aria-hidden", "true");
+  return icon;
+}
+
 const ERRORS: Record<string, string> = {
   host_not_installed: "没有找到 Keevo 的本机组件。请先运行 scripts/install-native-host-dev.sh。",
   service_unavailable: "未能连接 Keevo。请确认开发服务正在运行。",
@@ -49,11 +76,14 @@ function render(state: ViewState, candidates: Candidate[] = [], origin = "", not
     }
     case "awaiting_confirm": {
       root.append(el("p", "请确认 Keevo 中显示的验证码与下方一致，并在 Keevo 中确认："));
-      root.append(el("div", state.sas.match(/../g)?.join(" ") ?? state.sas, "sas"));
+      const sas = el("div", undefined, "sas");
+      sas.setAttribute("aria-label", `验证码 ${state.sas.match(/../g)?.join(" ") ?? state.sas}`);
+      for (const group of state.sas.match(/../g) ?? [state.sas]) sas.append(el("span", group));
+      root.append(sas);
       break;
     }
     case "error": {
-      root.append(el("p", ERRORS[state.error] ?? `出错了（${state.error}）`, "error"));
+      root.append(el("div", ERRORS[state.error] ?? `出错了（${state.error}）`, "banner danger"));
       const b = el("button", "重新配对");
       b.onclick = () => void ask({ type: "pair" }).then(update);
       root.append(b);
@@ -68,7 +98,7 @@ function render(state: ViewState, candidates: Candidate[] = [], origin = "", not
       if (candidates.length === 0) root.append(el("p", "当前网站没有匹配的登录。", "muted"));
       for (const c of candidates) {
         const row = el("div", undefined, "item");
-        const text = el("div");
+        const text = el("div", undefined, "text");
         text.append(el("div", c.title, "title"), el("div", c.subtitle, "subtitle"));
         const b = el("button", "填充");
         b.onclick = async () => {
@@ -82,12 +112,12 @@ function render(state: ViewState, candidates: Candidate[] = [], origin = "", not
           if (r.fill === "filled") window.close();
           else render(r.state, candidates, origin, done[r.fill ?? ""] ?? "填充失败。");
         };
-        row.append(text, b);
+        row.append(siteIcon(c.title, origin), text, b);
         root.append(row);
       }
       break;
   }
-  if (note) root.append(el("p", note, "note"));
+  if (note) root.append(el("div", note, "banner warning"));
 }
 
 async function update(): Promise<void> {

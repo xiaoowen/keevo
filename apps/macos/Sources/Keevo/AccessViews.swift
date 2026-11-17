@@ -29,9 +29,8 @@ struct OnboardingView: View {
             .formStyle(.grouped)
             .frame(maxWidth: 440)
 
-            Text("忘记主密码且丢失应急包时，数据将无法恢复。")
-                .font(.callout)
-                .foregroundStyle(.orange)
+            Banner(kind: .warning, message: "忘记主密码且丢失应急包时，数据将无法恢复。")
+                .frame(maxWidth: 440)
 
             HStack {
                 Button("创建保险库") {
@@ -94,12 +93,12 @@ struct SecretKeySheet: View {
             Text("你的账户密钥").font(.title2.weight(.semibold))
             Text("在新设备上登录、或从备份恢复时，需要主密码和这把账户密钥。请把它抄写或打印后离线保存。")
                 .foregroundStyle(.secondary)
-            Text(secretKey)
-                .font(.system(.title3, design: .monospaced).weight(.medium))
+            // 数字与字母分色，便于抄写（docs/ux.md §5）
+            classifiedText(secretKey, font: KV.Typography.monoLarge)
                 .textSelection(.enabled)
-                .padding(12)
+                .padding(KV.Space.s3)
                 .frame(maxWidth: .infinity)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: KV.Radius.md))
             Button("复制") { Clipboard.copy(secretKey) }
             Toggle("我已妥善保存账户密钥", isOn: $saved)
             HStack {
@@ -119,7 +118,7 @@ struct ErrorText: View {
 
     var body: some View {
         if let message = model.errorMessage {
-            Text(message).foregroundStyle(.red).font(.callout)
+            Banner(kind: .danger, message: message).frame(maxWidth: 440)
         }
     }
 }

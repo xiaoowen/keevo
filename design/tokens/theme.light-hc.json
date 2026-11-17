@@ -1,0 +1,79 @@
+{
+  "$description": "浅色高对比（系统设置「增强对比度」）。只列出与浅色主题不同的令牌。",
+  "fg": {
+    "secondary": {
+      "$type": "color",
+      "$value": "{color.neutral.700}"
+    },
+    "tertiary": {
+      "$type": "color",
+      "$value": "{color.neutral.600}"
+    }
+  },
+  "border": {
+    "subtle": {
+      "$type": "color",
+      "$value": "{color.neutral.300}"
+    },
+    "control": {
+      "$type": "color",
+      "$value": "{color.neutral.600}"
+    }
+  },
+  "accent": {
+    "fill": {
+      "$type": "color",
+      "$value": "{color.teal.700}"
+    },
+    "fill-hover": {
+      "$type": "color",
+      "$value": "{color.teal.800}"
+    },
+    "fg": {
+      "$type": "color",
+      "$value": "{color.teal.800}"
+    }
+  },
+  "focus": {
+    "ring": {
+      "$type": "color",
+      "$value": "{color.teal.700}"
+    }
+  },
+  "status": {
+    "danger": {
+      "fg": {
+        "$type": "color",
+        "$value": "{color.red.800}"
+      }
+    },
+    "warning": {
+      "fg": {
+        "$type": "color",
+        "$value": "{color.amber.800}"
+      }
+    },
+    "success": {
+      "fg": {
+        "$type": "color",
+        "$value": "{color.green.700}"
+      }
+    },
+    "info": {
+      "fg": {
+        "$type": "color",
+        "$value": "{color.blue.700}"
+      }
+    }
+  },
+  "secret": {
+    "digit": {
+      "$type": "color",
+      "$value": "{color.blue.800}"
+    },
+    "symbol": {
+      "$type": "color",
+      "$value": "{color.red.800}"
+    }
+  }
+}

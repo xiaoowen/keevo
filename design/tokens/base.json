@@ -1,0 +1,133 @@
+{
+  "$description": "Keevo 设计令牌：原始色板与尺寸、字体、动效。主题无关。由 design/build_tokens.py 读取。",
+  "color": {
+    "neutral": {
+      "0":   { "$type": "color", "$value": "#FFFFFF" },
+      "50":  { "$type": "color", "$value": "#F5F5F7" },
+      "100": { "$type": "color", "$value": "#ECECEF" },
+      "150": { "$type": "color", "$value": "#E3E3E8" },
+      "200": { "$type": "color", "$value": "#D2D2D7" },
+      "300": { "$type": "color", "$value": "#B8B8BF" },
+      "350": { "$type": "color", "$value": "#A1A1A6" },
+      "400": { "$type": "color", "$value": "#8E8E95" },
+      "500": { "$type": "color", "$value": "#7C7C82" },
+      "600": { "$type": "color", "$value": "#636366" },
+      "700": { "$type": "color", "$value": "#48484A" },
+      "750": { "$type": "color", "$value": "#3A3A3C" },
+      "800": { "$type": "color", "$value": "#2C2C2E" },
+      "850": { "$type": "color", "$value": "#1C1C1E" },
+      "900": { "$type": "color", "$value": "#161618" },
+      "950": { "$type": "color", "$value": "#0E0E10" },
+      "1000": { "$type": "color", "$value": "#000000" }
+    },
+    "teal": {
+      "50":  { "$type": "color", "$value": "#EEFBF8" },
+      "100": { "$type": "color", "$value": "#D3F4EC" },
+      "200": { "$type": "color", "$value": "#A8E8DA" },
+      "300": { "$type": "color", "$value": "#72D4C2" },
+      "400": { "$type": "color", "$value": "#3FB9A6" },
+      "500": { "$type": "color", "$value": "#1E9C8A" },
+      "600": { "$type": "color", "$value": "#127F71" },
+      "700": { "$type": "color", "$value": "#0F665B" },
+      "800": { "$type": "color", "$value": "#0F514A" },
+      "900": { "$type": "color", "$value": "#0D403B" },
+      "950": { "$type": "color", "$value": "#062623" }
+    },
+    "red": {
+      "50":  { "$type": "color", "$value": "#FEF2F1" },
+      "300": { "$type": "color", "$value": "#F7A39A" },
+      "400": { "$type": "color", "$value": "#F07264" },
+      "600": { "$type": "color", "$value": "#C4321F" },
+      "700": { "$type": "color", "$value": "#A2281A" },
+      "800": { "$type": "color", "$value": "#7F2318" },
+      "950": { "$type": "color", "$value": "#3A1A17" }
+    },
+    "amber": {
+      "50":  { "$type": "color", "$value": "#FFF8EB" },
+      "300": { "$type": "color", "$value": "#F9C259" },
+      "700": { "$type": "color", "$value": "#8A5409" },
+      "800": { "$type": "color", "$value": "#6B420C" },
+      "950": { "$type": "color", "$value": "#33260E" }
+    },
+    "green": {
+      "50":  { "$type": "color", "$value": "#EFFAF1" },
+      "300": { "$type": "color", "$value": "#85D198" },
+      "600": { "$type": "color", "$value": "#227838" },
+      "700": { "$type": "color", "$value": "#1D5F2F" },
+      "950": { "$type": "color", "$value": "#12301A" }
+    },
+    "blue": {
+      "50":  { "$type": "color", "$value": "#EFF6FF" },
+      "200": { "$type": "color", "$value": "#B9D3FA" },
+      "300": { "$type": "color", "$value": "#8DB8F5" },
+      "600": { "$type": "color", "$value": "#285FC0" },
+      "700": { "$type": "color", "$value": "#224D9B" },
+      "800": { "$type": "color", "$value": "#1B3D7A" },
+      "950": { "$type": "color", "$value": "#142540" }
+    },
+    "site": {
+      "$description": "本地生成的网站图标底色（首字母 + 颜色），按域名哈希选取，避免向第三方请求 favicon。配白色文字。",
+      "1": { "$type": "color", "$value": "#127F71" },
+      "2": { "$type": "color", "$value": "#2F6FB8" },
+      "3": { "$type": "color", "$value": "#7A4FC4" },
+      "4": { "$type": "color", "$value": "#A83A6B" },
+      "5": { "$type": "color", "$value": "#B4532A" },
+      "6": { "$type": "color", "$value": "#8A5A00" },
+      "7": { "$type": "color", "$value": "#5E6A16" },
+      "8": { "$type": "color", "$value": "#4A5568" }
+    }
+  },
+  "space": {
+    "0":   { "$type": "dimension", "$value": "0px" },
+    "0_5": { "$type": "dimension", "$value": "2px" },
+    "1":   { "$type": "dimension", "$value": "4px" },
+    "1_5": { "$type": "dimension", "$value": "6px" },
+    "2":   { "$type": "dimension", "$value": "8px" },
+    "3":   { "$type": "dimension", "$value": "12px" },
+    "4":   { "$type": "dimension", "$value": "16px" },
+    "5":   { "$type": "dimension", "$value": "20px" },
+    "6":   { "$type": "dimension", "$value": "24px" },
+    "8":   { "$type": "dimension", "$value": "32px" },
+    "10":  { "$type": "dimension", "$value": "40px" },
+    "12":  { "$type": "dimension", "$value": "48px" }
+  },
+  "radius": {
+    "xs":   { "$type": "dimension", "$value": "3px" },
+    "sm":   { "$type": "dimension", "$value": "5px" },
+    "md":   { "$type": "dimension", "$value": "8px" },
+    "lg":   { "$type": "dimension", "$value": "12px" },
+    "xl":   { "$type": "dimension", "$value": "16px" },
+    "full": { "$type": "dimension", "$value": "999px" }
+  },
+  "font": {
+    "family": {
+      "sans": { "$type": "fontFamily", "$value": ["-apple-system", "BlinkMacSystemFont", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", "sans-serif"] },
+      "mono": { "$type": "fontFamily", "$value": ["ui-monospace", "SF Mono", "Menlo", "monospace"] }
+    },
+    "style": {
+      "$description": "字号与行高单位为 pt（macOS）/ px（Web），两者 1:1。macOS 正文为 13pt，与系统一致。",
+      "caption":     { "$type": "typography", "$value": { "fontSize": "11px", "lineHeight": "14px", "fontWeight": 400 } },
+      "footnote":    { "$type": "typography", "$value": { "fontSize": "12px", "lineHeight": "16px", "fontWeight": 400 } },
+      "body":        { "$type": "typography", "$value": { "fontSize": "13px", "lineHeight": "18px", "fontWeight": 400 } },
+      "body-strong": { "$type": "typography", "$value": { "fontSize": "13px", "lineHeight": "18px", "fontWeight": 600 } },
+      "headline":    { "$type": "typography", "$value": { "fontSize": "15px", "lineHeight": "20px", "fontWeight": 600 } },
+      "title":       { "$type": "typography", "$value": { "fontSize": "20px", "lineHeight": "26px", "fontWeight": 600 } },
+      "large-title": { "$type": "typography", "$value": { "fontSize": "26px", "lineHeight": "32px", "fontWeight": 700 } },
+      "mono":        { "$type": "typography", "$value": { "fontSize": "13px", "lineHeight": "18px", "fontWeight": 500, "family": "mono" } },
+      "mono-large":  { "$type": "typography", "$value": { "fontSize": "18px", "lineHeight": "24px", "fontWeight": 500, "family": "mono" } },
+      "large-type":  { "$type": "typography", "$value": { "fontSize": "28px", "lineHeight": "36px", "fontWeight": 500, "family": "mono" } }
+    }
+  },
+  "motion": {
+    "$description": "动效克制，只用于状态变化；系统开启「减弱动态效果」时改为瞬时或淡入淡出。",
+    "duration": {
+      "fast": { "$type": "duration", "$value": "120ms" },
+      "base": { "$type": "duration", "$value": "200ms" },
+      "slow": { "$type": "duration", "$value": "320ms" }
+    },
+    "easing": {
+      "standard": { "$type": "cubicBezier", "$value": [0.2, 0, 0, 1] },
+      "exit":     { "$type": "cubicBezier", "$value": [0.4, 0, 1, 1] }
+    }
+  }
+}

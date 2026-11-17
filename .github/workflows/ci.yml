@@ -39,13 +39,15 @@ jobs:
         run: cargo test --workspace --locked
 
   boundaries:
-    name: 密码学边界
+    name: 密码学边界与设计令牌
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - run: python3 scripts/check-crypto-deps.py
+      - name: 设计令牌（对比度达标且生成产物已更新）
+        run: python3 design/build_tokens.py --check
 
   test-vectors:
     name: 测试向量与参考实现一致
