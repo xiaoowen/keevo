@@ -1,0 +1,160 @@
+// SPDX-License-Identifier: GPL-3.0-or-later（附加 App Store 许可，见仓库根目录 LICENSE）
+//
+// 扩展侧端到端测试：加载扩展实际使用的 WASM 产物（dist/wasm），像 Chrome 那样启动真实的
+// keevo-native-host，经 Unix socket 连接开发服务（keevo-dev-service），完成配对、查询与填充。
+//
+// 由 scripts/build-extension.sh --test 调用。Node 不是 Chrome，因此用仅 debug 构建生效的
+// 环境变量跳过 native host 的父进程校验。
+
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const root = join(here, "..", "..", "..");
+const { initSync, KeevoClient } = await import(join(here, "..", "dist", "wasm", "keevo_wasm.js"));
+initSync({ module: readFileSync(join(here, "..", "dist", "wasm", "keevo_wasm_bg.wasm")) });
+
+const ORIGIN = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
+const dir = mkdtempSync(join(tmpdir(), "kvjs"));
+const env = {
+  ...process.env,
+  KEEVO_DEV_SOCKET: join(dir, "ipc", "k.sock"),
+  KEEVO_DEV_ALLOW_ANY_PARENT: "1",
+};
+
+const service = spawn(join(root, "target/debug/keevo-dev-service"), ["--auto-confirm", "--dir", dir], {
+  env,
+  stdio: ["ignore", "pipe", "inherit"],
+});
+const cleanup = () => {
+  service.kill();
+  rmSync(dir, { recursive: true, force: true });
+};
+process.on("exit", cleanup);
+
+await new Promise((resolve, reject) => {
+  service.stdout.on("data", (d) => String(d).includes("READY") && resolve());
+  service.on("exit", (code) => reject(new Error(`开发服务提前退出：${code}`)));
+});
+
+/** 像 Chrome 一样启动 native host：4 字节本机字节序（小端）长度 + UTF-8 JSON。 */
+function launchHost() {
+  const host = spawn(join(root, "target/debug/keevo-native-host"), [ORIGIN], { env, stdio: ["pipe", "pipe", "inherit"] });
+  let buf = Buffer.alloc(0);
+  const waiting = [];
+  const frames = [];
+  host.stdout.on("data", (chunk) => {
+    buf = Buffer.concat([buf, chunk]);
+    while (buf.length >= 4 && buf.length >= 4 + buf.readUInt32LE(0)) {
+      const len = buf.readUInt32LE(0);
+      const frame = buf.subarray(4, 4 + len).toString("utf8");
+      buf = buf.subarray(4 + len);
+      const w = waiting.shift();
+      if (w) w(frame);
+      else frames.push(frame);
+    }
+  });
+  return {
+    send(json) {
+      const body = Buffer.from(json, "utf8");
+      const head = Buffer.alloc(4);
+      head.writeUInt32LE(body.length, 0);
+      host.stdin.write(Buffer.concat([head, body]));
+    },
+    recv() {
+      const f = frames.shift();
+      return f !== undefined ? Promise.resolve(f) : new Promise((r) => waiting.push(r));
+    },
+    close() {
+      host.stdin.end();
+      return new Promise((r) => host.on("exit", r));
+    },
+  };
+}
+
+async function exchange(host, client, frame) {
+  host.send(frame);
+  const out = JSON.parse(client.onFrame(await host.recv()));
+  for (const f of out.frames) host.send(f);
+  return out.events;
+}
+
+async function call(host, client, method, params) {
+  const { id, frame } = JSON.parse(client.request(JSON.stringify(params ? { method, params } : { method })));
+  const [event] = await exchange(host, client, frame);
+  assert.equal(event.type, "message");
+  assert.equal(event.message.id, id);
+  return event.message;
+}
+
+let checks = 0;
+const ok = (msg) => {
+  checks += 1;
+  console.log(`  ✓ ${msg}`);
+};
+
+console.log("扩展侧端到端测试（WASM → native host → socket → 开发服务）");
+
+// ---- 首次配对
+let host = launchHost();
+let client = new KeevoClient(undefined, ORIGIN, "Node 测试");
+const extKey = client.privateKeyHex();
+host.send(KeevoClient.hello());
+let events = await exchange(host, client, client.startPairing());
+assert.equal(events[0].type, "show_sas");
+assert.match(events[0].sas, /^[0-9a-f]{12}$/);
+ok(`握手完成，显示验证码 ${events[0].sas.match(/../g).join(" ")}`);
+events = JSON.parse(client.onFrame(await host.recv())).events;
+assert.equal(events[0].type, "paired");
+const servicePublic = events[0].service_public;
+ok("开发服务确认配对，扩展收到服务公钥");
+
+// ---- 查询与填充
+let m = await call(host, client, "candidates", { url: "https://github.com/login" });
+assert.equal(m.result.items.length, 1);
+assert.equal(m.result.items[0].title, "GitHub（演示）");
+const itemId = m.result.items[0].item_id;
+ok("github.com 匹配到演示登录");
+
+m = await call(host, client, "fill", { item_id: itemId, url: "https://github.com/login" });
+assert.deepEqual([m.result.username, m.result.password], ["octocat", "demo-github-password"]);
+ok("取得填充凭据");
+
+m = await call(host, client, "fill", { item_id: itemId, url: "https://github.com.evil.example/login" });
+assert.equal(m.error.code, "url_mismatch");
+m = await call(host, client, "candidates", { url: "https://github.com.evil.example/login" });
+assert.equal(m.result.items.length, 0);
+ok("钓鱼网址既无候选，也拿不到凭据");
+
+m = await call(host, client, "candidates", { url: "http://localhost:3000/" });
+assert.equal(m.result.items.length, 1);
+ok("本地开发服务按端口匹配");
+await host.close();
+client.free();
+
+// ---- 扩展重启：用保存的扩展密钥与服务公钥建立 IK 会话
+host = launchHost();
+client = new KeevoClient(extKey, ORIGIN, "Node 测试");
+host.send(KeevoClient.hello());
+events = await exchange(host, client, client.startSession(servicePublic));
+assert.equal(events[0].type, "established");
+m = await call(host, client, "status");
+assert.equal(m.result.locked, false);
+ok("重启后用 IK 会话重新连接");
+await host.close();
+
+// ---- 没有配对记录的扩展被拒绝
+host = launchHost();
+const stranger = new KeevoClient(undefined, ORIGIN, "陌生扩展");
+host.send(KeevoClient.hello());
+events = await exchange(host, stranger, stranger.startSession(servicePublic));
+assert.deepEqual(events[0], { type: "error", code: "not_paired" });
+ok("未配对的扩展被拒绝");
+await host.close();
+
+console.log(`全部通过（${checks} 项）`);
+process.exit(0);

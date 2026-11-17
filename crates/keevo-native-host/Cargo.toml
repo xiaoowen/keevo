@@ -1,0 +1,26 @@
+[package]
+name = "keevo-native-host"
+description = "Native Messaging 宿主：由浏览器启动，校验父进程后把扩展的帧原样转发给 Vault Service。不解析加密内容。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "keevo-native-host"
+path = "src/main.rs"
+
+[dependencies]
+keevo-ipc = { path = "../keevo-ipc" }
+keevo-macos = { path = "../keevo-macos" }
+serde_json = "1"
+
+[dev-dependencies]
+keevo-core = { path = "../keevo-core" }
+keevo-crypto = { path = "../keevo-crypto" }
+keevo-service = { path = "../keevo-service" }
+
+[lints]
+workspace = true

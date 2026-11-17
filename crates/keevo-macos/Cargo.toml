@@ -1,0 +1,27 @@
+[package]
+name = "keevo-macos"
+description = "macOS 平台集成：进程代码签名校验（spec/ipc.md §3）。整个 workspace 中唯一允许 unsafe 的 crate，unsafe 仅限一个函数。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+libc = "0.2"
+security-framework = "3"
+
+# 不继承 workspace 的 `unsafe_code = "forbid"`：这里改为 deny，只在 peer_audit_token 中显式放行
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

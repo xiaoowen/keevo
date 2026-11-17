@@ -285,7 +285,7 @@ fn reconnect_with_ik_session() {
 
 /// 测试辅助：用已有客户端的密钥构造一个处于初始状态的新客户端（模拟扩展重启）。
 fn client_with_same_key(old: ExtensionClient) -> ExtensionClient {
-    let private = old.export_key_for_tests();
+    let private = old.export_private_key();
     ExtensionClient::new(
         StaticKeypair::from_private(private),
         ORIGIN,
@@ -331,7 +331,7 @@ fn paired_key_from_another_extension_origin_is_rejected() {
     // 必须靠配对记录中的来源比对拦下（spec/ipc.md §4.3 第 2 步）
     let other = "chrome-extension://someotherextensionid/";
     let mut thief = ExtensionClient::new(
-        StaticKeypair::from_private(client.export_key_for_tests()),
+        StaticKeypair::from_private(client.export_private_key()),
         other,
         "x",
     );

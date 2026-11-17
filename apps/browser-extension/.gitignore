@@ -1,0 +1,4 @@
+node_modules/
+dist/
+# 由 scripts/build-extension.sh 生成
+src/wasm/

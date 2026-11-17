@@ -64,8 +64,9 @@ impl ExtensionClient {
         self.key.public_key()
     }
 
-    #[cfg(test)]
-    pub(crate) fn export_key_for_tests(&self) -> zeroize::Zeroizing<[u8; 32]> {
+    /// 导出扩展的静态私钥，只能用于写入扩展存储（`chrome.storage.local`），以便下次用 IK 重连。
+    #[must_use]
+    pub fn export_private_key(&self) -> zeroize::Zeroizing<[u8; 32]> {
         self.key.export_private()
     }
 

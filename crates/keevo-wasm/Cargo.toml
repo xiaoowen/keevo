@@ -1,0 +1,22 @@
+[package]
+name = "keevo-wasm"
+description = "把扩展一侧的 IPC 客户端（keevo-ipc）编译为 WASM，供浏览器扩展使用，与桌面应用共用同一份协议实现。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+keevo-crypto = { path = "../keevo-crypto" }
+keevo-ipc = { path = "../keevo-ipc" }
+serde_json = "1"
+wasm-bindgen = "=0.2.130"
+zeroize = "1"
+
+[lints]
+workspace = true

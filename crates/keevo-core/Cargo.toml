@@ -12,6 +12,7 @@ publish.workspace = true
 keevo-crypto = { path = "../keevo-crypto" }
 keevo-format = { path = "../keevo-format" }
 keevo-store = { path = "../keevo-store" }
+url = "2"
 
 [dev-dependencies]
 rusqlite = { version = "0.43.0", features = ["bundled"] }

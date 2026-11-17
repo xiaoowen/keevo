@@ -1,3 +1,6 @@
 [env]
 # 与 macOS 应用的最低系统版本一致（docs/README.md D7），避免 C 依赖（如 SQLite）按构建机的系统版本编译
 MACOSX_DEPLOYMENT_TARGET = "15.0"
+
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

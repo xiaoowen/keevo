@@ -43,3 +43,8 @@ opt-level = 3
 codegen-units = 1
 lto = "thin"
 overflow-checks = true
+
+# 构建期产物（proc-macro、构建脚本）不做 strip：在 macOS 27 + Command Line Tools 上，对 proc-macro
+# 执行 strip 后，rustc 无法再加载其元数据（报 E0463 "can't find crate"）。只影响构建过程，不影响发布产物。
+[profile.release.build-override]
+strip = false
