@@ -119,6 +119,7 @@ flowchart LR
 
 ### 4.4 构建与分发
 
+- **M0 空壳**：用 SwiftPM 构建（`scripts/build-macos.sh`），先编译 Rust 静态库，再生成 UniFFI 绑定，最后编译 Swift。**M1.1** 改为 Xcode 工程，以支持签名、entitlements、钥匙串与 Touch ID。
 - Developer ID 签名、Hardened Runtime、Library Validation、Apple 公证。
 - **M1 不启用 App Sandbox**：需要向各浏览器目录写入 Native Messaging 清单、自定义 SSH Agent socket 路径、安装 CLI。以最小 entitlements 作为补偿；Mac App Store 版本后续再评估。
 - **iCloud 能力**：需要在 provisioning profile 中启用 iCloud Documents 并声明容器。M0 用 Developer ID 签名做一次技术验证，确认容器读写、文件下载和变化通知都正常。
@@ -245,8 +246,9 @@ keevo/
 │   ├── keevo-ffi/
 │   ├── keevo-native-host/
 │   └── keevo-cli/
+├── tools/uniffi-bindgen/     # 构建工具：生成 Swift 绑定
 ├── apps/
-│   ├── macos/                 # Xcode 工程（SwiftUI）
+│   ├── macos/                 # SwiftUI 应用（M0 为 SwiftPM 空壳，M1.1 改为 Xcode 工程）
 │   └── browser-extension/     # MV3 扩展（TypeScript + Svelte）
 ├── spec/                      # 可审计规范：加密、保险库格式、IPC、同步协议 + 测试向量
 ├── design/                    # 设计令牌、图标

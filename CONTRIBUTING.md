@@ -32,6 +32,13 @@ cargo test --workspace                      # 测试
 python3 scripts/check-crypto-deps.py        # 密码学边界检查
 cargo deny check                            # 安全公告、许可证、来源
 cargo vet                                   # 供应链审计
+scripts/build-macos.sh --smoke              # macOS 空壳应用 + Swift 端冒烟测试
+```
+
+模糊测试需要 nightly 与 cargo-fuzz：
+
+```bash
+cd fuzz && cargo +nightly fuzz run envelope_open -- -max_total_time=60
 ```
 
 测试向量由独立的 Python 参考实现生成（只在修改规范时需要）：

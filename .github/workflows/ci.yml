@@ -86,3 +86,33 @@ jobs:
         run: cargo install --locked cargo-vet@0.10.3
       - name: 检查
         run: cargo vet --locked
+
+  macos-shell:
+    name: macOS 空壳应用（Swift → UniFFI → Rust 冒烟测试）
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: 安装 rust-toolchain.toml 指定的工具链
+        run: rustup toolchain install
+      - name: 构建并运行冒烟测试
+        run: scripts/build-macos.sh --smoke
+
+  fuzz:
+    name: 模糊测试（每个目标 30 秒）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: 安装 nightly 与 cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo +nightly install --locked cargo-fuzz@0.13.1
+      - name: 运行全部目标
+        working-directory: fuzz
+        run: |
+          for target in $(cargo +nightly fuzz list); do
+            cargo +nightly fuzz run "$target" --locked -- -max_total_time=30
+          done

@@ -33,7 +33,14 @@ Keevo 保存你的密码、双因素验证、SSH 密钥、API 令牌、数据库
 
 ```
 crates/keevo-crypto/   密码学边界：2SKD、加密信封、密钥集（实现 spec/crypto.md）
+crates/keevo-format/   数据模型：记录映射、修订图、HLC、因果合并（实现 spec/revisions.md）
+crates/keevo-store/    本地 SQLite 存储，只存密文
+crates/keevo-core/     账户、解锁状态机、保险库与条目操作
+crates/keevo-ffi/      UniFFI 导出给 Swift
+apps/macos/            macOS 应用（M0：SwiftUI 空壳 + 端到端冒烟测试）
 spec/                  可审计的规范、独立参考实现与测试向量
+fuzz/                  模糊测试目标（nightly + cargo-fuzz）
+tools/                 构建工具
 docs/                  设计文档与架构决策记录（ADR）
 scripts/               CI 检查脚本
 supply-chain/          cargo-vet 供应链审计记录
@@ -44,6 +51,7 @@ supply-chain/          cargo-vet 供应链审计记录
 ```bash
 cargo test --workspace
 cargo clippy --workspace --all-targets
+scripts/build-macos.sh --smoke     # 构建 macOS 空壳应用并运行 Swift 端冒烟测试
 ```
 
 完整流程与规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。
