@@ -1,0 +1,38 @@
+Keevo App Store Additional Permission
+Version 1.0 — DRAFT, pending legal review
+
+This additional permission applies to every part of Keevo that is licensed
+under the GNU General Public License, version 3 or (at your option) any later
+version (the "GPL"), as listed in the LICENSE file at the root of the Keevo
+source repository. It is granted under section 7 of the GNU General Public
+License, version 3.
+
+1. Permission.
+   In addition to the permissions granted by the GPL, the copyright holders
+   give you permission to convey the covered work, or a work based on it, in
+   object code form through an application distribution service such as the
+   Apple App Store or the Mac App Store (a "Distribution Service"), even
+   though the terms of use, usage rules or digital rights management of the
+   Distribution Service impose restrictions on recipients that the GPL would
+   not otherwise permit.
+
+2. Conditions.
+   This permission applies only if:
+   (a) you otherwise comply with all terms of the GPL for the covered work,
+       including the obligation to provide the Corresponding Source as
+       described in section 6 of the GPL; and
+   (b) the Corresponding Source is made available to every recipient free of
+       charge, under the GPL together with this additional permission, by
+       means that do not require the recipient to accept the terms of the
+       Distribution Service.
+
+3. No further restrictions.
+   Restrictions imposed solely by the terms of a Distribution Service, to the
+   extent covered by this permission, are not "further restrictions" within
+   the meaning of section 10 of the GPL.
+
+4. Removal and extension.
+   As provided by section 7 of the GPL, you may remove this additional
+   permission from your copy of the covered work, or from any part of it.
+   If you modify the covered work, you may extend this additional permission
+   to your version, but you are not obligated to do so.

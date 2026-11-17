@@ -1,0 +1,9 @@
+# 安全敏感路径：改动需要安全负责人审查（docs/governance.md §6）
+/crates/keevo-crypto/          @xiaoowen
+/spec/                         @xiaoowen
+/scripts/check-crypto-deps.py  @xiaoowen
+/deny.toml                     @xiaoowen
+/supply-chain/                 @xiaoowen
+/.github/                      @xiaoowen
+/LICENSE                       @xiaoowen
+/LICENSES/                     @xiaoowen

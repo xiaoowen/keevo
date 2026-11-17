@@ -1,21 +1,24 @@
-MIT License
+Keevo 采用按目录划分的多许可证。决策背景见 docs/governance.md §1。
+Keevo is multi-licensed by directory. See docs/governance.md §1 for the rationale.
 
-Copyright (c) 2026 xiaoowen
+| 路径 Path                                   | 许可证 License                                              |
+|---------------------------------------------|------------------------------------------------------------|
+| crates/（keevo-cli 除外 / except keevo-cli）  | MIT OR Apache-2.0                                          |
+| spec/                                       | MIT OR Apache-2.0                                          |
+| docs/、design/、scripts/、根目录配置文件       | MIT OR Apache-2.0                                          |
+| apps/、crates/keevo-cli/                     | GPL-3.0-or-later，附加 App Store 许可                        |
+|                                             | GPL-3.0-or-later with the Keevo App Store Additional Permission |
+| server/（将来 / future）                      | AGPL-3.0-or-later                                          |
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+许可证全文 Full license texts:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+- LICENSES/MIT.txt
+- LICENSES/Apache-2.0.txt
+- LICENSES/GPL-3.0-or-later.txt
+- LICENSES/LicenseRef-Keevo-AppStore-Exception.txt（草案，待法律审阅 / draft, pending legal review）
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+除非文件或其所在目录另有声明，否则以上表为准。
+Unless a file or its directory states otherwise, the table above applies.
+
+贡献者以其贡献所在路径对应的许可证授权其贡献，并通过 DCO 签署确认（见 CONTRIBUTING.md）。
+Contributions are licensed under the license of the path they are made to, certified via the DCO (see CONTRIBUTING.md).
