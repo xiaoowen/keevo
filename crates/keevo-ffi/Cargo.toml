@@ -1,0 +1,20 @@
+[package]
+name = "keevo-ffi"
+description = "通过 UniFFI 把 keevo-core 导出给 Swift（macOS 应用）。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["lib", "staticlib", "cdylib"]
+name = "keevo_ffi"
+
+[dependencies]
+keevo-core = { path = "../keevo-core" }
+uniffi = "0.32"
+
+[lints]
+workspace = true

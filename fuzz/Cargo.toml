@@ -1,0 +1,54 @@
+[package]
+name = "keevo-fuzz"
+description = "模糊测试目标：覆盖所有解析不可信输入的入口。需要 nightly 与 cargo-fuzz。"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+keevo-crypto = { path = "../crates/keevo-crypto" }
+keevo-format = { path = "../crates/keevo-format" }
+
+# 独立 workspace：模糊测试需要 nightly，不进入主 workspace 的常规构建
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "secret_key_parse"
+path = "fuzz_targets/secret_key_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kdf_params_decode"
+path = "fuzz_targets/kdf_params_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "envelope_open"
+path = "fuzz_targets/envelope_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "item_doc_decode"
+path = "fuzz_targets/item_doc_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "overview_decode"
+path = "fuzz_targets/overview_decode.rs"
+test = false
+doc = false
+bench = false

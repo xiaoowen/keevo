@@ -1,0 +1,15 @@
+[package]
+name = "uniffi-bindgen"
+description = "构建工具：从 keevo-ffi 的库文件生成 Swift 绑定。不进入任何发布产物。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+uniffi = { version = "0.32", features = ["cli"] }
+
+[lints]
+workspace = true

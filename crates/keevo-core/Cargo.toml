@@ -1,0 +1,20 @@
+[package]
+name = "keevo-core"
+description = "Keevo 的核心逻辑：账户、解锁状态机、保险库与条目操作。组合 keevo-crypto、keevo-format 与 keevo-store。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+keevo-crypto = { path = "../keevo-crypto" }
+keevo-format = { path = "../keevo-format" }
+keevo-store = { path = "../keevo-store" }
+
+[dev-dependencies]
+rusqlite = { version = "0.43.0", features = ["bundled"] }
+
+[lints]
+workspace = true

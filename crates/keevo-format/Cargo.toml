@@ -1,0 +1,18 @@
+[package]
+name = "keevo-format"
+description = "Keevo 的数据模型：记录映射、修订图、HLC 与因果合并。实现 spec/revisions.md 与 spec/vault-format.md。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+keevo-crypto = { path = "../keevo-crypto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zeroize = "1"
+
+[lints]
+workspace = true

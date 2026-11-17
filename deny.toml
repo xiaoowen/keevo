@@ -7,7 +7,11 @@ all-features = true
 [advisories]
 # RustSec 安全公告。任何未修复的漏洞或已停止维护的 crate 都会让 CI 失败。
 # 确需忽略时，在这里登记公告 ID、原因和复查日期。
-ignore = []
+ignore = [
+    # basic-toml 已停止维护（不是漏洞）。只经 askama 被 uniffi_bindgen 用于构建期生成 Swift 绑定，
+    # 不进入任何运行时产物。UniFFI 换掉 askama 或 basic-toml 后移除。复查日期：2027-02-17。
+    { id = "RUSTSEC-2026-0374", reason = "仅构建期代码生成使用，不进入运行时" },
+]
 
 [licenses]
 # 只允许与本项目所有组件许可证（MIT OR Apache-2.0、GPL-3.0、AGPL-3.0）都兼容的宽松许可证。
@@ -18,6 +22,9 @@ allow = [
     "BSD-3-Clause",
     "ISC",
     "MIT",
+    # UniFFI（Mozilla）使用 MPL-2.0：文件级 copyleft，与 MIT/Apache-2.0 及 GPL-3.0 均兼容；
+    # 只在修改 UniFFI 自身源文件时才需要以 MPL-2.0 公开这些修改
+    "MPL-2.0",
     "Unicode-3.0",
     "Zlib",
 ]

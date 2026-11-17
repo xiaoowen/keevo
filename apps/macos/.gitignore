@@ -1,0 +1,4 @@
+# 由 scripts/build-macos.sh 生成，不提交
+.build/
+Sources/keevo_ffiFFI/include/
+Sources/KeevoKit/Generated/

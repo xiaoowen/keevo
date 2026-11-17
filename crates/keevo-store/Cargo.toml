@@ -1,0 +1,16 @@
+[package]
+name = "keevo-store"
+description = "Keevo 的本地持久化：SQLite schema、迁移与事务。行内只存密文与最少的同步元数据。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+keevo-crypto = { path = "../keevo-crypto" }
+rusqlite = { version = "0.43.0", features = ["bundled"] }
+
+[lints]
+workspace = true
