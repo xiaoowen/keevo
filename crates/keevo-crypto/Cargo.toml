@@ -1,0 +1,25 @@
+[package]
+name = "keevo-crypto"
+description = "Keevo 的密码学边界：唯一允许直接调用密码学原语的 crate。实现 spec/crypto.md。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc", "zeroize"] }
+getrandom = "0.4"
+hkdf = "0.13"
+sha2 = { version = "0.11", default-features = false }
+unicode-normalization = "0.1"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+
+[dev-dependencies]
+hex = "0.4"
+serde_json = "1"

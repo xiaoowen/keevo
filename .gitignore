@@ -1,0 +1,16 @@
+# Rust
+/target/
+
+# Python（参考实现）
+.venv/
+__pycache__/
+
+# macOS / Xcode
+.DS_Store
+xcuserdata/
+*.xcuserstate
+DerivedData/
+
+# Node（浏览器扩展）
+node_modules/
+dist/
