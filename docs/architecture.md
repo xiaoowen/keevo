@@ -24,7 +24,7 @@ flowchart LR
     DB[("SQLite<br/>只有密文")]
   end
 
-  SYNC["iCloud 容器 / 同步文件夹（M2，可选）<br/>Dropbox · OneDrive · 坚果云 · Syncthing · NAS<br/>只有签名的密文文件"]
+  SYNC["iCloud 云盘 / 同步文件夹（M2，可选）<br/>Dropbox · OneDrive · 坚果云 · Syncthing · NAS<br/>只有签名的密文文件"]
 
   CS <--> SW
   IM <--> SW
@@ -54,7 +54,7 @@ flowchart LR
 | Rust ↔ Swift | **UniFFI** | Mozilla 维护；支持 async 与对象句柄；产物打包为 XCFramework | 手写 C ABI：工作量大，易出内存错误 |
 | 浏览器扩展 | **TypeScript（strict）+ Svelte 5 + Vite**，Manifest V3 | 编译后运行时极小、依赖少，降低供应链风险；性能好 | React：生态大，但依赖树与包体积更大 |
 | 本地存储 | **SQLite**（rusqlite，WAL 模式） | 可靠、支持事务、单文件；行内只存密文 | SQLCipher：应用层已全量加密，整库加密收益有限，可作为后续纵深防御 |
-| 云同步（M2） | **基于不可变文件的加密日志**（[sync.md](sync.md)）。iCloud 使用专属容器，通过 `NSFileCoordinator` + `NSMetadataQuery` 读写和监听；其他文件夹用 FSEvents | 一套实现覆盖 iCloud、所有云盘和自托管存储；不需要服务端；Keevo 自身零同步网络请求 | CloudKit：只能服务 iCloud。直连各云盘 API：每家都要单独做 OAuth 和适配。自托管服务端：暂缓。详见 [ADR-0001](adr/0001-file-based-cloud-sync.md) |
+| 云同步（M2） | **基于不可变文件的加密日志**（[sync.md](sync.md)）。iCloud 云盘与其他云盘都是普通文件夹：`NSFileCoordinator` 读写，FSEvents 监听；不需要开发者团队（[ADR-0002](adr/0002-icloud-drive-folder-without-team.md)） | 一套实现覆盖 iCloud、所有云盘和自托管存储；不需要服务端；Keevo 自身零同步网络请求 | CloudKit 与 iCloud 专属容器：需要团队证书，暂不采用。直连各云盘 API：每家都要单独做 OAuth 和适配。自托管服务端：暂缓。详见 [ADR-0001](adr/0001-file-based-cloud-sync.md) |
 | 局域网配对（M2） | Network.framework（Bonjour）+ Noise XX | 新 Mac 加入时，安全地传递账户密钥 | — |
 | 本地 IPC 加密 | **Noise 协议**（`snow`） | 结构简单、经过广泛分析，支持配对后的静态密钥认证 | 自定义握手：不做 |
 
@@ -70,7 +70,7 @@ flowchart LR
 | `keevo-core` | 账户、保险库与条目操作；解锁状态机；内存搜索索引；密码生成器；TOTP；网址匹配（Public Suffix List）；导入导出；安全中心检查；密钥引用解析 |
 | `keevo-ssh` | SSH 密钥生成与解析；SSH agent 协议实现 |
 | `keevo-ipc` | 本地 IPC 协议（[spec/ipc.md](../spec/ipc.md)）：帧格式、消息定义、配对与会话状态机。不做 I/O，由 App、native host、CLI 共用。Noise 握手本身在 `keevo-crypto` 中，局域网配对（M2）也复用它 |
-| `keevo-sync`（M2） | 同步引擎：日志段、快照、修订图合并、签名与哈希链校验、高水位线。定义 `SyncStore` trait，包含列出文件、读取、原子创建、删除自己的文件、监听变化。文件夹实现写在 Rust 中；iCloud 实现写在 Swift 侧，通过 UniFFI 回调接口注入 |
+| `keevo-sync`（M2） | 同步引擎：日志段、快照、修订图合并、签名与哈希链校验、高水位线。定义 `SyncStore` trait，包含列出文件、读取、原子创建、删除自己的文件、监听变化。文件夹实现写在 Rust 中；iCloud 的下载状态查询与请求下载由 Swift 侧通过 UniFFI 回调接口提供 |
 | `keevo-ffi` | 通过 UniFFI 导出给 Swift |
 | `keevo-native-host` | Native Messaging 宿主二进制 |
 | `keevo-cli` | 命令行工具（M1.4） |
@@ -111,7 +111,7 @@ flowchart LR
 | Touch ID 解锁材料 | Secure Enclave 密钥包裹后存入钥匙串 |
 | 浏览器配对密钥 | 钥匙串 |
 | 设备签名密钥（M2） | Secure Enclave，不可导出，仅限本机 |
-| iCloud 同步数据（M2） | `~/Library/Mobile Documents/iCloud~<bundle-id>/`，由系统管理，不显示在 Finder 的 iCloud 云盘中 |
+| iCloud 同步数据（M2） | `iCloud 云盘/Keevo/`（`~/Library/Mobile Documents/com~apple~CloudDocs/Keevo/`），只有密文 |
 | 本设备日志段的本地副本（M2） | `…/sync-outbox/` |
 
 **磁盘上不出现任何明文**：
@@ -125,7 +125,8 @@ flowchart LR
 - **M0 空壳**：用 SwiftPM 构建（`scripts/build-macos.sh`），先编译 Rust 静态库，再生成 UniFFI 绑定，最后编译 Swift。**M1.1** 改为 Xcode 工程，以支持签名、entitlements、钥匙串与 Touch ID。
 - Developer ID 签名、Hardened Runtime、Library Validation、Apple 公证。
 - **M1 不启用 App Sandbox**：需要向各浏览器目录写入 Native Messaging 清单、自定义 SSH Agent socket 路径、安装 CLI。以最小 entitlements 作为补偿；Mac App Store 版本后续再评估。
-- **iCloud 能力**：需要在 provisioning profile 中启用 iCloud Documents 并声明容器。M0 用 Developer ID 签名做一次技术验证，确认容器读写、文件下载和变化通知都正常。
+- **iCloud**：同步使用 iCloud 云盘中的普通文件夹，不需要 iCloud 权限与描述文件（[ADR-0002](adr/0002-icloud-drive-folder-without-team.md)）。
+- **团队与签名**：开发构建使用临时签名，不绑定任何现有团队。Developer ID 公证、native host 的签名校验、Touch ID（数据保护钥匙串）需要 Keevo 自己的开发者账号，最迟在 M3 前申请。
 - **局域网配对**：需要声明 `NSLocalNetworkUsageDescription` 与 `NSBonjourServices`，以便触发系统的本地网络权限提示。
 - 自动更新用 Sparkle 2（EdDSA 签名，禁止降级），同时提供 Homebrew Cask。
 - 提供 Universal 二进制（Apple Silicon 优先）。

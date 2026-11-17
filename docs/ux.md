@@ -134,7 +134,7 @@ $ keevo run --env-file .env.keevo -- npm run dev
 ### 3.9 开启同步（M2）
 
 1. 打开"设置 → 同步与设备 → 开启同步"，选择同步位置：
-   - **iCloud（推荐）**：同一 Apple ID 下的 Mac 自动可用，以后的 iPhone 和 iPad 也能直接使用。
+   - **iCloud（推荐）**：在 iCloud 云盘中创建「Keevo」文件夹，同一 Apple ID 下的设备都能使用。界面提示：这个文件夹里是加密数据，请不要手动修改或移动。
    - **选择文件夹…**：例如 Dropbox、OneDrive、坚果云的同步文件夹，或 Syncthing、NAS、外置硬盘。
 2. 一屏说清三件事：
    - 同步的内容全部端到端加密，Apple 和云盘厂商都无法读取。

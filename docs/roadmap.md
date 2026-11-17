@@ -26,7 +26,7 @@
 | ✅ | `spec/ipc.md` v0.1 草案 | 分帧、对端身份校验、Noise 配对（XX + SAS）与会话（IK）、会话内消息与最小披露 |
 | ✅ | `keevo-crypto` | 2SKD、加密信封、密钥包裹、密钥集、账户密钥编码；含 RFC 已知答案测试与跨实现向量测试 |
 | ✅ | `keevo-format`、`keevo-store`、`keevo-core` | 记录映射与因果合并（含 300 组多设备随机模拟）、SQLite schema v1、账户创建 / 解锁 / 锁定与条目读写 |
-| ◐ | iCloud 技术验证 | 已完成：iCloud 云盘中的普通文件夹，无需证书即可完成写入、上传状态、移除本地内容、按需下载、文件协调与变化监听，4 次运行全部通过（[报告](spikes/2026-11-18-icloud-folder.md)）。待做：专属容器与 Developer ID（需先确定团队）、跨设备延迟（需第二台同 Apple ID 设备）、Dropbox / OneDrive |
+| ✅ | iCloud 技术验证 | iCloud 云盘中的普通文件夹无需证书即可完成写入、上传状态、移除本地内容、按需下载、文件协调与变化监听，4 次运行全部通过（[报告](spikes/2026-11-18-icloud-folder.md)）；据此决定不绑定团队、采用普通文件夹（[ADR-0002](adr/0002-icloud-drive-folder-without-team.md)）。跨设备延迟与 Dropbox / OneDrive 移到 M2 的真实环境长测 |
 | ◐ | 打通 UniFFI → Swift | 已完成：`keevo-ffi`、SwiftUI 空壳应用、Swift 端冒烟测试（创建 → 锁定 → 解锁 → 读写条目）。待做：钥匙串保存账户密钥与 Touch ID，需要签名与 Xcode 工程，放到 M1.1 |
 | ✅ | 扩展骨架 + Native Messaging 全链路原型 | `keevo-native-host`（父进程代码签名校验）、`keevo-service`（socket 服务与对端 audit token 校验机制）、`keevo-wasm` + MV3 扩展骨架（最小权限：无网站权限，点击弹窗才填充）。两套端到端测试：Rust 侧与扩展 WASM 侧都经真实 native host 与 socket 跑通配对 → 填充。待你在真实 Chrome 中手动验证一次 |
 | ✅ | 设计系统 v0 | `design/tokens` 单一来源，生成 CSS 与 Swift，160 组 WCAG 对比度校验接入 CI；macOS 与扩展已接入令牌和 v0 组件；高保真稿 6 张（总览、锁屏、主窗口浅色、开发者条目深色、扩展弹窗、内联菜单与钓鱼拦截） |
@@ -92,8 +92,7 @@
 - [ ] `keevo-sync`：
   - 日志段与快照、修订图合并、签名哈希链校验、高水位线防回滚、清理
   - `SyncStore` 抽象，以及文件夹实现
-- [ ] iCloud 实现（Swift，基于 `NSFileCoordinator` 与 `NSMetadataQuery`）：
-  - 处理按需下载、Apple ID 切换、空间已满
+- [ ] iCloud 云盘适配：已知路径自动发现、FSEvents 监听、下载状态查询与请求下载（Swift 侧经 UniFFI 回调提供）、Apple ID 切换、空间已满、文件夹被移动时暂停并提示
 - [ ] 文件夹同步：
   - 覆盖 Dropbox、OneDrive、Google Drive、坚果云、Syncthing、NAS、外置硬盘
   - 针对各家云盘的设置引导与常见问题文档
@@ -154,6 +153,7 @@
 | 自动填充兼容性差 | 体验差 | 回归语料库；提供"无法填充"上报工具（用户主动提交脱敏的表单结构，不含任何值） |
 | Chrome 商店审核或政策变化 | 发布受阻 | 遵循 MV3 最佳实践；权限最小化；提前提交审核；准备开发者模式安装文档作为后备 |
 | Apple 平台变化 | 功能受限 | 跟进每年 WWDC；只使用公开 API |
+| 没有自己的开发者账号 | 无法公证发布；Touch ID 方案可能受限 | 最迟 M3 前为 Keevo 申请组织开发者账号；M1.1 先验证 Touch ID 对团队签名的依赖（ADR-0002） |
 | 维护者单点（bus factor） | 长期风险 | 尽早吸引核心贡献者；发布密钥由多人持有；关键知识全部文档化 |
 | 与 1Password 的体验差距 | 影响采用率 | 设计系统先行；性能预算写进验收标准；可用性测试常态化 |
 
@@ -163,5 +163,5 @@
 |---|---|---|
 | 第 1 周 | 建立仓库结构与 CI；起草 `spec/crypto.md` 与 `spec/revisions.md` | 按 D6 落地许可证文件与 App Store 附加许可文本 |
 | 第 2 周 | `keevo-crypto`：Argon2id / HKDF / XChaCha20-Poly1305 + KAT；`keevo-format` 条目模型 | 信息架构与低保真线框 |
-| 第 3 周 | `keevo-store`（修订图模型）+ 创建与解锁流程；打通 UniFFI 到 macOS 空壳应用；iCloud 容器技术验证 | 锁屏与主界面高保真稿 |
+| 第 3 周 | `keevo-store`（修订图模型）+ 创建与解锁流程；打通 UniFFI 到 macOS 空壳应用；iCloud 技术验证（已完成，见上表） | 锁屏与主界面高保真稿 |
 | 第 4 周 | Native Messaging 链路原型 + 代码签名校验 + Noise 配对；邀请外部评审规范 | 扩展弹窗与内联菜单高保真稿；`SECURITY.md` 与 `CONTRIBUTING.md` |

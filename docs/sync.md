@@ -221,14 +221,21 @@ Segment {
 
 ### 6.1 iCloud（默认推荐）
 
-- **容器**：使用 Keevo 专属的 iCloud 容器（ubiquity container，`iCloud.<bundle-id>`）。数据放在容器根目录（data scope），不出现在 Finder 的 iCloud 云盘界面中，避免用户误操作。
-- **文件读写**：读写通过 `NSFileCoordinator` 协调；用 `NSMetadataQuery`（`NSMetadataQueryUbiquitousDataScope`）观察文件变化和下载状态。
-- **未下载的文件**：开启"优化 Mac 储存空间"后，文件可能只在云端。检测到这种情况时，主动调用 `startDownloadingUbiquitousItem(at:)` 请求下载。
-- **账户变化**：监测 `ubiquityIdentityToken`。用户退出 iCloud 或切换 Apple ID 时，暂停同步并提示。
-- **iOS**：将来的 iOS 应用可以直接使用同一个容器，不需要额外配置。
+> 依据 [ADR-0002](adr/0002-icloud-drive-folder-without-team.md)：使用 iCloud 云盘中的普通文件夹，不需要任何开发者团队、证书或描述文件。
+
+- **位置**：`iCloud 云盘/Keevo/`（磁盘路径 `~/Library/Mobile Documents/com~apple~CloudDocs/Keevo/`）。路径已知，因此新设备可以自动发现已有账户。
+- **已实测可行**（[验证报告](spikes/2026-11-18-icloud-folder.md)）：未签名的进程即可完成写入、读取上传与下载状态、移除本地内容、按需下载、文件协调。
+- **读写**：通过 `NSFileCoordinator` 协调，采用原子重命名（§4.2）。
+- **变化监听**：用 FSEvents 加定期全量扫描。没有 iCloud 权限时，`NSMetadataQuery` 看不到任何文件（实测）。
+- **未下载的文件**：开启"优化 Mac 储存空间"后，文件可能只在云端。读取前先检查 dataless 状态，需要时调用 `startDownloadingUbiquitousItem(at:)` 并等待，而不是直接读取（直接读取会阻塞，见 §6.3）。
+- **账户变化**：监测 `ubiquityIdentityToken`（未签名进程也能取到）。用户退出 iCloud 或切换 Apple ID 时，暂停同步并提示。
+- **文件夹可见**：用户可能误删、移动或改名。
+  - 误删由哈希链与本机副本补救。
+  - 文件夹找不到时暂停同步并提示，绝不自动新建空文件夹。
+  - 文件夹内放 `请勿修改.txt` 说明用途。
+- **iOS**：将来的 iOS 应用通过文件选择器授权访问同一个文件夹。
 - **与 Apple 的关系**：开启"iCloud 高级数据保护"后，iCloud 云盘本身也是端到端加密的。Keevo 不依赖这一点，只把它当作额外一层防护。
-- **分发前提**：专属容器需要团队证书与描述文件，Developer ID 分发能否使用仍待验证（需要先确定团队）。Apple 自 2016 年起允许 Developer ID 应用使用 iCloud 能力，但要用实际签名配置确认。
-- **备选方案已验证可行**：iCloud 云盘中的普通文件夹不需要任何证书或权限，未签名的进程就能完成写入、读取上传与下载状态、移除本地内容、按需下载与文件协调（[验证报告](spikes/2026-11-18-icloud-folder.md)）。代价是文件夹在 Finder 中可见，用户可能误删或移动；同步引擎靠哈希链与本机副本发现并补救。专属容器验证不通过时，就用这个方案。
+- **将来的增强**：Keevo 有了自己的开发者账号后，可以改用专属容器 `iCloud.<bundle-id>`（数据对 Finder 隐藏），新增一个 `SyncStore` 实现即可，同步格式不变。
 
 ### 6.2 云盘文件夹与自托管存储
 
@@ -237,7 +244,7 @@ Segment {
 | Dropbox / OneDrive / Google Drive / Box / 坚果云等 | 选择其桌面客户端同步的本地文件夹 | 已经在用这些云盘，或需要跨 Apple ID 同步 | 需安装官方客户端；建议把该文件夹设为"始终保留在此设备" |
 | Syncthing / NAS（SMB）/ 外置硬盘 | 任意本地或挂载的文件夹 | 完全自托管，数据不经过任何第三方 | 网络盘断开时自动暂停同步 |
 
-- **两种位置走同一个实现**：iCloud 与文件夹共用同一套格式和同步引擎，区别只在文件读写与变化监听的适配层（`SyncStore`，见 [architecture.md §3](architecture.md#3-rust-workspace-模块)）。
+- **所有位置走同一个实现**：iCloud 云盘与其他文件夹共用同一套格式、同步引擎和文件夹 `SyncStore`（见 [architecture.md §3](architecture.md#3-rust-workspace-模块)）。iCloud 只额外提供下载状态查询与"请求下载"。
 - **一个账户同时只使用一个同步位置**。以后可以支持多个位置互为冗余（协议本身支持）。
 
 ### 6.3 云盘的不可靠行为及应对
@@ -257,7 +264,7 @@ Segment {
 ## 7. 新设备加入
 
 1. 在新 Mac 上选择"加入已有账户"，然后选择同步位置：
-   - 选 iCloud：自动发现容器中的账户。
+   - 选 iCloud：在 `iCloud 云盘/Keevo/` 中自动发现已有账户。
    - 选文件夹：指向同一个文件夹。
 2. 获取账户密钥（四选一）：
    - **局域网配对（推荐）**：

@@ -20,6 +20,7 @@
 | [../spec/](../spec/README.md) | 可审计规范：加密格式、修订模型，以及独立参考实现与测试向量 |
 | [adr/](adr/) | 架构决策记录 |
 | [future/](future/) | 暂缓的设计：[自托管服务端](future/self-hosted-server.md) |
+| [spikes/](spikes/) | 技术验证报告：[iCloud 云盘普通文件夹](spikes/2026-11-18-icloud-folder.md) |
 
 ## 一页纸摘要
 
@@ -65,3 +66,4 @@
 | D9 | 可持续模式 | 以捐赠为主；官方托管同步依赖服务端，随服务端一起再议 | 已决定 |
 | D10 | 同步方案 | 基于不可变文件的加密日志；默认 iCloud，兼容任意同步文件夹；M2 交付（[ADR-0001](adr/0001-file-based-cloud-sync.md)） | 已决定 |
 | D11 | 自托管服务端 | 暂缓、不排期；同步引擎通过 `SyncStore` 预留扩展点 | 已决定 |
+| D12 | 开发者团队与 iCloud 位置 | 不绑定任何现有团队；iCloud 同步用 iCloud 云盘中的普通文件夹，专属容器待 Keevo 有自己的开发者账号后再评估（[ADR-0002](adr/0002-icloud-drive-folder-without-team.md)）。正式发布前（最迟 M3）为 Keevo 申请开发者账号 | 已决定 |
