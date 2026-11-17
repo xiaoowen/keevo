@@ -56,7 +56,12 @@ and (identifier "app.keevo.native-host" or identifier "app.keevo.cli")
 - **父进程校验**：host 启动时检查父进程的代码签名，Team ID 必须在白名单中（Google Chrome、Microsoft Edge、Brave 等，具体值在实现中维护，并在每个版本发布前核实）。不在白名单中时，host 立即退出。
 - **来源参数**：Chrome 以扩展来源（`chrome-extension://<id>/`）作为第一个参数启动 host。host 把它原样转发给 Vault Service，作为配对记录的一部分。
 
-> **M0 原型的限制**：父进程只按可执行文件路径校验；Vault Service 的 socket 校验暂未实现。M1 实现 §3.1 与 §3.2 的完整代码签名校验后，才允许处理真实数据。
+> **M0 原型的实现状态**：
+> - §3.2 父进程校验：已实现，按代码签名（`crates/keevo-macos`）。白名单目前只有已在构建机上核实的 Google Chrome（Team ID `EQHXZ8M8AV`）。
+> - §3.1 socket 对端校验：机制已实现（基于 `LOCAL_PEERTOKEN` 取得的 audit token），但 Keevo 尚无 Team ID 与签名证书，开发服务只依赖 socket 目录的 0700 权限。release 构建拒绝这种模式。
+> - 仅 debug 构建可用 `KEEVO_DEV_ALLOW_ANY_PARENT` 跳过父进程校验、用 `KEEVO_DEV_SOCKET` 指定 socket 路径，供端到端测试使用。
+>
+> 取得签名证书并启用 §3.1 的代码签名要求之前，不得处理真实数据。
 
 ## 4. 端到端加密
 

@@ -28,7 +28,7 @@
 | ✅ | `keevo-format`、`keevo-store`、`keevo-core` | 记录映射与因果合并（含 300 组多设备随机模拟）、SQLite schema v1、账户创建 / 解锁 / 锁定与条目读写 |
 | ☐ | iCloud 技术验证 | 需要 Apple 开发者账号与完整 Xcode：在 Developer ID 签名下验证专属容器的读写、按需下载和变化通知；同时验证 Dropbox、OneDrive 同步文件夹中按需下载文件的行为 |
 | ◐ | 打通 UniFFI → Swift | 已完成：`keevo-ffi`、SwiftUI 空壳应用、Swift 端冒烟测试（创建 → 锁定 → 解锁 → 读写条目）。待做：钥匙串保存账户密钥与 Touch ID，需要签名与 Xcode 工程，放到 M1.1 |
-| ◐ | 扩展骨架 + Native Messaging 全链路原型 | 已完成：`keevo-crypto` 的 Noise 模块与 `keevo-ipc` 协议状态机，进程内端到端测试覆盖配对、会话、最小披露、撤销与窃取私钥等场景。待做：native host 二进制、Chrome 扩展骨架、代码签名校验 |
+| ✅ | 扩展骨架 + Native Messaging 全链路原型 | `keevo-native-host`（父进程代码签名校验）、`keevo-service`（socket 服务与对端 audit token 校验机制）、`keevo-wasm` + MV3 扩展骨架（最小权限：无网站权限，点击弹窗才填充）。两套端到端测试：Rust 侧与扩展 WASM 侧都经真实 native host 与 socket 跑通配对 → 填充。待你在真实 Chrome 中手动验证一次 |
 | ☐ | 设计系统 v0 | 设计令牌、核心组件；锁屏、主窗口、条目详情、扩展弹窗、内联菜单的高保真稿 |
 | ✅ | CI | 格式、clippy、测试（Linux + macOS）、密码学边界、测试向量比对、cargo-deny、cargo-vet、macOS 冒烟测试、6 个模糊测试目标 |
 | ✅ | 治理文件 | 多许可证落地（App Store 附加许可为草案，待法律审阅）、`CONTRIBUTING.md`（DCO）、`SECURITY.md`、`CODE_OF_CONDUCT.md`、ADR 模板、CODEOWNERS、PR 模板 |

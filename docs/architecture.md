@@ -73,7 +73,10 @@ flowchart LR
 | `keevo-sync`（M2） | 同步引擎：日志段、快照、修订图合并、签名与哈希链校验、高水位线。定义 `SyncStore` trait，包含列出文件、读取、原子创建、删除自己的文件、监听变化。文件夹实现写在 Rust 中；iCloud 实现写在 Swift 侧，通过 UniFFI 回调接口注入 |
 | `keevo-ffi` | 通过 UniFFI 导出给 Swift |
 | `keevo-native-host` | Native Messaging 宿主二进制 |
-| `keevo-cli` | 命令行工具 |
+| `keevo-cli` | 命令行工具（M1.4） |
+| `keevo-macos` | macOS 平台集成：进程代码签名校验（audit token / pid）。**整个 workspace 唯一允许 `unsafe` 的 crate**，仅限一次 `getsockopt` 调用 |
+| `keevo-service` | Vault Service 的 socket 服务：对端校验、连接线程、把 IPC 状态机接到 `keevo-core`；附开发服务 `keevo-dev-service` |
+| `keevo-wasm` | 把 `keevo-ipc` 的扩展侧客户端编译为 WASM，扩展与桌面应用共用同一份协议实现 |
 | `keevo-wasm`（后续） | 扩展独立模式，供没有桌面应用的平台使用 |
 
 **依赖方向**：`crypto ← format ← store ← core ← {ffi, cli, native-host, sync}`。由 CI 检查：除 `keevo-crypto` 外，任何 crate 都不得直接依赖密码学原语 crate。
@@ -138,7 +141,9 @@ flowchart LR
 | 内联菜单 / 保存栏 | 扩展源 iframe，挂在 closed shadow root 中，并置于顶层（popover） | 只有条目概要 |
 | 弹窗 | 搜索、浏览、复制、生成器 | 按需短暂持有 |
 
-约束：不加载远程代码；CSP 为 `script-src 'self'`；不使用 `eval`；`externally_connectable` 不开放。
+约束：不加载远程代码；CSP 为 `script-src 'self' 'wasm-unsafe-eval'`（只为加载扩展包内自带的 WASM）；不使用 `eval`；`externally_connectable` 不开放。
+
+**M0 原型**采用最小权限模式：只申请 `nativeMessaging`、`storage`、`activeTab`、`scripting`，没有任何网站权限；用户点开弹窗、选择条目后，才通过 `chrome.scripting.executeScript` 注入填充函数。内联图标与保存检测在 M1.3 加入。
 
 ### 5.2 填充时序
 
@@ -175,7 +180,7 @@ sequenceDiagram
 
 ### 5.4 构建
 
-- 固定 Node 与 pnpm 版本，使用锁文件，确定性打包，实现**可复现构建**。
+- 固定 Node 版本，用 npm 锁文件（`npm ci --ignore-scripts`），确定性打包，实现**可复现构建**。M0 只用 TypeScript 编译器，没有打包器，运行时 npm 依赖为零。
 - 公开发布包与源码构建产物的哈希对比。
 - 用 manifest 中的 `key` 固定扩展 ID，使 native host 清单中的 `allowed_origins` 在开发与发布环境下保持稳定。
 

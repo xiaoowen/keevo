@@ -37,7 +37,13 @@ crates/keevo-format/   数据模型：记录映射、修订图、HLC、因果合
 crates/keevo-store/    本地 SQLite 存储，只存密文
 crates/keevo-core/     账户、解锁状态机、保险库与条目操作
 crates/keevo-ffi/      UniFFI 导出给 Swift
+crates/keevo-ipc/      本地通信协议（spec/ipc.md）：分帧、Noise 配对与会话
+crates/keevo-service/  Vault Service 的 socket 服务与开发服务
+crates/keevo-native-host/  由浏览器启动的转发进程，校验父进程代码签名
+crates/keevo-wasm/     扩展使用的 WASM 客户端
+crates/keevo-macos/    代码签名校验（唯一允许 unsafe 的 crate）
 apps/macos/            macOS 应用（M0：SwiftUI 空壳 + 端到端冒烟测试）
+apps/browser-extension/  Chrome 扩展（M0 原型）
 spec/                  可审计的规范、独立参考实现与测试向量
 fuzz/                  模糊测试目标（nightly + cargo-fuzz）
 tools/                 构建工具
@@ -52,7 +58,15 @@ supply-chain/          cargo-vet 供应链审计记录
 cargo test --workspace
 cargo clippy --workspace --all-targets
 scripts/build-macos.sh --smoke     # 构建 macOS 空壳应用并运行 Swift 端冒烟测试
+scripts/build-extension.sh --test  # 构建浏览器扩展并运行端到端测试
 ```
+
+### 在 Chrome 中试用扩展原型（只用演示数据）
+
+1. `scripts/build-extension.sh`，然后在 `chrome://extensions` 打开开发者模式，用「加载已解压的扩展程序」选择 `apps/browser-extension/dist`。
+2. `scripts/install-native-host-dev.sh`：为本机 Chrome 安装开发版 native host 清单（`--uninstall` 卸载）。
+3. `cargo run -p keevo-service --bin keevo-dev-service`：启动开发服务，它会创建只含示例数据的演示保险库。
+4. 点开扩展，选择「与 Keevo 配对」，核对验证码后在终端中输入 `y`；然后打开 github.com 的登录页，点开扩展填充演示账户。
 
 完整流程与规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 

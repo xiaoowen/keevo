@@ -44,9 +44,8 @@
   - `cargo-deny`：许可证白名单、禁止特定 crate、限制重复依赖。
   - `cargo-audit`：RustSec 安全公告。
 - **JavaScript**：
-  - pnpm + 锁文件，CI 使用 `--frozen-lockfile`。
-  - 禁止依赖的 install 脚本。
-  - 扩展的运行时依赖尽量控制在 10 个以内。
+  - npm 锁文件，CI 使用 `npm ci --ignore-scripts`（禁止依赖的安装脚本）。
+  - 扩展的运行时依赖尽量控制在 10 个以内（M0 为零，只有 TypeScript 与类型定义两个开发依赖）。
 - **GitHub Actions**：
   - 第三方 Action 固定到提交 SHA。
   - 工作流声明最小 `permissions`。
