@@ -26,7 +26,7 @@
 | ✅ | `spec/ipc.md` v0.1 草案 | 分帧、对端身份校验、Noise 配对（XX + SAS）与会话（IK）、会话内消息与最小披露 |
 | ✅ | `keevo-crypto` | 2SKD、加密信封、密钥包裹、密钥集、账户密钥编码；含 RFC 已知答案测试与跨实现向量测试 |
 | ✅ | `keevo-format`、`keevo-store`、`keevo-core` | 记录映射与因果合并（含 300 组多设备随机模拟）、SQLite schema v1、账户创建 / 解锁 / 锁定与条目读写 |
-| ☐ | iCloud 技术验证 | 需要 Apple 开发者账号与完整 Xcode：在 Developer ID 签名下验证专属容器的读写、按需下载和变化通知；同时验证 Dropbox、OneDrive 同步文件夹中按需下载文件的行为 |
+| ◐ | iCloud 技术验证 | 已完成：iCloud 云盘中的普通文件夹，无需证书即可完成写入、上传状态、移除本地内容、按需下载、文件协调与变化监听，4 次运行全部通过（[报告](spikes/2026-11-18-icloud-folder.md)）。待做：专属容器与 Developer ID（需先确定团队）、跨设备延迟（需第二台同 Apple ID 设备）、Dropbox / OneDrive |
 | ◐ | 打通 UniFFI → Swift | 已完成：`keevo-ffi`、SwiftUI 空壳应用、Swift 端冒烟测试（创建 → 锁定 → 解锁 → 读写条目）。待做：钥匙串保存账户密钥与 Touch ID，需要签名与 Xcode 工程，放到 M1.1 |
 | ✅ | 扩展骨架 + Native Messaging 全链路原型 | `keevo-native-host`（父进程代码签名校验）、`keevo-service`（socket 服务与对端 audit token 校验机制）、`keevo-wasm` + MV3 扩展骨架（最小权限：无网站权限，点击弹窗才填充）。两套端到端测试：Rust 侧与扩展 WASM 侧都经真实 native host 与 socket 跑通配对 → 填充。待你在真实 Chrome 中手动验证一次 |
 | ✅ | 设计系统 v0 | `design/tokens` 单一来源，生成 CSS 与 Swift，160 组 WCAG 对比度校验接入 CI；macOS 与扩展已接入令牌和 v0 组件；高保真稿 6 张（总览、锁屏、主窗口浅色、开发者条目深色、扩展弹窗、内联菜单与钓鱼拦截） |
