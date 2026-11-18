@@ -65,6 +65,8 @@ jobs:
           .venv/bin/pip install --require-hashes --no-deps -r spec/reference/requirements.txt
       - name: 重新生成并比对
         run: .venv/bin/python -I spec/reference/generate_vectors.py --check
+      - name: 重新生成并比对明文格式与合并向量（含随机多设备自检）
+        run: python -I spec/reference/format_vectors.py --check --self-test
 
   cargo-deny:
     name: 依赖审查（cargo-deny）

@@ -52,3 +52,24 @@ pub fn from_canonical_json<T: DeserializeOwned + Serialize>(bytes: &[u8]) -> Res
     }
     Ok(value)
 }
+
+/// 错误先后的第 0 步（`spec/vault-format.md` §1.1）：文档是 JSON 对象，且 `v` 是能用 64 位有符号整数
+/// 表示的整数但不是 `expected` 时，返回 [`FormatError::UnsupportedVersion`]，先于结构检查。
+/// 新版本的文档可能带有本版本不认识的字段，否则会被误报为 `malformed`。
+///
+/// 只读取 `v`：其余成员按 [`serde::de::IgnoredAny`] 跳过，不构造任何值。其他情况（不是对象、没有 `v`、
+/// `v` 不是整数、重复的 `v`）交给之后的结构检查。
+pub(crate) fn check_version(bytes: &[u8], expected: u32) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct Probe {
+        v: Option<i64>,
+    }
+    if let Ok(Probe { v: Some(v) }) = serde_json::from_slice::<Probe>(bytes)
+        && v != i64::from(expected)
+    {
+        return Err(FormatError::UnsupportedVersion(
+            u32::try_from(v).unwrap_or(u32::MAX),
+        ));
+    }
+    Ok(())
+}

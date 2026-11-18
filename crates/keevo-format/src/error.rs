@@ -62,4 +62,28 @@ impl fmt::Display for FormatError {
     }
 }
 
+impl FormatError {
+    /// 规范中的错误码（`spec/vault-format.md`、`spec/revisions.md`），测试向量与诊断信息使用。
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Malformed(_) => "malformed",
+            Self::UnsupportedVersion(_) => "unsupported_version",
+            Self::ValueKindMismatch => "value_kind_mismatch",
+            Self::ItemTypeMismatch => "item_type_mismatch",
+            Self::NoHeads => "no_heads",
+            Self::RevisionConflict => "revision_conflict",
+            Self::NoSuchVersion => "no_such_version",
+            Self::MissingParent => "missing_parent",
+            Self::ValueTooLarge => "value_too_large",
+            Self::ItemTooLarge => "item_too_large",
+            Self::ClockExhausted => "clock_exhausted",
+            Self::ReservedKey => "reserved_key",
+            Self::TooManyKeys => "too_many_keys",
+            Self::TooManyParents => "too_many_parents",
+            Self::InvalidKey => "invalid_key",
+        }
+    }
+}
+
 impl std::error::Error for FormatError {}

@@ -1,0 +1,1059 @@
+{
+  "description": "spec/revisions.md 1.1 §5 合并算法的测试向量，由独立的 Python 参考实现生成（spec/reference/format_vectors.py）。revisions 按拓扑顺序列出修订图（rev、按字节序的 parents、origin 设备）；heads 中 doc 为 null 表示墓碑修订。实现必须得到 expected：deleted、合并视图的规范编码 doc、resurrected、冲突与完整性问题的记录键（按记录键排序），或 error。结果必须与 heads 的顺序无关。",
+  "merges": [
+    {
+      "name": "single_head",
+      "description": "只有一个头：合并视图就是它本身",
+      "revisions": [
+        {
+          "rev": "92100b5f6c4f76b1d81b37b1e6892848",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "92100b5f6c4f76b1d81b37b1e6892848",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"92100b5f6c4f76b1d81b37b1e6892848\",\"val\":{\"text\":\"GitHub\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"92100b5f6c4f76b1d81b37b1e6892848\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"92100b5f6c4f76b1d81b37b1e6892848\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"92100b5f6c4f76b1d81b37b1e6892848\",\"val\":{\"text\":\"GitHub\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"92100b5f6c4f76b1d81b37b1e6892848\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"92100b5f6c4f76b1d81b37b1e6892848\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}",
+        "resurrected": false,
+        "conflicts": [],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "disjoint_edits",
+      "description": "两台设备并发修改不同的键：各自的修改都保留，没有冲突",
+      "revisions": [
+        {
+          "rev": "a72a5b28f23f6cf807b21a3f91df4901",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "b347dbc386f5621d067473573ec17fd2",
+          "parents": [
+            "a72a5b28f23f6cf807b21a3f91df4901"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "48740e7870b6d27da3d66c4c080bb1a6",
+          "parents": [
+            "a72a5b28f23f6cf807b21a3f91df4901"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "b347dbc386f5621d067473573ec17fd2",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"b347dbc386f5621d067473573ec17fd2\",\"val\":{\"text\":\"GitHub 工作\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"a72a5b28f23f6cf807b21a3f91df4901\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"a72a5b28f23f6cf807b21a3f91df4901\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        },
+        {
+          "rev": "48740e7870b6d27da3d66c4c080bb1a6",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:favorite\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"48740e7870b6d27da3d66c4c080bb1a6\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"a72a5b28f23f6cf807b21a3f91df4901\",\"val\":{\"text\":\"GitHub\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"a72a5b28f23f6cf807b21a3f91df4901\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"a72a5b28f23f6cf807b21a3f91df4901\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:favorite\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"48740e7870b6d27da3d66c4c080bb1a6\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"b347dbc386f5621d067473573ec17fd2\",\"val\":{\"text\":\"GitHub 工作\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"a72a5b28f23f6cf807b21a3f91df4901\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"a72a5b28f23f6cf807b21a3f91df4901\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}",
+        "resurrected": false,
+        "conflicts": [],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "same_key_hlc_wins",
+      "description": "并发修改同一个键：HLC 较大者成为当前版本，另一个保存为并发版本，报告冲突",
+      "revisions": [
+        {
+          "rev": "760f33392161861aa9e6fa0688b92427",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "03cbe1562d9890f6bf5050d521c30bd7",
+          "parents": [
+            "760f33392161861aa9e6fa0688b92427"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "865282ab952231602b40c19b901dccf6",
+          "parents": [
+            "760f33392161861aa9e6fa0688b92427"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "03cbe1562d9890f6bf5050d521c30bd7",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"03cbe1562d9890f6bf5050d521c30bd7\",\"val\":{\"text\":\"A 的标题\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"760f33392161861aa9e6fa0688b92427\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"760f33392161861aa9e6fa0688b92427\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        },
+        {
+          "rev": "865282ab952231602b40c19b901dccf6",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0140000\",\"rev\":\"865282ab952231602b40c19b901dccf6\",\"val\":{\"text\":\"B 的标题\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"760f33392161861aa9e6fa0688b92427\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"760f33392161861aa9e6fa0688b92427\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0140000\",\"rev\":\"865282ab952231602b40c19b901dccf6\",\"val\":{\"text\":\"B 的标题\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"760f33392161861aa9e6fa0688b92427\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"760f33392161861aa9e6fa0688b92427\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}},\"concurrent\":{\"attr:title\":[{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"03cbe1562d9890f6bf5050d521c30bd7\",\"val\":{\"text\":\"A 的标题\"}}]}}",
+        "resurrected": false,
+        "conflicts": [
+          "attr:title"
+        ],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "causality_beats_clock",
+      "description": "因果上更晚的修改胜出，即使它的 HLC 更小（写入者的时钟偏慢）",
+      "revisions": [
+        {
+          "rev": "296c8f4d84ad17235b38adf94241f711",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "6d7b9e92fd441d6236b610b5633d27a5",
+          "parents": [
+            "296c8f4d84ad17235b38adf94241f711"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "581b7aaabae87382e5e1c28711e68259",
+          "parents": [
+            "6d7b9e92fd441d6236b610b5633d27a5"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        },
+        {
+          "rev": "7c32f5e75b54f551c35cb776bea6176a",
+          "parents": [
+            "6d7b9e92fd441d6236b610b5633d27a5"
+          ],
+          "origin": "df00fcdfc506515f587f842bef6936c7"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "581b7aaabae87382e5e1c28711e68259",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0320000\",\"rev\":\"581b7aaabae87382e5e1c28711e68259\",\"val\":{\"text\":\"新标题\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"296c8f4d84ad17235b38adf94241f711\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"296c8f4d84ad17235b38adf94241f711\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        },
+        {
+          "rev": "7c32f5e75b54f551c35cb776bea6176a",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:favorite\":{\"hlc\":\"019a90d3f03c0000\",\"rev\":\"7c32f5e75b54f551c35cb776bea6176a\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f0640000\",\"rev\":\"6d7b9e92fd441d6236b610b5633d27a5\",\"val\":{\"text\":\"旧标题\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"296c8f4d84ad17235b38adf94241f711\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"296c8f4d84ad17235b38adf94241f711\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:favorite\":{\"hlc\":\"019a90d3f03c0000\",\"rev\":\"7c32f5e75b54f551c35cb776bea6176a\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f0320000\",\"rev\":\"581b7aaabae87382e5e1c28711e68259\",\"val\":{\"text\":\"新标题\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"296c8f4d84ad17235b38adf94241f711\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"296c8f4d84ad17235b38adf94241f711\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}",
+        "resurrected": false,
+        "conflicts": [],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "hlc_tie_origin_decides",
+      "description": "HLC 相同：按来源设备的字节序决定",
+      "revisions": [
+        {
+          "rev": "ad325e4bcacde2d8a1e89348b2aff951",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "9729620767f8c7e32e544c344fd376d8",
+          "parents": [
+            "ad325e4bcacde2d8a1e89348b2aff951"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "490b3aa9b5d9397abe54700745086875",
+          "parents": [
+            "ad325e4bcacde2d8a1e89348b2aff951"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "9729620767f8c7e32e544c344fd376d8",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"9729620767f8c7e32e544c344fd376d8\",\"val\":{\"text\":\"来自 A\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"ad325e4bcacde2d8a1e89348b2aff951\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"ad325e4bcacde2d8a1e89348b2aff951\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        },
+        {
+          "rev": "490b3aa9b5d9397abe54700745086875",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"490b3aa9b5d9397abe54700745086875\",\"val\":{\"text\":\"来自 B\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"ad325e4bcacde2d8a1e89348b2aff951\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"ad325e4bcacde2d8a1e89348b2aff951\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"490b3aa9b5d9397abe54700745086875\",\"val\":{\"text\":\"来自 B\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"ad325e4bcacde2d8a1e89348b2aff951\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"ad325e4bcacde2d8a1e89348b2aff951\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}},\"concurrent\":{\"attr:title\":[{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"9729620767f8c7e32e544c344fd376d8\",\"val\":{\"text\":\"来自 A\"}}]}}",
+        "resurrected": false,
+        "conflicts": [
+          "attr:title"
+        ],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "hlc_and_origin_tie_rev_decides",
+      "description": "HLC 与来源设备都相同（克隆的设备）：按 rev 的字节序决定",
+      "revisions": [
+        {
+          "rev": "26348f508baad1a0de7d6edb4d26b46b",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "4a576b0d439724bbdaf571653f6067fa",
+          "parents": [
+            "26348f508baad1a0de7d6edb4d26b46b"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "faddc7084edf5b2769889b8b3b45a4ba",
+          "parents": [
+            "26348f508baad1a0de7d6edb4d26b46b"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "4a576b0d439724bbdaf571653f6067fa",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"4a576b0d439724bbdaf571653f6067fa\",\"val\":{\"text\":\"X\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"26348f508baad1a0de7d6edb4d26b46b\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"26348f508baad1a0de7d6edb4d26b46b\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        },
+        {
+          "rev": "faddc7084edf5b2769889b8b3b45a4ba",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"faddc7084edf5b2769889b8b3b45a4ba\",\"val\":{\"text\":\"Y\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"26348f508baad1a0de7d6edb4d26b46b\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"26348f508baad1a0de7d6edb4d26b46b\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"faddc7084edf5b2769889b8b3b45a4ba\",\"val\":{\"text\":\"Y\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"26348f508baad1a0de7d6edb4d26b46b\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"26348f508baad1a0de7d6edb4d26b46b\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}},\"concurrent\":{\"attr:title\":[{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"4a576b0d439724bbdaf571653f6067fa\",\"val\":{\"text\":\"X\"}}]}}",
+        "resurrected": false,
+        "conflicts": [
+          "attr:title"
+        ],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "value_beats_concurrent_tombstone",
+      "description": "并发的删除与修改：非墓碑胜出（宁可多保留），即使墓碑的 HLC 更大；墓碑保存为并发版本",
+      "revisions": [
+        {
+          "rev": "81594df20de5566048e38200944b5588",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "22eb11ac9c30d1b6edb4c5d498ca3884",
+          "parents": [
+            "81594df20de5566048e38200944b5588"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "ae8edcf022088afa876129b3e2bb07f7",
+          "parents": [
+            "81594df20de5566048e38200944b5588"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "22eb11ac9c30d1b6edb4c5d498ca3884",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"81594df20de5566048e38200944b5588\",\"val\":{\"text\":\"GitHub\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"81594df20de5566048e38200944b5588\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0140000\",\"rev\":\"22eb11ac9c30d1b6edb4c5d498ca3884\"}}}"
+        },
+        {
+          "rev": "ae8edcf022088afa876129b3e2bb07f7",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"81594df20de5566048e38200944b5588\",\"val\":{\"text\":\"GitHub\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"81594df20de5566048e38200944b5588\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"ae8edcf022088afa876129b3e2bb07f7\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"n3w\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"81594df20de5566048e38200944b5588\",\"val\":{\"text\":\"GitHub\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"81594df20de5566048e38200944b5588\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"ae8edcf022088afa876129b3e2bb07f7\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"n3w\"}}}}},\"concurrent\":{\"field:bb9f54e70bedb5bc5d6df4c496423b15\":[{\"hlc\":\"019a90d3f0140000\",\"rev\":\"22eb11ac9c30d1b6edb4c5d498ca3884\"}]}}",
+        "resurrected": false,
+        "conflicts": [
+          "field:bb9f54e70bedb5bc5d6df4c496423b15"
+        ],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "equal_values_no_conflict",
+      "description": "两台设备并发地改成同一个值：保存并发版本，但不报告冲突",
+      "revisions": [
+        {
+          "rev": "f4eee5d8ba64052d09fcbf0ea191ff97",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "5e8da7bc5982b76c852080715490fcd6",
+          "parents": [
+            "f4eee5d8ba64052d09fcbf0ea191ff97"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "c28de15b4c34dcdf6938ec3fa4a03b69",
+          "parents": [
+            "f4eee5d8ba64052d09fcbf0ea191ff97"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "5e8da7bc5982b76c852080715490fcd6",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"5e8da7bc5982b76c852080715490fcd6\",\"val\":{\"text\":\"同一个\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"f4eee5d8ba64052d09fcbf0ea191ff97\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"f4eee5d8ba64052d09fcbf0ea191ff97\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        },
+        {
+          "rev": "c28de15b4c34dcdf6938ec3fa4a03b69",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"c28de15b4c34dcdf6938ec3fa4a03b69\",\"val\":{\"text\":\"同一个\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"f4eee5d8ba64052d09fcbf0ea191ff97\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"f4eee5d8ba64052d09fcbf0ea191ff97\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"c28de15b4c34dcdf6938ec3fa4a03b69\",\"val\":{\"text\":\"同一个\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"f4eee5d8ba64052d09fcbf0ea191ff97\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"f4eee5d8ba64052d09fcbf0ea191ff97\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}},\"concurrent\":{\"attr:title\":[{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"5e8da7bc5982b76c852080715490fcd6\",\"val\":{\"text\":\"同一个\"}}]}}",
+        "resurrected": false,
+        "conflicts": [],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "tag_remove_after_seen",
+      "description": "删除标签的修订看到了添加：删除（墓碑）因果覆盖添加",
+      "revisions": [
+        {
+          "rev": "dccb634628ca9bc72831b5ce2ed1c8b8",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "52bcf1a844ab784b6a968327abe2a7c5",
+          "parents": [
+            "dccb634628ca9bc72831b5ce2ed1c8b8"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "a0ee426dcec573542b7dc1ed9fac0ef2",
+          "parents": [
+            "52bcf1a844ab784b6a968327abe2a7c5"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "fc18cf37877ab56fa1e0f9d491c55de0",
+          "parents": [
+            "52bcf1a844ab784b6a968327abe2a7c5"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "a0ee426dcec573542b7dc1ed9fac0ef2",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"dccb634628ca9bc72831b5ce2ed1c8b8\",\"val\":{\"text\":\"GitHub\"}},\"tag:work\":{\"hlc\":\"019a90d3f0140000\",\"rev\":\"a0ee426dcec573542b7dc1ed9fac0ef2\"},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"dccb634628ca9bc72831b5ce2ed1c8b8\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"dccb634628ca9bc72831b5ce2ed1c8b8\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        },
+        {
+          "rev": "fc18cf37877ab56fa1e0f9d491c55de0",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:favorite\":{\"hlc\":\"019a90d3f0150000\",\"rev\":\"fc18cf37877ab56fa1e0f9d491c55de0\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"dccb634628ca9bc72831b5ce2ed1c8b8\",\"val\":{\"text\":\"GitHub\"}},\"tag:work\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"52bcf1a844ab784b6a968327abe2a7c5\",\"val\":\"tag\"},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"dccb634628ca9bc72831b5ce2ed1c8b8\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"dccb634628ca9bc72831b5ce2ed1c8b8\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:favorite\":{\"hlc\":\"019a90d3f0150000\",\"rev\":\"fc18cf37877ab56fa1e0f9d491c55de0\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"dccb634628ca9bc72831b5ce2ed1c8b8\",\"val\":{\"text\":\"GitHub\"}},\"tag:work\":{\"hlc\":\"019a90d3f0140000\",\"rev\":\"a0ee426dcec573542b7dc1ed9fac0ef2\"},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"dccb634628ca9bc72831b5ce2ed1c8b8\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"dccb634628ca9bc72831b5ce2ed1c8b8\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}",
+        "resurrected": false,
+        "conflicts": [],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "tag_concurrent_add_and_remove",
+      "description": "并发地删除与重新添加同一个标签：添加胜出",
+      "revisions": [
+        {
+          "rev": "c4a373aadf46f80ac9ec1d47bd16db99",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "a76a7f0169eaed2a3c256e09668d52c4",
+          "parents": [
+            "c4a373aadf46f80ac9ec1d47bd16db99"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "fdaedd467cc0befa9e432d718756ec86",
+          "parents": [
+            "a76a7f0169eaed2a3c256e09668d52c4"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "dabbe71cef503a63246a772b8d92774f",
+          "parents": [
+            "a76a7f0169eaed2a3c256e09668d52c4"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "fdaedd467cc0befa9e432d718756ec86",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c4a373aadf46f80ac9ec1d47bd16db99\",\"val\":{\"text\":\"GitHub\"}},\"tag:work\":{\"hlc\":\"019a90d3f01e0000\",\"rev\":\"fdaedd467cc0befa9e432d718756ec86\"},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c4a373aadf46f80ac9ec1d47bd16db99\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c4a373aadf46f80ac9ec1d47bd16db99\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        },
+        {
+          "rev": "dabbe71cef503a63246a772b8d92774f",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c4a373aadf46f80ac9ec1d47bd16db99\",\"val\":{\"text\":\"GitHub\"}},\"tag:work\":{\"hlc\":\"019a90d3f0140000\",\"rev\":\"dabbe71cef503a63246a772b8d92774f\",\"val\":\"tag\"},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c4a373aadf46f80ac9ec1d47bd16db99\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c4a373aadf46f80ac9ec1d47bd16db99\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c4a373aadf46f80ac9ec1d47bd16db99\",\"val\":{\"text\":\"GitHub\"}},\"tag:work\":{\"hlc\":\"019a90d3f0140000\",\"rev\":\"dabbe71cef503a63246a772b8d92774f\",\"val\":\"tag\"},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c4a373aadf46f80ac9ec1d47bd16db99\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c4a373aadf46f80ac9ec1d47bd16db99\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}},\"concurrent\":{\"tag:work\":[{\"hlc\":\"019a90d3f01e0000\",\"rev\":\"fdaedd467cc0befa9e432d718756ec86\"}]}}",
+        "resurrected": false,
+        "conflicts": [
+          "tag:work"
+        ],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "trash_concurrent_with_edit",
+      "description": "移入回收站与修改并发：撤销，回收站状态只留在并发版本中；标记 resurrected，删除状态不算字段冲突",
+      "revisions": [
+        {
+          "rev": "2133c2901b64665b1db0eb9818000ab0",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "a84c1dde960ce7a239c47df78f3538e3",
+          "parents": [
+            "2133c2901b64665b1db0eb9818000ab0"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "da015c0c04572f3335eb43244f5ade61",
+          "parents": [
+            "2133c2901b64665b1db0eb9818000ab0"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "a84c1dde960ce7a239c47df78f3538e3",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"2133c2901b64665b1db0eb9818000ab0\",\"val\":{\"text\":\"GitHub\"}},\"attr:trashed\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"a84c1dde960ce7a239c47df78f3538e3\",\"val\":{\"int\":1763366400010}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"2133c2901b64665b1db0eb9818000ab0\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"2133c2901b64665b1db0eb9818000ab0\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        },
+        {
+          "rev": "da015c0c04572f3335eb43244f5ade61",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"da015c0c04572f3335eb43244f5ade61\",\"val\":{\"text\":\"还在用\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"2133c2901b64665b1db0eb9818000ab0\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"2133c2901b64665b1db0eb9818000ab0\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"da015c0c04572f3335eb43244f5ade61\",\"val\":{\"text\":\"还在用\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"2133c2901b64665b1db0eb9818000ab0\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"2133c2901b64665b1db0eb9818000ab0\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}},\"concurrent\":{\"attr:trashed\":[{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"a84c1dde960ce7a239c47df78f3538e3\",\"val\":{\"int\":1763366400010}}]}}",
+        "resurrected": true,
+        "conflicts": [],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "trash_stands_against_concurrent_tombstone",
+      "description": "与移入回收站并发的只是删除了一个字段（墓碑）：不撤销",
+      "revisions": [
+        {
+          "rev": "11c4be148095c60b339d8bae4ed7e534",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "974f0fab2ff24958440c7751c29e4cbf",
+          "parents": [
+            "11c4be148095c60b339d8bae4ed7e534"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "feb15fbfc70f86dafcf383e93e8e7865",
+          "parents": [
+            "11c4be148095c60b339d8bae4ed7e534"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "974f0fab2ff24958440c7751c29e4cbf",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"11c4be148095c60b339d8bae4ed7e534\",\"val\":{\"text\":\"GitHub\"}},\"attr:trashed\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"974f0fab2ff24958440c7751c29e4cbf\",\"val\":{\"int\":1763366400010}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"11c4be148095c60b339d8bae4ed7e534\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"11c4be148095c60b339d8bae4ed7e534\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        },
+        {
+          "rev": "feb15fbfc70f86dafcf383e93e8e7865",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"11c4be148095c60b339d8bae4ed7e534\",\"val\":{\"text\":\"GitHub\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"11c4be148095c60b339d8bae4ed7e534\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"feb15fbfc70f86dafcf383e93e8e7865\"}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"11c4be148095c60b339d8bae4ed7e534\",\"val\":{\"text\":\"GitHub\"}},\"attr:trashed\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"974f0fab2ff24958440c7751c29e4cbf\",\"val\":{\"int\":1763366400010}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"11c4be148095c60b339d8bae4ed7e534\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"feb15fbfc70f86dafcf383e93e8e7865\"}}}",
+        "resurrected": false,
+        "conflicts": [],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "edit_inside_trash_does_not_resurrect",
+      "description": "在回收站中编辑（看到了移入回收站）不算并发，条目仍在回收站",
+      "revisions": [
+        {
+          "rev": "03bb17ebc71693e465c208a3a72f034f",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "161ead2a8db4b93d1e692a2447f4329d",
+          "parents": [
+            "03bb17ebc71693e465c208a3a72f034f"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "14263db50a87c850b9930175ffef2f2d",
+          "parents": [
+            "161ead2a8db4b93d1e692a2447f4329d"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "026b68d68d16aad5b81aa7769f834992",
+          "parents": [
+            "03bb17ebc71693e465c208a3a72f034f"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "14263db50a87c850b9930175ffef2f2d",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0140000\",\"rev\":\"14263db50a87c850b9930175ffef2f2d\",\"val\":{\"text\":\"在回收站里改\"}},\"attr:trashed\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"161ead2a8db4b93d1e692a2447f4329d\",\"val\":{\"int\":1763366400010}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"03bb17ebc71693e465c208a3a72f034f\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"03bb17ebc71693e465c208a3a72f034f\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        },
+        {
+          "rev": "026b68d68d16aad5b81aa7769f834992",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"03bb17ebc71693e465c208a3a72f034f\",\"val\":{\"text\":\"GitHub\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"03bb17ebc71693e465c208a3a72f034f\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"026b68d68d16aad5b81aa7769f834992\"}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0140000\",\"rev\":\"14263db50a87c850b9930175ffef2f2d\",\"val\":{\"text\":\"在回收站里改\"}},\"attr:trashed\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"161ead2a8db4b93d1e692a2447f4329d\",\"val\":{\"int\":1763366400010}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"03bb17ebc71693e465c208a3a72f034f\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"026b68d68d16aad5b81aa7769f834992\"}}}",
+        "resurrected": false,
+        "conflicts": [],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "concurrent_trash_two_devices",
+      "description": "两台设备在不同时间并发地移入回收站：HLC 较大者为当前版本；删除状态不算字段冲突",
+      "revisions": [
+        {
+          "rev": "b224a62a444e062a0dc635792b423f26",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "ecd53ec32b4daeb6e2786fe2e19e6185",
+          "parents": [
+            "b224a62a444e062a0dc635792b423f26"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "b331a4a7792f3775f4fae2357f567190",
+          "parents": [
+            "b224a62a444e062a0dc635792b423f26"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "ecd53ec32b4daeb6e2786fe2e19e6185",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"b224a62a444e062a0dc635792b423f26\",\"val\":{\"text\":\"GitHub\"}},\"attr:trashed\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"ecd53ec32b4daeb6e2786fe2e19e6185\",\"val\":{\"int\":1763366400010}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"b224a62a444e062a0dc635792b423f26\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"b224a62a444e062a0dc635792b423f26\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        },
+        {
+          "rev": "b331a4a7792f3775f4fae2357f567190",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"b224a62a444e062a0dc635792b423f26\",\"val\":{\"text\":\"GitHub\"}},\"attr:trashed\":{\"hlc\":\"019a90d3f0140000\",\"rev\":\"b331a4a7792f3775f4fae2357f567190\",\"val\":{\"int\":1763366400020}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"b224a62a444e062a0dc635792b423f26\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"b224a62a444e062a0dc635792b423f26\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"b224a62a444e062a0dc635792b423f26\",\"val\":{\"text\":\"GitHub\"}},\"attr:trashed\":{\"hlc\":\"019a90d3f0140000\",\"rev\":\"b331a4a7792f3775f4fae2357f567190\",\"val\":{\"int\":1763366400020}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"b224a62a444e062a0dc635792b423f26\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"b224a62a444e062a0dc635792b423f26\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}},\"concurrent\":{\"attr:trashed\":[{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"ecd53ec32b4daeb6e2786fe2e19e6185\",\"val\":{\"int\":1763366400010}}]}}",
+        "resurrected": false,
+        "conflicts": [],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "purge_concurrent_with_edit",
+      "description": "永久删除与修改并发：撤销删除；墓碑修订对应的删除版本（hlc = 0）保存在 attr:purged 的并发版本中",
+      "revisions": [
+        {
+          "rev": "92b6ac1b532a612f2bb2b12008c1cf82",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "d4d8fdca3e17c478256e4981c1ff56a4",
+          "parents": [
+            "92b6ac1b532a612f2bb2b12008c1cf82"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "07d43bec437ef9f0ed97b3dbcd32fefa",
+          "parents": [
+            "92b6ac1b532a612f2bb2b12008c1cf82"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "d4d8fdca3e17c478256e4981c1ff56a4",
+          "doc": null
+        },
+        {
+          "rev": "07d43bec437ef9f0ed97b3dbcd32fefa",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"07d43bec437ef9f0ed97b3dbcd32fefa\",\"val\":{\"text\":\"还在用\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"92b6ac1b532a612f2bb2b12008c1cf82\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"92b6ac1b532a612f2bb2b12008c1cf82\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"07d43bec437ef9f0ed97b3dbcd32fefa\",\"val\":{\"text\":\"还在用\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"92b6ac1b532a612f2bb2b12008c1cf82\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"92b6ac1b532a612f2bb2b12008c1cf82\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}},\"concurrent\":{\"attr:purged\":[{\"hlc\":\"0000000000000000\",\"rev\":\"d4d8fdca3e17c478256e4981c1ff56a4\",\"val\":{\"bool\":true}}]}}",
+        "resurrected": true,
+        "conflicts": [],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "purge_after_all_edits",
+      "description": "墓碑修订看到了全部修改：删除成立",
+      "revisions": [
+        {
+          "rev": "a5cd12983a2f09f1cf157ff0259d0af4",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "07a250b97701edd6414001e239dd5e5c",
+          "parents": [
+            "a5cd12983a2f09f1cf157ff0259d0af4"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        },
+        {
+          "rev": "42f06b83ab64dfa97fa8f8b0f3642c6b",
+          "parents": [
+            "07a250b97701edd6414001e239dd5e5c"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "42f06b83ab64dfa97fa8f8b0f3642c6b",
+          "doc": null
+        }
+      ],
+      "expected": {
+        "deleted": true,
+        "doc": null,
+        "resurrected": false,
+        "conflicts": [],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "purge_stands_against_concurrent_tombstone",
+      "description": "与永久删除并发的只是删除了一个字段（墓碑）：删除成立（本次澄清：与回收站的规则一致，只看非墓碑的修改）",
+      "revisions": [
+        {
+          "rev": "02e2e991f8cb037f409928e95e27c0f6",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "25c155f10c3d1e4502d8e0a8f99fabcf",
+          "parents": [
+            "02e2e991f8cb037f409928e95e27c0f6"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "d021f7f0e1e77edb2ad17bd13084f805",
+          "parents": [
+            "02e2e991f8cb037f409928e95e27c0f6"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "25c155f10c3d1e4502d8e0a8f99fabcf",
+          "doc": null
+        },
+        {
+          "rev": "d021f7f0e1e77edb2ad17bd13084f805",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"02e2e991f8cb037f409928e95e27c0f6\",\"val\":{\"text\":\"GitHub\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"02e2e991f8cb037f409928e95e27c0f6\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"d021f7f0e1e77edb2ad17bd13084f805\"}}}"
+        }
+      ],
+      "expected": {
+        "deleted": true,
+        "doc": null,
+        "resurrected": false,
+        "conflicts": [],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "all_heads_tombstones",
+      "description": "全部头都是墓碑：已删除",
+      "revisions": [
+        {
+          "rev": "ecf78f0d9fc70796502e9122dd0d5e65",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "f096a59f7343e2813e2300dca91c34f8",
+          "parents": [
+            "ecf78f0d9fc70796502e9122dd0d5e65"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "c7f054c27bb8ff1dc5a26dde99b52f89",
+          "parents": [
+            "ecf78f0d9fc70796502e9122dd0d5e65"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "f096a59f7343e2813e2300dca91c34f8",
+          "doc": null
+        },
+        {
+          "rev": "c7f054c27bb8ff1dc5a26dde99b52f89",
+          "doc": null
+        }
+      ],
+      "expected": {
+        "deleted": true,
+        "doc": null,
+        "resurrected": false,
+        "conflicts": [],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "three_way_merge",
+      "description": "一个墓碑头与两个修改头一次合并：撤销删除，两处修改都保留",
+      "revisions": [
+        {
+          "rev": "e4b09da5e7c41e4639e44db36be77e08",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "571f38c25b716de7b6e8685c4fe14924",
+          "parents": [
+            "e4b09da5e7c41e4639e44db36be77e08"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "b08e853089a1d61a547390acd660dee9",
+          "parents": [
+            "e4b09da5e7c41e4639e44db36be77e08"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        },
+        {
+          "rev": "83c04819616619c515fe03a4d26e5da0",
+          "parents": [
+            "e4b09da5e7c41e4639e44db36be77e08"
+          ],
+          "origin": "df00fcdfc506515f587f842bef6936c7"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "571f38c25b716de7b6e8685c4fe14924",
+          "doc": null
+        },
+        {
+          "rev": "b08e853089a1d61a547390acd660dee9",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"b08e853089a1d61a547390acd660dee9\",\"val\":{\"text\":\"B 改了标题\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"e4b09da5e7c41e4639e44db36be77e08\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"e4b09da5e7c41e4639e44db36be77e08\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        },
+        {
+          "rev": "83c04819616619c515fe03a4d26e5da0",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:favorite\":{\"hlc\":\"019a90d3f00c0000\",\"rev\":\"83c04819616619c515fe03a4d26e5da0\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"e4b09da5e7c41e4639e44db36be77e08\",\"val\":{\"text\":\"GitHub\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"e4b09da5e7c41e4639e44db36be77e08\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"e4b09da5e7c41e4639e44db36be77e08\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:favorite\":{\"hlc\":\"019a90d3f00c0000\",\"rev\":\"83c04819616619c515fe03a4d26e5da0\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"b08e853089a1d61a547390acd660dee9\",\"val\":{\"text\":\"B 改了标题\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"e4b09da5e7c41e4639e44db36be77e08\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"e4b09da5e7c41e4639e44db36be77e08\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}},\"concurrent\":{\"attr:purged\":[{\"hlc\":\"0000000000000000\",\"rev\":\"571f38c25b716de7b6e8685c4fe14924\",\"val\":{\"bool\":true}}]}}",
+        "resurrected": true,
+        "conflicts": [],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "grouped_merge_matches_three_way",
+      "description": "先把 P1 与 B1 纯合并写成修订 M，再与 C1 合并：结果与一次合并三个头相同",
+      "revisions": [
+        {
+          "rev": "e4b09da5e7c41e4639e44db36be77e08",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "571f38c25b716de7b6e8685c4fe14924",
+          "parents": [
+            "e4b09da5e7c41e4639e44db36be77e08"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "b08e853089a1d61a547390acd660dee9",
+          "parents": [
+            "e4b09da5e7c41e4639e44db36be77e08"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        },
+        {
+          "rev": "83c04819616619c515fe03a4d26e5da0",
+          "parents": [
+            "e4b09da5e7c41e4639e44db36be77e08"
+          ],
+          "origin": "df00fcdfc506515f587f842bef6936c7"
+        },
+        {
+          "rev": "4973597fb28dea01dad38a1059159480",
+          "parents": [
+            "571f38c25b716de7b6e8685c4fe14924",
+            "b08e853089a1d61a547390acd660dee9"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "4973597fb28dea01dad38a1059159480",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"b08e853089a1d61a547390acd660dee9\",\"val\":{\"text\":\"B 改了标题\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"e4b09da5e7c41e4639e44db36be77e08\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"e4b09da5e7c41e4639e44db36be77e08\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}},\"concurrent\":{\"attr:purged\":[{\"hlc\":\"0000000000000000\",\"rev\":\"571f38c25b716de7b6e8685c4fe14924\",\"val\":{\"bool\":true}}]}}"
+        },
+        {
+          "rev": "83c04819616619c515fe03a4d26e5da0",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:favorite\":{\"hlc\":\"019a90d3f00c0000\",\"rev\":\"83c04819616619c515fe03a4d26e5da0\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"e4b09da5e7c41e4639e44db36be77e08\",\"val\":{\"text\":\"GitHub\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"e4b09da5e7c41e4639e44db36be77e08\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"e4b09da5e7c41e4639e44db36be77e08\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:favorite\":{\"hlc\":\"019a90d3f00c0000\",\"rev\":\"83c04819616619c515fe03a4d26e5da0\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"b08e853089a1d61a547390acd660dee9\",\"val\":{\"text\":\"B 改了标题\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"e4b09da5e7c41e4639e44db36be77e08\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"e4b09da5e7c41e4639e44db36be77e08\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}},\"concurrent\":{\"attr:purged\":[{\"hlc\":\"0000000000000000\",\"rev\":\"571f38c25b716de7b6e8685c4fe14924\",\"val\":{\"bool\":true}}]}}",
+        "resurrected": true,
+        "conflicts": [],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "provenance_violation",
+      "description": "版本声称写于一个不是其所在头祖先的修订：丢弃该版本，报告完整性问题",
+      "revisions": [
+        {
+          "rev": "26ce2e4386e5907de117210815871495",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "8862fce48c0da25acf70cf77bc49d224",
+          "parents": [
+            "26ce2e4386e5907de117210815871495"
+          ],
+          "origin": "df00fcdfc506515f587f842bef6936c7"
+        },
+        {
+          "rev": "26a20ccbb7e9387dd5f6c5721dfad672",
+          "parents": [
+            "26ce2e4386e5907de117210815871495"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        },
+        {
+          "rev": "7cca8ca3ce5c149eb523c5837390b3ca",
+          "parents": [
+            "26ce2e4386e5907de117210815871495"
+          ],
+          "origin": "c3b75c595911c35c4f8b3af51aa4d7ea"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "26a20ccbb7e9387dd5f6c5721dfad672",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:favorite\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"26a20ccbb7e9387dd5f6c5721dfad672\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f0630000\",\"rev\":\"8862fce48c0da25acf70cf77bc49d224\",\"val\":{\"text\":\"伪造：声称写于 X1\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"26ce2e4386e5907de117210815871495\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"26ce2e4386e5907de117210815871495\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        },
+        {
+          "rev": "7cca8ca3ce5c149eb523c5837390b3ca",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:archived\":{\"hlc\":\"019a90d3f00c0000\",\"rev\":\"7cca8ca3ce5c149eb523c5837390b3ca\",\"val\":{\"bool\":false}},\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"26ce2e4386e5907de117210815871495\",\"val\":{\"text\":\"GitHub\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"26ce2e4386e5907de117210815871495\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"26ce2e4386e5907de117210815871495\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:archived\":{\"hlc\":\"019a90d3f00c0000\",\"rev\":\"7cca8ca3ce5c149eb523c5837390b3ca\",\"val\":{\"bool\":false}},\"attr:favorite\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"26a20ccbb7e9387dd5f6c5721dfad672\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"26ce2e4386e5907de117210815871495\",\"val\":{\"text\":\"GitHub\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"26ce2e4386e5907de117210815871495\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"26ce2e4386e5907de117210815871495\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}",
+        "resurrected": false,
+        "conflicts": [],
+        "integrity_issues": [
+          "attr:title"
+        ]
+      }
+    },
+    {
+      "name": "same_rev_different_content",
+      "description": "两个头里同一 rev 的版本内容不同：取 (hlc, 规范编码) 最大者，报告完整性问题",
+      "revisions": [
+        {
+          "rev": "7cd14a534cc6cd5ae6d7f8e22d9156f2",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "033c926a7b932ff719d25d7c135160da",
+          "parents": [
+            "7cd14a534cc6cd5ae6d7f8e22d9156f2"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "b8533cc9d545a0e13d35f7688468f618",
+          "parents": [
+            "7cd14a534cc6cd5ae6d7f8e22d9156f2"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "033c926a7b932ff719d25d7c135160da",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:favorite\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"033c926a7b932ff719d25d7c135160da\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"7cd14a534cc6cd5ae6d7f8e22d9156f2\",\"val\":{\"text\":\"GitHub\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"7cd14a534cc6cd5ae6d7f8e22d9156f2\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"7cd14a534cc6cd5ae6d7f8e22d9156f2\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        },
+        {
+          "rev": "b8533cc9d545a0e13d35f7688468f618",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:archived\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"b8533cc9d545a0e13d35f7688468f618\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"7cd14a534cc6cd5ae6d7f8e22d9156f2\",\"val\":{\"text\":\"被改过的旧值\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"7cd14a534cc6cd5ae6d7f8e22d9156f2\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"7cd14a534cc6cd5ae6d7f8e22d9156f2\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:archived\":{\"hlc\":\"019a90d3f00b0000\",\"rev\":\"b8533cc9d545a0e13d35f7688468f618\",\"val\":{\"bool\":true}},\"attr:favorite\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"033c926a7b932ff719d25d7c135160da\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"7cd14a534cc6cd5ae6d7f8e22d9156f2\",\"val\":{\"text\":\"被改过的旧值\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"7cd14a534cc6cd5ae6d7f8e22d9156f2\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"7cd14a534cc6cd5ae6d7f8e22d9156f2\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}",
+        "resurrected": false,
+        "conflicts": [],
+        "integrity_issues": [
+          "attr:title"
+        ]
+      }
+    },
+    {
+      "name": "duplicate_head_is_ignored",
+      "description": "头列表中重复的修订只算一次",
+      "revisions": [
+        {
+          "rev": "bfc259ca32e478132b4a5abc893b3601",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "f7ddeddb11f50d39e3a42587f49f8651",
+          "parents": [
+            "bfc259ca32e478132b4a5abc893b3601"
+          ],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "fbc7ed72a6977abc7a9e3b3d1255cc3d",
+          "parents": [
+            "bfc259ca32e478132b4a5abc893b3601"
+          ],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "f7ddeddb11f50d39e3a42587f49f8651",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"f7ddeddb11f50d39e3a42587f49f8651\",\"val\":{\"text\":\"A\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"bfc259ca32e478132b4a5abc893b3601\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"bfc259ca32e478132b4a5abc893b3601\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        },
+        {
+          "rev": "fbc7ed72a6977abc7a9e3b3d1255cc3d",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0140000\",\"rev\":\"fbc7ed72a6977abc7a9e3b3d1255cc3d\",\"val\":{\"text\":\"B\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"bfc259ca32e478132b4a5abc893b3601\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"bfc259ca32e478132b4a5abc893b3601\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        },
+        {
+          "rev": "f7ddeddb11f50d39e3a42587f49f8651",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"f7ddeddb11f50d39e3a42587f49f8651\",\"val\":{\"text\":\"A\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"bfc259ca32e478132b4a5abc893b3601\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"bfc259ca32e478132b4a5abc893b3601\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}}}"
+        }
+      ],
+      "expected": {
+        "deleted": false,
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0140000\",\"rev\":\"fbc7ed72a6977abc7a9e3b3d1255cc3d\",\"val\":{\"text\":\"B\"}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"bfc259ca32e478132b4a5abc893b3601\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"bfc259ca32e478132b4a5abc893b3601\",\"val\":{\"field\":{\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}}},\"concurrent\":{\"attr:title\":[{\"hlc\":\"019a90d3f00a0000\",\"rev\":\"f7ddeddb11f50d39e3a42587f49f8651\",\"val\":{\"text\":\"A\"}}]}}",
+        "resurrected": false,
+        "conflicts": [
+          "attr:title"
+        ],
+        "integrity_issues": []
+      }
+    },
+    {
+      "name": "item_type_mismatch",
+      "description": "各头的条目类型不一致",
+      "revisions": [
+        {
+          "rev": "f11cd3ea9a9090851cdfcf1056601b2e",
+          "parents": [],
+          "origin": "14623db8a95ad081bb14952d57fd4031"
+        },
+        {
+          "rev": "ce89b1d347b3b4887f7592b9de413ed4",
+          "parents": [],
+          "origin": "737a3a9e484322c20b9542ff4b021a8d"
+        }
+      ],
+      "heads": [
+        {
+          "rev": "f11cd3ea9a9090851cdfcf1056601b2e",
+          "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"f11cd3ea9a9090851cdfcf1056601b2e\",\"val\":{\"text\":\"x\"}}}}"
+        },
+        {
+          "rev": "ce89b1d347b3b4887f7592b9de413ed4",
+          "doc": "{\"v\":1,\"type\":\"secure_note\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"ce89b1d347b3b4887f7592b9de413ed4\",\"val\":{\"text\":\"y\"}}}}"
+        }
+      ],
+      "expected": {
+        "error": "item_type_mismatch"
+      }
+    }
+  ]
+}

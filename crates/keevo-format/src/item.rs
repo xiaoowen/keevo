@@ -173,6 +173,7 @@ impl ItemDoc {
     /// # Errors
     /// 结构错误、版本不支持或记录值与键不匹配时返回对应错误。
     pub fn decode(bytes: &[u8]) -> Result<Self> {
+        crate::json::check_version(bytes, FORMAT_VERSION)?;
         let doc: ItemDocJson = from_json(bytes)?;
         if doc.v != FORMAT_VERSION {
             return Err(FormatError::UnsupportedVersion(doc.v));
@@ -458,6 +459,7 @@ impl ItemOverview {
     /// # Errors
     /// 结构错误或版本不支持时返回对应错误。
     pub fn decode(bytes: &[u8]) -> Result<Self> {
+        crate::json::check_version(bytes, FORMAT_VERSION)?;
         let o: Self = from_canonical_json(bytes)?;
         if o.v != FORMAT_VERSION {
             return Err(FormatError::UnsupportedVersion(o.v));
@@ -508,6 +510,7 @@ impl VaultMeta {
     /// # Errors
     /// 结构错误或版本不支持时返回对应错误。
     pub fn decode(bytes: &[u8]) -> Result<Self> {
+        crate::json::check_version(bytes, FORMAT_VERSION)?;
         let m: Self = from_canonical_json(bytes)?;
         if m.v != FORMAT_VERSION {
             return Err(FormatError::UnsupportedVersion(m.v));
@@ -992,9 +995,12 @@ mod tests {
             ItemDoc::decode(br#"{"v":2,"type":"login","records":{}}"#),
             Err(FormatError::UnsupportedVersion(2))
         );
+        // 键名不合法是语义错误（spec/vault-format.md §1.1 第 3 步），不是 malformed；未知的种类前缀才是结构错误
         let bad_key = br#"{"v":1,"type":"login","records":{"attr:Title":{"hlc":"0000000000000001","rev":"00000000000000000000000000000000"}}}"#;
+        assert_eq!(ItemDoc::decode(bad_key), Err(FormatError::InvalidKey));
+        let bad_kind = br#"{"v":1,"type":"login","records":{"label:x":{"hlc":"0000000000000001","rev":"00000000000000000000000000000000"}}}"#;
         assert!(matches!(
-            ItemDoc::decode(bad_key),
+            ItemDoc::decode(bad_kind),
             Err(FormatError::Malformed(_))
         ));
         let mismatch = br#"{"v":1,"type":"login","records":{"tag:x":{"hlc":"0000000000000001","rev":"00000000000000000000000000000000","val":{"bool":true}}}}"#;

@@ -59,16 +59,22 @@ impl RecordKey {
         }
     }
 
+    /// 解析并校验名称：写入接口与 [`core::str::FromStr`] 使用。
     fn parse(s: &str) -> Option<Self> {
+        Self::parse_syntax(s).filter(Self::is_valid)
+    }
+
+    /// 只解析语法：种类前缀与 ID 格式（`spec/vault-format.md` §1.1 错误先后的第 1 步，不符合即 `malformed`）。
+    /// 属性名、标签名的规则属于语义（第 3 步，`invalid_key`），由 [`crate::ItemDoc::validate`] 在规范编码检查之后校验。
+    fn parse_syntax(s: &str) -> Option<Self> {
         let (kind, rest) = s.split_once(':')?;
-        let key = match kind {
+        Some(match kind {
             "attr" => Self::Attr(rest.to_owned()),
             "tag" => Self::Tag(rest.to_owned()),
             "section" => Self::Section(id_hex::parse(rest)?),
             "field" => Self::Field(id_hex::parse(rest)?),
             _ => return None,
-        };
-        key.is_valid().then_some(key)
+        })
     }
 
     /// 名称是否合法（`spec/vault-format.md` §2）：属性名 `[a-z0-9_]`、1–64 字节；标签名 1–256 字节。
@@ -117,7 +123,7 @@ impl Serialize for RecordKey {
 impl<'de> Deserialize<'de> for RecordKey {
     fn deserialize<D: Deserializer<'de>>(d: D) -> core::result::Result<Self, D::Error> {
         let s = String::deserialize(d)?;
-        Self::parse(&s).ok_or_else(|| serde::de::Error::custom("invalid record key"))
+        Self::parse_syntax(&s).ok_or_else(|| serde::de::Error::custom("invalid record key"))
     }
 }
 

@@ -1,0 +1,554 @@
+{
+  "description": "spec/vault-format.md 1.1 的测试向量，由独立的 Python 参考实现生成（spec/reference/format_vectors.py）。canonical_values：宽松写法（loose）解析后，规范编码必须等于 canonical。valid：必须原样接受，重新编码后逐字节相同。invalid：必须返回 error 指定的错误码；doc_hex 给出的是非 UTF-8 的原始字节。",
+  "canonical_values": [
+    {
+      "name": "text_plain",
+      "loose": "{\n \"text\": \"GitHub\"\n}",
+      "canonical": "{\"text\":\"GitHub\"}"
+    },
+    {
+      "name": "text_empty",
+      "loose": "{\n \"text\": \"\"\n}",
+      "canonical": "{\"text\":\"\"}"
+    },
+    {
+      "name": "text_escapes",
+      "loose": "{\n \"text\": \"\\u5f15\\u53f7\\\" \\u53cd\\u659c\\u6760\\\\ \\u659c\\u6760/ \\u9000\\u683c\\b \\u5236\\u8868\\t \\u6362\\u884c\\n \\u6362\\u9875\\f \\u56de\\u8f66\\r \\u5176\\u4ed6\\u63a7\\u5236\\u0000\\u0001\\u001f DEL\\u007f\"\n}",
+      "canonical": "{\"text\":\"引号\\\" 反斜杠\\\\ 斜杠/ 退格\\b 制表\\t 换行\\n 换页\\f 回车\\r 其他控制\\u0000\\u0001\\u001f DEL\"}"
+    },
+    {
+      "name": "text_non_ascii_unescaped",
+      "loose": "{\n \"text\": \"\\u4e2d\\u6587 \\u00e9 \\uff5a \\ud83d\\ude00 \\u2028\\u2029 \\ufeff\"\n}",
+      "canonical": "{\"text\":\"中文 é ｚ 😀    ﻿\"}"
+    },
+    {
+      "name": "bool_true",
+      "loose": "{\n \"bool\": true\n}",
+      "canonical": "{\"bool\":true}"
+    },
+    {
+      "name": "bool_false",
+      "loose": "{\n \"bool\": false\n}",
+      "canonical": "{\"bool\":false}"
+    },
+    {
+      "name": "int_zero",
+      "loose": "{\n \"int\": 0\n}",
+      "canonical": "{\"int\":0}"
+    },
+    {
+      "name": "int_negative",
+      "loose": "{\n \"int\": -1\n}",
+      "canonical": "{\"int\":-1}"
+    },
+    {
+      "name": "int_max_safe",
+      "loose": "{\n \"int\": 9007199254740991\n}",
+      "canonical": "{\"int\":9007199254740991}"
+    },
+    {
+      "name": "int_min_safe",
+      "loose": "{\n \"int\": -9007199254740991\n}",
+      "canonical": "{\"int\":-9007199254740991}"
+    },
+    {
+      "name": "tag",
+      "loose": "\"tag\"",
+      "canonical": "\"tag\""
+    },
+    {
+      "name": "section",
+      "loose": "{\n \"section\": {\n  \"order\": \"0000001024\",\n  \"label\": \"\\u670d\\u52a1\\u5668\"\n }\n}",
+      "canonical": "{\"section\":{\"label\":\"服务器\",\"order\":\"0000001024\"}}"
+    },
+    {
+      "name": "field_minimal",
+      "loose": "{\n \"field\": {\n  \"data\": {\n   \"text\": \"\"\n  },\n  \"label\": \"\\u5907\\u6ce8\",\n  \"kind\": \"text\",\n  \"order\": \"0\"\n }\n}",
+      "canonical": "{\"field\":{\"order\":\"0\",\"kind\":\"text\",\"label\":\"备注\",\"data\":{\"text\":\"\"}}}"
+    },
+    {
+      "name": "field_full",
+      "loose": "{\n \"field\": {\n  \"data\": {\n   \"text\": \"s3cret\\n\"\n  },\n  \"purpose\": \"password\",\n  \"label\": \"\\u5bc6\\u7801\",\n  \"kind\": \"concealed\",\n  \"order\": \"a1Z\",\n  \"section\": \"d7bfa8e1613fa21c4075b58015326fb6\"\n }\n}",
+      "canonical": "{\"field\":{\"section\":\"d7bfa8e1613fa21c4075b58015326fb6\",\"order\":\"a1Z\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"s3cret\\n\"}}}"
+    },
+    {
+      "name": "field_kv",
+      "loose": "{\n \"field\": {\n  \"data\": {\n   \"kv\": [\n    {\n     \"concealed\": true,\n     \"value\": \"k\\\"1\",\n     \"key\": \"API_KEY\"\n    },\n    {\n     \"concealed\": false,\n     \"value\": \"\",\n     \"key\": \"HOST\"\n    }\n   ]\n  },\n  \"label\": \"\\u73af\\u5883\",\n  \"kind\": \"kv_list\",\n  \"order\": \"1\"\n }\n}",
+      "canonical": "{\"field\":{\"order\":\"1\",\"kind\":\"kv_list\",\"label\":\"环境\",\"data\":{\"kv\":[{\"key\":\"API_KEY\",\"value\":\"k\\\"1\",\"concealed\":true},{\"key\":\"HOST\",\"value\":\"\",\"concealed\":false}]}}}"
+    },
+    {
+      "name": "field_kv_empty",
+      "loose": "{\n \"field\": {\n  \"data\": {\n   \"kv\": []\n  },\n  \"label\": \"\\u73af\\u5883\",\n  \"kind\": \"kv_list\",\n  \"order\": \"1\"\n }\n}",
+      "canonical": "{\"field\":{\"order\":\"1\",\"kind\":\"kv_list\",\"label\":\"环境\",\"data\":{\"kv\":[]}}}"
+    },
+    {
+      "name": "field_codes",
+      "loose": "{\n \"field\": {\n  \"data\": {\n   \"codes\": [\n    {\n     \"used\": false,\n     \"code\": \"aaaa-bbbb\"\n    },\n    {\n     \"used\": true,\n     \"code\": \"cccc\"\n    }\n   ]\n  },\n  \"label\": \"\\u6062\\u590d\\u7801\",\n  \"kind\": \"recovery_codes\",\n  \"order\": \"2\"\n }\n}",
+      "canonical": "{\"field\":{\"order\":\"2\",\"kind\":\"recovery_codes\",\"label\":\"恢复码\",\"data\":{\"codes\":[{\"code\":\"aaaa-bbbb\",\"used\":false},{\"code\":\"cccc\",\"used\":true}]}}}"
+    }
+  ],
+  "item_details": {
+    "valid": [
+      {
+        "name": "minimal",
+        "doc": "{\"v\":1,\"type\":\"secure_note\",\"records\":{}}"
+      },
+      {
+        "name": "ordering_and_all_value_kinds",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"int\":7}},\"attr:a_b\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"int\":-7}},\"attr:ab\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\"},\"attr:favorite\":{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}},\"tag:Z\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:b\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:é\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:ｚ\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:😀\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"section:d7bfa8e1613fa21c4075b58015326fb6\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"section\":{\"label\":\"服务器\",\"order\":\"0000001024\"}}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"field\":{\"section\":\"d7bfa8e1613fa21c4075b58015326fb6\",\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}},\"field:de5e2dc1c2cae856fec2bc1f8b255948\":{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\"}},\"concurrent\":{\"attr:title\":[{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"text\":\"GitHub（工作）\"}}]}}"
+      },
+      {
+        "name": "deletion_state_only_in_concurrent",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"x\"}}},\"concurrent\":{\"attr:trashed\":[{\"hlc\":\"019a90d3f0020000\",\"rev\":\"341914aa3b26d3dcdfb48794a16827d9\",\"val\":{\"int\":1763366400001}},{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"int\":1763366400000}}]}}"
+      },
+      {
+        "name": "purged_allowed_forms",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:purged\":{\"hlc\":\"019a90d3f0030000\",\"rev\":\"341914aa3b26d3dcdfb48794a16827d9\"}},\"concurrent\":{\"attr:purged\":[{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\"},{\"hlc\":\"0000000000000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"bool\":true}}]}}"
+      },
+      {
+        "name": "type_two_factor",
+        "doc": "{\"v\":1,\"type\":\"two_factor\",\"records\":{}}"
+      }
+    ],
+    "invalid": [
+      {
+        "name": "unsupported_version",
+        "doc": "{\"v\":2,\"type\":\"secure_note\",\"records\":{}}",
+        "error": "unsupported_version"
+      },
+      {
+        "name": "unsupported_version_before_structure",
+        "doc": "{\"v\":2,\"type\":\"login\",\"records\":{},\"attachments\":[]}",
+        "error": "unsupported_version"
+      },
+      {
+        "name": "version_as_string",
+        "doc": "{\"v\":\"1\",\"type\":\"secure_note\",\"records\":{}}",
+        "error": "malformed"
+      },
+      {
+        "name": "version_as_bool",
+        "doc": "{\"v\":true,\"type\":\"secure_note\",\"records\":{}}",
+        "error": "malformed"
+      },
+      {
+        "name": "version_as_fraction",
+        "doc": "{\"v\":1.0,\"type\":\"secure_note\",\"records\":{}}",
+        "error": "malformed"
+      },
+      {
+        "name": "version_beyond_i64",
+        "doc": "{\"v\":9223372036854775808,\"type\":\"secure_note\",\"records\":{}}",
+        "error": "malformed"
+      },
+      {
+        "name": "version_negative",
+        "doc": "{\"v\":-1,\"type\":\"secure_note\",\"records\":{}}",
+        "error": "unsupported_version"
+      },
+      {
+        "name": "not_json",
+        "doc": "{",
+        "error": "malformed"
+      },
+      {
+        "name": "not_utf8",
+        "doc_hex": "7b2276223a312c2274797065223a22ff222c227265636f726473223a7b7d7d",
+        "error": "malformed"
+      },
+      {
+        "name": "trailing_data",
+        "doc": "{\"v\":1,\"type\":\"secure_note\",\"records\":{}}{}",
+        "error": "malformed"
+      },
+      {
+        "name": "top_level_array",
+        "doc": "[1]",
+        "error": "malformed"
+      },
+      {
+        "name": "missing_records",
+        "doc": "{\"v\":1,\"type\":\"login\"}",
+        "error": "malformed"
+      },
+      {
+        "name": "unknown_field",
+        "doc": "{\"v\":1,\"type\":\"secure_note\",\"records\":{},\"x\":1}",
+        "error": "malformed"
+      },
+      {
+        "name": "duplicate_member",
+        "doc": "{\"v\":1,\"v\":1,\"type\":\"secure_note\",\"records\":{}}",
+        "error": "malformed"
+      },
+      {
+        "name": "duplicate_record_key",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}},\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "unknown_item_type",
+        "doc": "{\"v\":1,\"type\":\"passkey\",\"records\":{}}",
+        "error": "malformed"
+      },
+      {
+        "name": "unknown_key_kind",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"label:x\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "key_without_kind",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "field_id_uppercase",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"field:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0\",\"kind\":\"text\",\"label\":\"x\",\"data\":{\"text\":\"\"}}}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "field_id_short",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"field:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0\",\"kind\":\"text\",\"label\":\"x\",\"data\":{\"text\":\"\"}}}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "hlc_short",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"19a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "rev_uppercase",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"C45F2FDFEBDBCE3B9174553DAF6B60B1\",\"val\":{\"text\":\"GitHub\"}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "val_null",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":null}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "val_unknown_variant",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:x\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"float\":1}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "val_two_variants",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:x\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"bool\":true,\"int\":1}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "tag_as_object",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"tag:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"tag\":null}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "version_as_array",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":[\"019a90d3f0000000\",\"c45f2fdfebdbce3b9174553daf6b60b1\"]}}",
+        "error": "malformed"
+      },
+      {
+        "name": "int_fraction",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"int\":1.0}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "int_exponent",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"int\":1e3}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "int_beyond_i64",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"int\":9223372036854775808}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "nan",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"int\":NaN}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "unknown_field_kind",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"int\":7}},\"attr:a_b\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"int\":-7}},\"attr:ab\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\"},\"attr:favorite\":{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}},\"tag:Z\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:b\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:é\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:ｚ\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:😀\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"section:d7bfa8e1613fa21c4075b58015326fb6\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"section\":{\"label\":\"服务器\",\"order\":\"0000001024\"}}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"file\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"field\":{\"section\":\"d7bfa8e1613fa21c4075b58015326fb6\",\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}},\"field:de5e2dc1c2cae856fec2bc1f8b255948\":{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\"}},\"concurrent\":{\"attr:title\":[{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"text\":\"GitHub（工作）\"}}]}}",
+        "error": "malformed"
+      },
+      {
+        "name": "unknown_purpose",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"int\":7}},\"attr:a_b\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"int\":-7}},\"attr:ab\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\"},\"attr:favorite\":{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}},\"tag:Z\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:b\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:é\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:ｚ\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:😀\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"section:d7bfa8e1613fa21c4075b58015326fb6\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"section\":{\"label\":\"服务器\",\"order\":\"0000001024\"}}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"pin\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"field\":{\"section\":\"d7bfa8e1613fa21c4075b58015326fb6\",\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}},\"field:de5e2dc1c2cae856fec2bc1f8b255948\":{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\"}},\"concurrent\":{\"attr:title\":[{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"text\":\"GitHub（工作）\"}}]}}",
+        "error": "malformed"
+      },
+      {
+        "name": "lone_surrogate",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"\\ud800\"}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "concurrent_not_object",
+        "doc": "{\"v\":1,\"type\":\"secure_note\",\"records\":{},\"concurrent\":[]}",
+        "error": "malformed"
+      },
+      {
+        "name": "whitespace",
+        "doc": "{\"v\":1, \"type\":\"secure_note\",\"records\":{}}",
+        "error": "malformed"
+      },
+      {
+        "name": "member_order",
+        "doc": "{\"type\":\"secure_note\",\"v\":1,\"records\":{}}",
+        "error": "malformed"
+      },
+      {
+        "name": "record_key_order",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"tag:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "tag_order_utf16",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"int\":7}},\"attr:a_b\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"int\":-7}},\"attr:ab\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\"},\"attr:favorite\":{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}},\"tag:Z\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:b\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:é\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:😀\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:ｚ\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"section:d7bfa8e1613fa21c4075b58015326fb6\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"section\":{\"label\":\"服务器\",\"order\":\"0000001024\"}}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0000000000\",\"kind\":\"text\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"field\":{\"section\":\"d7bfa8e1613fa21c4075b58015326fb6\",\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}},\"field:de5e2dc1c2cae856fec2bc1f8b255948\":{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\"}},\"concurrent\":{\"attr:title\":[{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"text\":\"GitHub（工作）\"}}]}}",
+        "error": "malformed"
+      },
+      {
+        "name": "version_member_order",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"hlc\":\"019a90d3f0000000\",\"val\":{\"text\":\"GitHub\"}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "negative_zero",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"int\":-0}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "unnecessary_escape",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"\\u0041\"}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "escaped_slash",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"\\/\"}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "uppercase_escape",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"\\u001F\"}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "long_escape_for_newline",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"\\u000a\"}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "empty_concurrent_present",
+        "doc": "{\"v\":1,\"type\":\"secure_note\",\"records\":{},\"concurrent\":{}}",
+        "error": "malformed"
+      },
+      {
+        "name": "field_member_order",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"int\":7}},\"attr:a_b\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"int\":-7}},\"attr:ab\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\"},\"attr:favorite\":{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"bool\":true}},\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}},\"tag:Z\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:b\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:é\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:ｚ\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"tag:😀\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"},\"section:d7bfa8e1613fa21c4075b58015326fb6\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"section\":{\"label\":\"服务器\",\"order\":\"0000001024\"}}},\"field:7ec34af9a9d8fa9dbfac093967885293\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"kind\":\"text\",\"order\":\"0000000000\",\"label\":\"用户名\",\"purpose\":\"username\",\"data\":{\"text\":\"octocat\"}}}},\"field:bb9f54e70bedb5bc5d6df4c496423b15\":{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"field\":{\"section\":\"d7bfa8e1613fa21c4075b58015326fb6\",\"order\":\"0000000001\",\"kind\":\"concealed\",\"label\":\"密码\",\"purpose\":\"password\",\"data\":{\"text\":\"hunter2\"}}}},\"field:de5e2dc1c2cae856fec2bc1f8b255948\":{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\"}},\"concurrent\":{\"attr:title\":[{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"text\":\"GitHub（工作）\"}}]}}",
+        "error": "malformed"
+      },
+      {
+        "name": "attr_name_uppercase",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:Title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}}}}",
+        "error": "invalid_key"
+      },
+      {
+        "name": "attr_name_empty",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}}}}",
+        "error": "invalid_key"
+      },
+      {
+        "name": "attr_name_too_long",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}}}}",
+        "error": "invalid_key"
+      },
+      {
+        "name": "tag_name_empty",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"tag:\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"}}}",
+        "error": "invalid_key"
+      },
+      {
+        "name": "tag_name_too_long",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"tag:ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"}}}",
+        "error": "invalid_key"
+      },
+      {
+        "name": "int_beyond_safe",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"int\":9007199254740992}}}}",
+        "error": "value_too_large"
+      },
+      {
+        "name": "int_below_safe",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"int\":-9007199254740992}}}}",
+        "error": "value_too_large"
+      },
+      {
+        "name": "tag_value_on_attr",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":\"tag\"}}}",
+        "error": "value_kind_mismatch"
+      },
+      {
+        "name": "text_value_on_tag",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"tag:a\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"x\"}}}}",
+        "error": "value_kind_mismatch"
+      },
+      {
+        "name": "text_value_on_field",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"field:1b8ec933fddf7f8f9ee50bb7b98c0227\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}}}}",
+        "error": "value_kind_mismatch"
+      },
+      {
+        "name": "field_kind_data_mismatch",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"field:1b8ec933fddf7f8f9ee50bb7b98c0227\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0\",\"kind\":\"kv_list\",\"label\":\"x\",\"data\":{\"text\":\"text\"}}}}}}",
+        "error": "value_kind_mismatch"
+      },
+      {
+        "name": "order_key_bad_alphabet",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"field:1b8ec933fddf7f8f9ee50bb7b98c0227\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0-1\",\"kind\":\"text\",\"label\":\"x\",\"data\":{\"text\":\"\"}}}}}}",
+        "error": "value_kind_mismatch"
+      },
+      {
+        "name": "order_key_empty",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"section:c542f8c2c709cea28515d4f38e70e316\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"section\":{\"label\":\"x\",\"order\":\"\"}}}}}",
+        "error": "value_kind_mismatch"
+      },
+      {
+        "name": "order_key_too_long",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"field:1b8ec933fddf7f8f9ee50bb7b98c0227\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"11111111111111111111111111111111111111111111111111111111111111111\",\"kind\":\"text\",\"label\":\"x\",\"data\":{\"text\":\"\"}}}}}}",
+        "error": "value_kind_mismatch"
+      },
+      {
+        "name": "concurrent_without_current",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{},\"concurrent\":{\"attr:title\":[{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}}]}}",
+        "error": "malformed"
+      },
+      {
+        "name": "concurrent_empty_list",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}}},\"concurrent\":{\"attr:title\":[]}}",
+        "error": "malformed"
+      },
+      {
+        "name": "concurrent_same_rev_as_current",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}}},\"concurrent\":{\"attr:title\":[{\"hlc\":\"019a90d3f0010000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"y\"}}]}}",
+        "error": "malformed"
+      },
+      {
+        "name": "concurrent_not_ascending",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}}},\"concurrent\":{\"attr:title\":[{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"text\":\"y\"}},{\"hlc\":\"019a90d3f0010000\",\"rev\":\"341914aa3b26d3dcdfb48794a16827d9\",\"val\":{\"text\":\"z\"}}]}}",
+        "error": "malformed"
+      },
+      {
+        "name": "purged_current_not_tombstone",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:purged\":{\"hlc\":\"0000000000000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"bool\":true}}}}",
+        "error": "reserved_key"
+      },
+      {
+        "name": "purged_concurrent_nonzero_hlc",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}}},\"concurrent\":{\"attr:purged\":[{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"bool\":true}}]}}",
+        "error": "reserved_key"
+      },
+      {
+        "name": "purged_concurrent_false",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}}},\"concurrent\":{\"attr:purged\":[{\"hlc\":\"0000000000000000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\",\"val\":{\"bool\":false}}]}}",
+        "error": "reserved_key"
+      },
+      {
+        "name": "precedence_version_over_structure",
+        "doc": "{\"v\":3,\"type\":\"passkey\"}",
+        "error": "unsupported_version"
+      },
+      {
+        "name": "precedence_structure_over_semantic",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:Title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"GitHub\"}}},\"x\":1}",
+        "error": "malformed"
+      },
+      {
+        "name": "precedence_canonical_over_semantic",
+        "doc": "{\"v\":1,\"type\":\"login\",\"records\":{\"attr:Title\":{\"hlc\":\"019a90d3f0000000\", \"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\", \"val\":{\"text\":\"GitHub\"}}}}",
+        "error": "malformed"
+      }
+    ]
+  },
+  "overview": {
+    "valid": [
+      {
+        "name": "plain",
+        "doc": "{\"v\":1,\"type\":\"login\",\"title\":\"GitHub\",\"subtitle\":\"octocat\",\"urls\":[\"https://github.com/login\"],\"tags\":[\"work\"],\"favorite\":false,\"archived\":false,\"updated\":\"019a90d3f0050000\"}"
+      },
+      {
+        "name": "trashed_with_conflicts",
+        "doc": "{\"v\":1,\"type\":\"login\",\"title\":\"GitHub\",\"subtitle\":\"octocat\",\"urls\":[],\"tags\":[],\"favorite\":false,\"archived\":false,\"trashed_at\":1763366400000,\"updated\":\"019a90d3f0050000\",\"conflicts\":true}"
+      },
+      {
+        "name": "trashed_at_min_safe",
+        "doc": "{\"v\":1,\"type\":\"login\",\"title\":\"GitHub\",\"subtitle\":\"octocat\",\"urls\":[\"https://github.com/login\"],\"tags\":[\"work\"],\"favorite\":false,\"archived\":false,\"trashed_at\":-9007199254740991,\"updated\":\"019a90d3f0050000\"}"
+      }
+    ],
+    "invalid": [
+      {
+        "name": "unsupported_version",
+        "doc": "{\"v\":2,\"type\":\"login\",\"title\":\"GitHub\",\"subtitle\":\"octocat\",\"urls\":[\"https://github.com/login\"],\"tags\":[\"work\"],\"favorite\":false,\"archived\":false,\"updated\":\"019a90d3f0050000\"}",
+        "error": "unsupported_version"
+      },
+      {
+        "name": "conflicts_false_is_not_canonical",
+        "doc": "{\"v\":1,\"type\":\"login\",\"title\":\"GitHub\",\"subtitle\":\"octocat\",\"urls\":[\"https://github.com/login\"],\"tags\":[\"work\"],\"favorite\":false,\"archived\":false,\"updated\":\"019a90d3f0050000\",\"conflicts\":false}",
+        "error": "malformed"
+      },
+      {
+        "name": "trashed_at_null",
+        "doc": "{\"v\":1,\"type\":\"login\",\"title\":\"GitHub\",\"subtitle\":\"octocat\",\"urls\":[\"https://github.com/login\"],\"tags\":[\"work\"],\"favorite\":false,\"archived\":false,\"trashed_at\":null,\"updated\":\"019a90d3f0050000\"}",
+        "error": "malformed"
+      },
+      {
+        "name": "missing_archived",
+        "doc": "{\"v\":1,\"type\":\"login\",\"title\":\"GitHub\",\"subtitle\":\"octocat\",\"urls\":[\"https://github.com/login\"],\"tags\":[\"work\"],\"favorite\":false,\"updated\":\"019a90d3f0050000\"}",
+        "error": "malformed"
+      },
+      {
+        "name": "unknown_type",
+        "doc": "{\"v\":1,\"type\":\"passkey\",\"title\":\"GitHub\",\"subtitle\":\"octocat\",\"urls\":[\"https://github.com/login\"],\"tags\":[\"work\"],\"favorite\":false,\"archived\":false,\"updated\":\"019a90d3f0050000\"}",
+        "error": "malformed"
+      },
+      {
+        "name": "trashed_at_beyond_safe",
+        "doc": "{\"v\":1,\"type\":\"login\",\"title\":\"GitHub\",\"subtitle\":\"octocat\",\"urls\":[\"https://github.com/login\"],\"tags\":[\"work\"],\"favorite\":false,\"archived\":false,\"trashed_at\":9007199254740992,\"updated\":\"019a90d3f0050000\"}",
+        "error": "value_too_large"
+      },
+      {
+        "name": "field_order",
+        "doc": "{\"v\":1,\"type\":\"login\",\"subtitle\":\"octocat\",\"title\":\"GitHub\",\"urls\":[\"https://github.com/login\"],\"tags\":[\"work\"],\"favorite\":false,\"archived\":false,\"updated\":\"019a90d3f0050000\"}",
+        "error": "malformed"
+      }
+    ]
+  },
+  "vault_meta": {
+    "valid": [
+      {
+        "name": "plain",
+        "doc": "{\"v\":1,\"name\":\"个人\",\"updated\":\"019a90d3f0000000\"}"
+      }
+    ],
+    "invalid": [
+      {
+        "name": "unsupported_version",
+        "doc": "{\"v\":2,\"name\":\"个人\",\"updated\":\"019a90d3f0000000\"}",
+        "error": "unsupported_version"
+      },
+      {
+        "name": "unsupported_version_with_new_fields",
+        "doc": "{\"v\":2,\"records\":{}}",
+        "error": "unsupported_version"
+      },
+      {
+        "name": "unknown_field",
+        "doc": "{\"v\":1,\"name\":\"个人\",\"updated\":\"019a90d3f0000000\",\"icon\":\"x\"}",
+        "error": "malformed"
+      },
+      {
+        "name": "escaped_non_ascii",
+        "doc": "{\"v\":1,\"name\":\"\\u4e2a\\u4eba\",\"updated\":\"019a90d3f0000000\"}",
+        "error": "malformed"
+      }
+    ]
+  }
+}

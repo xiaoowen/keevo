@@ -7,8 +7,8 @@
 | 规范 | 版本 | 状态 | 测试向量 |
 |---|---|---|---|
 | [crypto.md](crypto.md)：账户密钥、KDF、2SKD、密钥集、加密信封 | 1.1 | **已冻结**（§8.7 本机密钥包裹是本机格式，不在冻结范围内） | [test-vectors/crypto-v1.json](test-vectors/crypto-v1.json) |
-| [revisions.md](revisions.md)：修订图、记录、HLC、合并 | 1.0 | **已冻结** | 计划中（M1.1）；参考实现带多设备随机模拟测试 |
-| [vault-format.md](vault-format.md)：条目与保险库的明文结构 | 1.0 | **已冻结** | 计划中（M1.1） |
+| [revisions.md](revisions.md)：修订图、记录、HLC、合并 | 1.1 | **已冻结** | [test-vectors/revisions-v1.json](test-vectors/revisions-v1.json)（24 个合并场景） |
+| [vault-format.md](vault-format.md)：条目与保险库的明文结构 | 1.1 | **已冻结** | [test-vectors/vault-format-v1.json](test-vectors/vault-format-v1.json)（规范编码、正向与负向解码） |
 | [ipc.md](ipc.md)：浏览器扩展与桌面应用的本地通信 | 1.0 | **已冻结**（浏览器 IPC 协议 v1） | 计划中（M1.3） |
 
 2026-11-18 冻结，此前经过四轮模型评审，报告与处理记录在 [docs/reviews/](../docs/reviews/)。
@@ -55,8 +55,8 @@
 
 1. **规范先行**：改动先落在规范与测试向量上，实现随后跟进，两者在同一个 PR 中提交。
 2. **测试向量来自独立实现**：
-   - `reference/generate_vectors.py` 基于 argon2-cffi（Argon2 官方 C 实现）与 libsodium，不复用 Rust 代码。
-   - 生成前，它会先用 RFC 中的测试向量做自检。
+   - `reference/generate_vectors.py`（加密）基于 argon2-cffi（Argon2 官方 C 实现）与 libsodium，不复用 Rust 代码。生成前，它会先用 RFC 中的测试向量做自检。
+   - `reference/format_vectors.py`（明文格式与合并）只用 Python 标准库，只依据规范文字编写。生成每个向量时都核对该场景的预期结论（例如"因果上更晚的修改胜出"），另带随机多设备模拟检查交换律与结合律。
 3. **符合性**：实现必须逐字节复现全部测试向量。CI 会重新运行参考实现，确认已提交的向量没有被手工修改。
 
 ## 重新生成测试向量
@@ -65,4 +65,5 @@
 python3 -m venv .venv
 .venv/bin/pip install --require-hashes --no-deps -r spec/reference/requirements.txt
 .venv/bin/python -I spec/reference/generate_vectors.py
+python3 -I spec/reference/format_vectors.py --self-test   # 只用标准库，不需要虚拟环境
 ```
