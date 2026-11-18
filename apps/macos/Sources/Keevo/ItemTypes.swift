@@ -84,7 +84,7 @@ extension ConflictEntry {
 
     /// 某个版本的显示文字。布尔值与标签由 Rust 给出原始值，这里本地化。
     func displayValue(_ version: ConflictVersion) -> String {
-        guard let value = version.value else { return "（已删除）" }
+        guard let value = version.value?.expose() else { return "（已删除）" }
         switch kind {
         case "favorite": return value == "true" ? "已收藏" : "未收藏"
         case "tag": return "有此标签"

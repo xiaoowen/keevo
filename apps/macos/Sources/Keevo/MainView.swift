@@ -240,7 +240,7 @@ struct ItemRow: View {
 }
 
 private struct SecretKeyItem: Identifiable {
-    let value: String
+    let value: SecretValue
     var id: String { "secret-key" }
 }
 

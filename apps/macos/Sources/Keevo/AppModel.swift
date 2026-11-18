@@ -21,8 +21,8 @@ final class AppModel {
     private(set) var phase: Phase = .onboarding
     private(set) var busy = false
     var errorMessage: String?
-    /// 新建账户后只展示一次的账户密钥。
-    var pendingSecretKey: String?
+    /// 新建账户后只展示一次的账户密钥（句柄，显示时才取出明文）。
+    var pendingSecretKey: SecretValue?
     /// 解锁时发现 KDF 参数异常地高，等待用户确认（spec/crypto.md §5.3）。
     var pendingKdf: KdfInfo?
     private(set) var vaults: [VaultEntry] = []
@@ -46,6 +46,15 @@ final class AppModel {
     static let autoLockChoices = [1, 2, 5, 10, 15, 30, 60]
     private static let autoLockKey = "autoLockMinutes"
 
+    /// 不允许 Keevo 的窗口被截屏或屏幕共享（docs/ux.md §5，可选，默认关闭）。
+    var hideFromScreenCapture: Bool {
+        didSet {
+            UserDefaults.standard.set(hideFromScreenCapture, forKey: Self.hideFromCaptureKey)
+            NSApp.windows.forEach(applyCapturePolicy)
+        }
+    }
+    private static let hideFromCaptureKey = "hideFromScreenCapture"
+
     private var vault: KeevoVault?
     private let dbPath: String
     private let localDir: String
@@ -59,6 +68,7 @@ final class AppModel {
     init() {
         let stored = UserDefaults.standard.integer(forKey: Self.autoLockKey)
         autoLockMinutes = Self.autoLockChoices.contains(stored) ? stored : 10
+        hideFromScreenCapture = UserDefaults.standard.bool(forKey: Self.hideFromCaptureKey)
 
         // 数据目录（ADR-0003）：数据库与本机密钥目录（spec/crypto.md §8.7）
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -190,12 +200,20 @@ final class AppModel {
         return ok
     }
 
-    func disableTouchID() {
-        guard let vault else { return }
-        perform {
-            try vault.disableTouchId()
-            self.refreshLocalState()
+    /// 关闭 Touch ID：先重新验证（docs/ux.md §5）。`password` 为 `nil` 时用 Touch ID 验证。用户取消时不显示错误。
+    func disableTouchID(password: String?) async -> Bool {
+        guard let vault else { return false }
+        var ok = false
+        await run {
+            defer { self.refreshLocalState() }
+            do {
+                try await Task.detached { try vault.disableTouchId(password: password) }.value
+            } catch KeevoError.Cancelled {
+                return
+            }
+            ok = true
         }
+        return ok
     }
 
     func setPasswordInterval(days: UInt8) {
@@ -276,6 +294,18 @@ final class AppModel {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.appDidBecomeActive() }
         })
+        // 新打开的窗口与弹出的面板都要套用截屏设置
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didBecomeMainNotification] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                MainActor.assumeIsolated {
+                    if let window = note.object as? NSWindow { self?.applyCapturePolicy(window) }
+                }
+            })
+        }
+    }
+
+    private func applyCapturePolicy(_ window: NSWindow) {
+        window.sharingType = hideFromScreenCapture ? .none : .readOnly
     }
 
     // MARK: - 条目

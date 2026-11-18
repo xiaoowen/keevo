@@ -92,10 +92,10 @@
 
 把辅助程序 cdhash 编译进主程序，随 M1.3 把 Vault Service 并入应用时一起完成：那时才有需要校验的对端，也才能端到端测试。
 
-**与设计文档的已知差距**（M1.1 内补齐）：
-- 关闭 Touch ID 之前没有重新验证（`docs/ux.md` §5 要求 Touch ID 或主密码）。
-- 秘密值仍以 `String` 跨越 FFI，还没有改为 `SecretValue` 句柄（`docs/architecture.md` §4.2）。
-- 显示秘密的窗口没有提供"不允许截屏或共享"的选项（`docs/ux.md` §5）。
+**与设计文档的差距**（已在 M1.1 内补齐）：
+- 关闭 Touch ID 之前重新验证（Touch ID 或主密码，`docs/ux.md` §5），由核心层判定（`Vault::reverify`）。
+- 秘密值以 `SecretValue` 句柄跨越 FFI，锁定时全部清零（`docs/architecture.md` §4.2）。
+- 设置中可选"不允许截屏或屏幕共享 Keevo 的窗口"（`NSWindow.sharingType = .none`，`docs/ux.md` §5）。这台 Mac 不允许终端截屏，尚未实测哪些截屏方式遵守这一设置。
 
 ### 3.4 验收标准
 

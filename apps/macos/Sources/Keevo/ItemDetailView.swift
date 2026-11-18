@@ -81,7 +81,7 @@ struct ItemDetailView: View {
                         field: field,
                         revealed: revealed.contains(field.id),
                         toggle: { toggle(field.id) },
-                        largeType: { largeType = LargeTypeItem(value: field.value) }
+                        largeType: { largeType = LargeTypeItem(value: field.value.expose()) }
                     )
                 }
             }
@@ -119,7 +119,7 @@ struct ItemDetailView: View {
 
     private func header(_ d: ItemDetail) -> some View {
         HStack(spacing: KV.Space.s3) {
-            SiteIcon(title: d.title, url: d.fields.first { $0.kind == "url" }?.value, size: 40)
+            SiteIcon(title: d.title, url: d.fields.first { $0.kind == "url" }?.value.expose(), size: 40)
             VStack(alignment: .leading, spacing: KV.Space.s0_5) {
                 Text(d.title.isEmpty ? "（无标题）" : d.title)
                     .font(KV.Typography.title)
@@ -206,7 +206,7 @@ struct FieldRow: View {
         LabeledContent {
             HStack(spacing: KV.Space.s2) {
                 if field.concealed {
-                    SecretText(value: field.value, revealed: revealed)
+                    SecretText(secret: field.value, revealed: revealed)
                     Spacer(minLength: 0)
                     Button(revealed ? "隐藏" : "显示", action: toggle)
                         .buttonStyle(.borderless)
@@ -214,17 +214,18 @@ struct FieldRow: View {
                         .buttonStyle(.borderless)
                         .help("大字显示")
                         .accessibilityLabel("大字显示")
-                } else if field.kind == "url", let url = URL(string: field.value), url.scheme == "https" || url.scheme == "http" {
-                    Link(field.value, destination: url)
+                } else if field.kind == "url", let url = URL(string: field.value.expose()),
+                          url.scheme == "https" || url.scheme == "http" {
+                    Link(url.absoluteString, destination: url)
                         .font(KV.Typography.body)
                     Spacer(minLength: 0)
                 } else {
-                    Text(field.value)
+                    Text(field.value.expose())
                         .font(KV.Typography.body)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
-                Button { Clipboard.copy(field.value) } label: { Image(systemName: "doc.on.doc") }
+                Button { Clipboard.copy(field.value.expose()) } label: { Image(systemName: "doc.on.doc") }
                     .buttonStyle(.borderless)
                     .help("复制（\(Int(Clipboard.clearAfter)) 秒后自动清除）")
                     .accessibilityLabel("复制\(field.label)")

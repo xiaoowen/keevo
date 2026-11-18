@@ -23,9 +23,7 @@ impl Fixture {
         std::fs::create_dir_all(&dir).unwrap();
         let (vault, sk) = Vault::create(&dir.join("vault.sqlite"), "pw", fast_params()).unwrap();
         let secret_key = sk.to_display_string().as_str().to_owned();
-        let vault = KeevoVault {
-            inner: Mutex::new(vault),
-        };
+        let vault = KeevoVault::new(vault);
         let vault_id = vault.vaults().unwrap()[0].id.clone();
         Self {
             dir,
@@ -72,7 +70,13 @@ fn detail_and_edits() {
         .find(|x| x.purpose.as_deref() == Some("password"))
         .unwrap();
     assert!(password.concealed);
-    assert_eq!(password.value, "hunter2");
+    assert_eq!(password.value.expose(), "hunter2");
+    assert!(password.value.equals("hunter2".into()) && !password.value.is_empty());
+    assert_eq!(
+        format!("{:?}", password.value),
+        "SecretValue(…)",
+        "调试输出不含明文"
+    );
 
     f.vault
         .update_item(
@@ -105,7 +109,7 @@ fn detail_and_edits() {
         detail
             .fields
             .iter()
-            .any(|x| x.id == password.id && x.value == "correct horse")
+            .any(|x| x.id == password.id && x.value.expose() == "correct horse")
     );
 
     let note = detail.fields.iter().find(|x| x.label == "备注").unwrap();
@@ -283,26 +287,52 @@ fn conflict_entries_describe_each_version() {
         vec![version(5, Some(RecordValue::Text("B".into())))],
     );
 
-    let c = conflict_entry(&doc, &field);
+    let c = conflict_entry(&doc, &field, &SecretRegistry::default());
     assert_eq!(c.key, field.to_string());
     assert_eq!(
         (c.kind.as_str(), c.label.as_deref()),
         ("field", Some("密码"))
     );
     assert_eq!(c.current.rev_id, rev(3).to_hex());
-    assert_eq!(c.current.value.as_deref(), Some("new"));
+    assert_eq!(
+        c.current.value.as_ref().map(|v| v.expose()).as_deref(),
+        Some("new")
+    );
     assert!(c.current.concealed);
     assert_eq!(c.others.len(), 2);
-    assert_eq!(c.others[0].value.as_deref(), Some("old"));
+    assert_eq!(
+        c.others[0].value.as_ref().map(|v| v.expose()).as_deref(),
+        Some("old")
+    );
     assert!(
         c.others[1].value.is_none() && !c.others[1].concealed,
         "这个版本删除了字段"
     );
     assert_eq!(parse_key(&c.key).unwrap(), field, "键可以原样传回");
 
-    let c = conflict_entry(&doc, &title);
+    let c = conflict_entry(&doc, &title, &SecretRegistry::default());
     assert_eq!((c.kind.as_str(), c.label), ("title", None));
-    assert_eq!(c.current.value.as_deref(), Some("A"));
-    assert_eq!(c.others[0].value.as_deref(), Some("B"));
+    assert_eq!(
+        c.current.value.as_ref().map(|v| v.expose()).as_deref(),
+        Some("A")
+    );
+    assert_eq!(
+        c.others[0].value.as_ref().map(|v| v.expose()).as_deref(),
+        Some("B")
+    );
     assert!(!c.current.concealed);
+}
+
+/// 锁定时，这个保险库发出的全部秘密值句柄被清零（docs/architecture.md §4.2）。
+#[test]
+fn lock_wipes_issued_secrets() {
+    let f = Fixture::new();
+    let id = f.login("x");
+    let fields = f.vault.fields(id).unwrap();
+    let password = fields.iter().find(|x| x.concealed).unwrap();
+    assert_eq!(password.value.expose(), "hunter2");
+    f.vault.lock();
+    assert_eq!(password.value.expose(), "", "锁定后取不出明文");
+    assert!(password.value.is_empty());
+    assert!(!password.value.equals("hunter2".into()));
 }

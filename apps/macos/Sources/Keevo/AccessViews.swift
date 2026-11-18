@@ -179,7 +179,7 @@ struct EnclaveUnavailableView: View {
 /// 新建账户后展示一次账户密钥，用户确认已保存后才能关闭（docs/ux.md §3.1 第 4 步）。
 struct SecretKeySheet: View {
     @Environment(AppModel.self) private var model
-    let secretKey: String
+    let secretKey: SecretValue
     @ViewState private var saved = false
 
     var body: some View {
@@ -188,12 +188,12 @@ struct SecretKeySheet: View {
             Text("在新设备上登录、或从备份恢复时，需要主密码和这把账户密钥。请把它抄写或打印后离线保存。")
                 .foregroundStyle(.secondary)
             // 数字与字母分色，便于抄写（docs/ux.md §5）
-            classifiedText(secretKey, font: KV.Typography.monoLarge)
+            classifiedText(secretKey.expose(), font: KV.Typography.monoLarge)
                 .textSelection(.enabled)
                 .padding(KV.Space.s3)
                 .frame(maxWidth: .infinity)
                 .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: KV.Radius.md))
-            Button("复制") { Clipboard.copy(secretKey) }
+            Button("复制") { Clipboard.copy(secretKey.expose()) }
             Toggle("我已妥善保存账户密钥", isOn: $saved)
             HStack {
                 Spacer()

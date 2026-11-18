@@ -87,7 +87,9 @@ do {
     let created = try createAccount(path: db, password: password, local: .thisMac(localDir: localDir, enclave: enclave))
     let vault = created.vault
     check(vault.isUnlocked(), "创建账户后处于解锁状态")
-    check(created.secretKey.hasPrefix("K1-") && created.secretKey.count == 34, "账户密钥为 K1- 显示格式")
+    // 句柄在锁定时清零，因此新账户的账户密钥要在锁定前取出（实际应用中由用户抄写到应急包）
+    let shownKey = created.secretKey.expose()
+    check(shownKey.hasPrefix("K1-") && shownKey.count == 34, "账户密钥为 K1- 显示格式")
 
     let personal = try vault.vaults()
     check(personal.count == 1 && personal[0].name == "个人", "默认保险库为「个人」")
@@ -100,13 +102,14 @@ do {
     vault.lock()
     check(!vault.isUnlocked(), "锁定后处于锁定状态")
     expectError("锁定后无法读取条目", { _ = try vault.items() }) { if case .Locked = $0 { return true }; return false }
-    expectError("错误的主密码无法解锁", { try vault.unlock(password: "wrong", secretKey: created.secretKey) }) {
+    check(created.secretKey.expose().isEmpty, "锁定后秘密值句柄被清零")
+    expectError("错误的主密码无法解锁", { try vault.unlock(password: "wrong", secretKey: shownKey) }) {
         if case .WrongCredentials = $0 { return true }; return false
     }
     expectError("格式错误的账户密钥被识别", { try vault.unlock(password: password, secretKey: "K1-0000") }) {
         if case .InvalidSecretKey(let code) = $0 { return code == "wrong_length" }; return false
     }
-    secretKey = created.secretKey
+    secretKey = shownKey
 }
 
 // 模拟应用重启：重新打开数据库文件，并用小写形式输入账户密钥
@@ -118,8 +121,9 @@ check(reopened.isUnlocked(), "用主密码与账户密钥解锁")
 let items = try reopened.items()
 check(items.count == 1 && items[0].title == "GitHub" && items[0].subtitle == "octocat", "条目概要正确")
 let fields = try reopened.fields(itemId: itemId)
-check(fields.contains { $0.concealed && $0.value == "s3cret-🔐" }, "密码字段可读且默认隐藏")
-check(fields.contains { $0.kind == "url" && $0.value == "https://github.com" }, "网址字段可读")
+check(fields.contains { $0.concealed && $0.value.expose() == "s3cret-🔐" }, "密码字段可读且默认隐藏")
+check(fields.contains { $0.kind == "url" && $0.value.expose() == "https://github.com" }, "网址字段可读")
+check(fields.allSatisfy { !$0.value.isEmpty() } && fields.contains { $0.value.equals(other: "s3cret-🔐") }, "秘密值句柄：不取出明文也能判断是否为空、是否相同")
 
 try reopened.renameItem(itemId: itemId, title: "GitHub（工作）")
 check(try reopened.items().first?.title == "GitHub（工作）", "修改标题后读回新值")
@@ -135,7 +139,7 @@ try reopened.updateItem(itemId: itemId, edits: [
 ])
 let detail = try reopened.item(itemId: itemId)
 check(detail.favorite && detail.tags == ["work"] && detail.fields.count == 4, "一次写入应用多个编辑")
-check(detail.fields.contains { $0.id == password0?.id && $0.value == "n3w-🔑" }, "字段值已修改")
+check(detail.fields.contains { $0.id == password0?.id && $0.value.expose() == "n3w-🔑" }, "字段值已修改")
 check(detail.conflicts.isEmpty && detail.headCount == 1 && !detail.resurrected, "没有冲突与并发头")
 expectError("不支持的字段类型被拒绝", {
     try reopened.updateItem(itemId: itemId, edits: [.addField(kind: "file", label: "x", purpose: nil, value: "")])
@@ -145,7 +149,7 @@ expectError("不支持的字段类型被拒绝", {
 let history = try reopened.history(itemId: itemId)
 check(history.count == 3 && history.last?.title == "GitHub", "历史从新到旧列出每次写入")
 let firstRev = history.last?.revId ?? ""
-check(try reopened.revisionFields(itemId: itemId, revId: firstRev).contains { $0.value == "s3cret-🔐" }, "可查看旧版本的字段")
+check(try reopened.revisionFields(itemId: itemId, revId: firstRev).contains { $0.value.expose() == "s3cret-🔐" }, "可查看旧版本的字段")
 try reopened.restoreVersion(itemId: itemId, revId: firstRev)
 let restored = try reopened.item(itemId: itemId)
 check(restored.title == "GitHub" && restored.tags.isEmpty && restored.fields.count == 3, "恢复到此版本")
@@ -183,7 +187,7 @@ func corrupt(_ file: String) throws {
 let secretKey2: String
 do {
     let created = try createAccount(path: db2, password: password, local: .thisMac(localDir: local2, enclave: enclave))
-    secretKey2 = created.secretKey
+    secretKey2 = created.secretKey.expose()
     check(created.vault.hasLocalSecretKey(), "新建账户后账户密钥已包裹到本机")
     check(!created.vault.touchIdEnabled(), "Touch ID 默认未启用")
 }

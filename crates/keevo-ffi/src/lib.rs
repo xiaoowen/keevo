@@ -6,13 +6,17 @@
 //! Secure Enclave 的操作由 Swift 实现 [`SecureEnclaveProvider`] 提供。被包裹的材料（AUK、账户密钥、
 //! 设备 ID）不经过 Swift，跨越边界的只有每次包裹各不相同的协商结果。
 //!
-//! **已知限制（M1 处理）**：
-//! - 秘密值（主密码、账户密钥、字段值）目前以普通 `String` 跨越 FFI 边界。
-//!   M1 改为 `SecretValue` 句柄：Swift 只在显示或复制的瞬间取出明文（`docs/architecture.md` §4.2）。
+//! **秘密值**（`docs/architecture.md` §4.2）：
+//! - Rust 交给 Swift 的秘密（字段值、冲突版本的值、新账户的账户密钥）都是 [`SecretValue`] 句柄。
+//!   明文留在 Rust 的清零缓冲区里，Swift 只在显示或复制的那一刻调用 `expose()` 取出，用完即弃。
+//! - Swift 交给 Rust 的输入（主密码、编辑后的字段值）仍是 `String`：它们来自 SwiftUI 的文本框，
+//!   在 Swift 一侧本来就以 `String` 存在，Swift 的字符串也无法清零。Rust 收到后立即放进清零缓冲区。
 
 use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
+
+use zeroize::Zeroizing;
 
 use keevo_core::local::{EnclaveError, EnclaveKey, EphemeralAgreement, LocalKeys, SecureEnclave};
 use keevo_core::{LocalPurpose, PasswordReason, Store};
@@ -302,13 +306,86 @@ const fn reason_kind(r: PasswordReason) -> PasswordReasonKind {
     }
 }
 
+/// 跨越 FFI 的秘密值句柄（`docs/architecture.md` §4.2）。明文留在 Rust 的清零缓冲区里，
+/// Swift 只在显示或复制的那一刻调用 [`SecretValue::expose`]。
+///
+/// 句柄由发出它的保险库登记；保险库锁定时全部清零，之后 `expose()` 只返回空字符串。
+#[derive(uniffi::Object)]
+pub struct SecretValue(Mutex<Option<Zeroizing<String>>>);
+
+impl SecretValue {
+    fn with<T>(&self, f: impl FnOnce(&str) -> T) -> T {
+        let guard = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        f(guard.as_ref().map_or("", |s| s.as_str()))
+    }
+}
+
+/// 一个保险库发出的全部句柄，锁定时清零（`docs/architecture.md` §4.2"锁定时使所有句柄失效"）。
+#[derive(Default)]
+struct SecretRegistry(Mutex<Vec<std::sync::Weak<SecretValue>>>);
+
+impl SecretRegistry {
+    fn issue(&self, value: Zeroizing<String>) -> Arc<SecretValue> {
+        let secret = Arc::new(SecretValue(Mutex::new(Some(value))));
+        let mut list = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        list.retain(|w| w.strong_count() > 0);
+        list.push(Arc::downgrade(&secret));
+        secret
+    }
+
+    fn wipe(&self) {
+        let mut list = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for secret in list.drain(..).filter_map(|w| w.upgrade()) {
+            // 替换为 None 时，旧的 Zeroizing<String> 被丢弃并清零
+            *secret
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        }
+    }
+}
+
+impl fmt::Debug for SecretValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SecretValue(…)")
+    }
+}
+
+#[uniffi::export]
+impl SecretValue {
+    /// 取出明文。只在显示或复制的那一刻调用，用完即弃。保险库锁定之后返回空字符串。
+    pub fn expose(&self) -> String {
+        self.with(str::to_owned)
+    }
+
+    /// 是否为空（锁定之后总是为空）。不需要取出明文。
+    pub fn is_empty(&self) -> bool {
+        self.with(str::is_empty)
+    }
+
+    /// 是否与 `other` 相同。编辑器据此判断有没有改动，不需要取出明文。
+    pub fn equals(&self, other: String) -> bool {
+        let other = Zeroizing::new(other);
+        self.with(|s| s == other.as_str())
+    }
+}
+
 /// 新建账户的结果。
 #[derive(uniffi::Record)]
 pub struct NewAccount {
     /// 已解锁的保险库。
     pub vault: Arc<KeevoVault>,
-    /// 账户密钥的显示形式。调用方必须引导用户保存到应急包，并存入钥匙串。
-    pub secret_key: String,
+    /// 账户密钥的显示形式（`K1-…`）。调用方必须引导用户保存到应急包；本机的副本已由 Secure Enclave 包裹。
+    pub secret_key: Arc<SecretValue>,
 }
 
 /// 保险库。
@@ -356,8 +433,8 @@ pub struct FieldEntry {
     pub kind: String,
     /// 是否默认隐藏。
     pub concealed: bool,
-    /// 值。结构化字段（键值对、恢复码）每项一行。
-    pub value: String,
+    /// 值。结构化字段（键值对、恢复码）每项一行。只在显示或复制时取出明文。
+    pub value: Arc<SecretValue>,
     /// 自动填充用途，如 `password`；没有时为 `None`。
     pub purpose: Option<String>,
 }
@@ -412,7 +489,7 @@ pub struct ConflictVersion {
     /// 写入这个版本的修订 ID。
     pub rev_id: String,
     /// 值的文本；`None` 表示这个版本删除了该记录。布尔值为 `true` / `false`，标签为空字符串。
-    pub value: Option<String>,
+    pub value: Option<Arc<SecretValue>>,
     /// 是否默认隐藏（密码等）。
     pub concealed: bool,
 }
@@ -530,12 +607,9 @@ pub fn create_account(
     let local = local_keys(local)?;
     let store = Store::open(Path::new(&path)).map_err(CoreError::from)?;
     let (vault, secret_key) = Vault::create_with_local(store, &password, params, local)?;
-    Ok(NewAccount {
-        vault: Arc::new(KeevoVault {
-            inner: Mutex::new(vault),
-        }),
-        secret_key: secret_key.to_display_string().as_str().to_owned(),
-    })
+    let vault = Arc::new(KeevoVault::new(vault));
+    let secret_key = vault.secrets.issue(secret_key.to_display_string());
+    Ok(NewAccount { vault, secret_key })
 }
 
 /// 打开已有的数据库（锁定状态），接入这台 Mac 的本机环境。
@@ -547,9 +621,9 @@ pub fn create_account(
 pub fn open_vault(path: String, local: LocalEnvironment) -> Result<Arc<KeevoVault>, KeevoError> {
     let local = local_keys(local)?;
     let store = Store::open(Path::new(&path)).map_err(CoreError::from)?;
-    Ok(Arc::new(KeevoVault {
-        inner: Mutex::new(Vault::open_with_local(store, local)?),
-    }))
+    Ok(Arc::new(KeevoVault::new(Vault::open_with_local(
+        store, local,
+    )?)))
 }
 
 /// 重新登记本机并打开：生成新的设备 ID，丢弃本机的全部包裹，之后需要输入账户密钥。
@@ -564,18 +638,26 @@ pub fn open_vault_reenrolling(
 ) -> Result<Arc<KeevoVault>, KeevoError> {
     let local = local_keys(local)?;
     let store = Store::open(Path::new(&path)).map_err(CoreError::from)?;
-    Ok(Arc::new(KeevoVault {
-        inner: Mutex::new(Vault::open_reenrolling_local(store, local)?),
-    }))
+    Ok(Arc::new(KeevoVault::new(Vault::open_reenrolling_local(
+        store, local,
+    )?)))
 }
 
 /// 一个本地保险库及其解锁状态。线程安全。
 #[derive(uniffi::Object)]
 pub struct KeevoVault {
     inner: Mutex<Vault>,
+    secrets: SecretRegistry,
 }
 
 impl KeevoVault {
+    fn new(vault: Vault) -> Self {
+        Self {
+            inner: Mutex::new(vault),
+            secrets: SecretRegistry::default(),
+        }
+    }
+
     fn vault(&self) -> MutexGuard<'_, Vault> {
         // 某次调用中途 panic 不应导致再也无法锁定，因此在中毒时继续使用内部数据
         self.inner
@@ -629,12 +711,17 @@ impl KeevoVault {
         Ok(self.vault().enable_touch_id(&password)?)
     }
 
-    /// 关闭 Touch ID。
+    /// 关闭 Touch ID：先重新验证（`docs/ux.md` §5）。`password` 为 `None` 时用 Touch ID 验证，会弹出提示，
+    /// 请在后台线程调用。
     ///
     /// # Errors
-    /// 写入失败时返回错误。
-    pub fn disable_touch_id(&self) -> Result<(), KeevoError> {
-        Ok(self.vault().disable_touch_id()?)
+    /// 验证失败返回对应错误（主密码错误、取消、未能识别等），此时不关闭。
+    pub fn disable_touch_id(&self, password: Option<String>) -> Result<(), KeevoError> {
+        let proof = password.as_deref().map_or(
+            keevo_core::Reverify::TouchId,
+            keevo_core::Reverify::Password,
+        );
+        Ok(self.vault().disable_touch_id(proof)?)
     }
 
     /// Touch ID 是否已启用且未失效。
@@ -671,9 +758,10 @@ impl KeevoVault {
         self.vault().has_local_secret_key()
     }
 
-    /// 锁定：清除内存中的全部密钥。
+    /// 锁定：清除内存中的全部密钥，并清零这个保险库发出的全部秘密值句柄。
     pub fn lock(&self) {
         self.vault().lock();
+        self.secrets.wipe();
     }
 
     /// 全部保险库。
@@ -756,7 +844,7 @@ impl KeevoVault {
     /// 已锁定或条目不存在时返回对应错误。
     pub fn fields(&self, item_id: String) -> Result<Vec<FieldEntry>, KeevoError> {
         let view = self.vault().item(parse_id(&item_id)?)?;
-        Ok(doc_fields(&view.doc))
+        Ok(doc_fields(&view.doc, &self.secrets))
     }
 
     /// 修改条目标题。
@@ -787,7 +875,7 @@ impl KeevoVault {
         let conflicts = view
             .conflicts
             .iter()
-            .map(|c| conflict_entry(&view.doc, &c.key))
+            .map(|c| conflict_entry(&view.doc, &c.key, &self.secrets))
             .collect();
         Ok(ItemDetail {
             id: view.id.to_hex(),
@@ -797,7 +885,7 @@ impl KeevoVault {
             favorite: overview.favorite,
             tags: overview.tags,
             trashed: overview.trashed_at.is_some(),
-            fields: doc_fields(&view.doc),
+            fields: doc_fields(&view.doc, &self.secrets),
             conflicts,
             resurrected: view.resurrected,
             integrity_issues: u32::try_from(view.integrity_issues.len()).unwrap_or(u32::MAX),
@@ -866,7 +954,7 @@ impl KeevoVault {
         let doc = self
             .vault()
             .revision_doc(parse_id(&item_id)?, parse_id(&rev_id)?)?;
-        Ok(doc_fields(&doc))
+        Ok(doc_fields(&doc, &self.secrets))
     }
 
     /// 恢复到此版本：把历史修订的值作为一次新的编辑写入。
@@ -1025,7 +1113,7 @@ fn core_edit(edit: ItemEdit) -> Result<Edit, KeevoError> {
 }
 
 /// 文档中的字段，按排序键排列。
-fn doc_fields(doc: &ItemDoc) -> Vec<FieldEntry> {
+fn doc_fields(doc: &ItemDoc, secrets: &SecretRegistry) -> Vec<FieldEntry> {
     let mut fields: Vec<(String, FieldEntry)> = doc
         .records
         .iter()
@@ -1037,7 +1125,7 @@ fn doc_fields(doc: &ItemDoc) -> Vec<FieldEntry> {
                     label: f.label.clone(),
                     kind: field_kind_name(f.kind).to_owned(),
                     concealed: f.kind.is_concealed(),
-                    value: field_text(&f.data),
+                    value: secrets.issue(field_text(&f.data)),
                     purpose: f.purpose.map(|p| purpose_name(p).to_owned()),
                 },
             )),
@@ -1049,7 +1137,7 @@ fn doc_fields(doc: &ItemDoc) -> Vec<FieldEntry> {
 }
 
 /// 冲突的显示：记录键的名称，以及每个版本的值。
-fn conflict_entry(doc: &ItemDoc, key: &RecordKey) -> ConflictEntry {
+fn conflict_entry(doc: &ItemDoc, key: &RecordKey, secrets: &SecretRegistry) -> ConflictEntry {
     let versions = doc.versions(key);
     let named = || {
         versions.iter().find_map(|v| match &v.value {
@@ -1067,7 +1155,7 @@ fn conflict_entry(doc: &ItemDoc, key: &RecordKey) -> ConflictEntry {
     };
     let version = |v: &RecordVersion| ConflictVersion {
         rev_id: v.rev.to_hex(),
-        value: v.value.as_ref().map(value_text),
+        value: v.value.as_ref().map(|v| secrets.issue(value_text(v))),
         concealed: matches!(&v.value, Some(RecordValue::Field(f)) if f.kind.is_concealed()),
     };
     let mut iter = versions.into_iter();
@@ -1088,13 +1176,13 @@ fn conflict_entry(doc: &ItemDoc, key: &RecordKey) -> ConflictEntry {
     }
 }
 
-fn value_text(v: &RecordValue) -> String {
+fn value_text(v: &RecordValue) -> Zeroizing<String> {
     match v {
-        RecordValue::Text(s) => s.expose().to_owned(),
-        RecordValue::Bool(b) => b.to_string(),
-        RecordValue::Int(i) => i.to_string(),
-        RecordValue::Tag => String::new(),
-        RecordValue::Section(s) => s.label.clone(),
+        RecordValue::Text(s) => Zeroizing::new(s.expose().to_owned()),
+        RecordValue::Bool(b) => Zeroizing::new(b.to_string()),
+        RecordValue::Int(i) => Zeroizing::new(i.to_string()),
+        RecordValue::Tag => Zeroizing::new(String::new()),
+        RecordValue::Section(s) => Zeroizing::new(s.label.clone()),
         RecordValue::Field(f) => field_text(&f.data),
     }
 }
@@ -1118,26 +1206,34 @@ fn parse_id(hex: &str) -> Result<Id128, KeevoError> {
     Ok(Id128::from_bytes(out))
 }
 
-fn field_text(data: &FieldData) -> String {
+/// 字段值的文本：结构化字段每项一行。直接写入清零缓冲区，不经过不清零的中间字符串。
+fn field_text(data: &FieldData) -> Zeroizing<String> {
+    let mut out = Zeroizing::new(String::new());
     match data {
-        FieldData::Text(s) => s.expose().to_owned(),
-        FieldData::Kv(entries) => entries
-            .iter()
-            .map(|e| format!("{}={}", e.key, e.value.expose()))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        FieldData::Codes(codes) => codes
-            .iter()
-            .map(|c| {
-                format!(
-                    "{}{}",
-                    c.code.expose(),
-                    if c.used { "（已用）" } else { "" }
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
+        FieldData::Text(s) => out.push_str(s.expose()),
+        FieldData::Kv(entries) => {
+            for (i, e) in entries.iter().enumerate() {
+                if i > 0 {
+                    out.push('\n');
+                }
+                out.push_str(&e.key);
+                out.push('=');
+                out.push_str(e.value.expose());
+            }
+        }
+        FieldData::Codes(codes) => {
+            for (i, c) in codes.iter().enumerate() {
+                if i > 0 {
+                    out.push('\n');
+                }
+                out.push_str(c.code.expose());
+                if c.used {
+                    out.push_str("（已用）");
+                }
+            }
+        }
     }
+    out
 }
 
 const fn item_type_name(t: ItemType) -> &'static str {

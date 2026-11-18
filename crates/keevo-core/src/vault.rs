@@ -53,6 +53,15 @@ pub struct NewField {
     pub data: FieldData,
 }
 
+/// 重新验证用户的方式（[`Vault::reverify`]）。
+#[derive(Debug, Clone, Copy)]
+pub enum Reverify<'a> {
+    /// 主密码。
+    Password(&'a str),
+    /// Touch ID。
+    TouchId,
+}
+
 /// 为什么这次不能用 Touch ID、必须输入主密码（`docs/security.md` §8、`docs/ux.md` §3.2）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PasswordReason {
@@ -679,19 +688,7 @@ impl Vault {
         let params = KdfParams::decode(&account.kdf_params)?;
         let secret_key = self.local_secret_key()?;
         let auk = derive_account_unlock_key(password, &secret_key, &account.id, &params)?;
-        AccountKeyset::open(
-            &auk,
-            &account.id,
-            account.epoch,
-            &params,
-            &account.keyset_ct,
-        )
-        .map_err(|e| match e {
-            CryptoError::KeyIdMismatch | CryptoError::DecryptionFailed => {
-                CoreError::WrongCredentials
-            }
-            other => CoreError::Crypto(other),
-        })?;
+        check_auk(&account, &params, &auk)?;
         let device_id = self.device_id;
         let local = self.local.as_mut().ok_or(CoreError::SecretKeyRequired)?;
         let mut entries = local.entries();
@@ -709,11 +706,48 @@ impl Vault {
         Ok(())
     }
 
-    /// 关闭 Touch ID：新一代中去掉 AUK 的包裹。
+    /// 重新验证用户（`docs/ux.md` §5"重新验证"）：敏感操作之前，在已解锁的会话里再确认一次是本人。
+    /// 用主密码时同时记作"刚输入过主密码"；用 Touch ID 时服从 [`Vault::password_reason`]。
     ///
     /// # Errors
-    /// 写入失败时返回对应错误。
-    pub fn disable_touch_id(&mut self) -> Result<()> {
+    /// 已锁定返回 [`CoreError::Locked`]；主密码错误返回 [`CoreError::WrongCredentials`]；
+    /// Touch ID 的错误同 [`Vault::unlock_with_touch_id`]。
+    pub fn reverify(&mut self, proof: Reverify<'_>) -> Result<()> {
+        self.session()?;
+        let account = self.store.account()?.ok_or(CoreError::NoAccount)?;
+        let params = KdfParams::decode(&account.kdf_params)?;
+        match proof {
+            Reverify::Password(password) => {
+                let secret_key = self.local_secret_key()?;
+                let auk = derive_account_unlock_key(password, &secret_key, &account.id, &params)?;
+                check_auk(&account, &params, &auk)?;
+                self.record_password_unlock()
+            }
+            Reverify::TouchId => {
+                let auk = self.auk_from_touch_id(&account)?;
+                if let Err(e) = check_auk(&account, &params, &auk) {
+                    if e == CoreError::WrongCredentials {
+                        self.touch_id_broken = true;
+                        return Err(CoreError::TouchIdUnavailable);
+                    }
+                    return Err(e);
+                }
+                self.store.set_meta(META_TOUCH_ID_FAILURES, &[0])?;
+                Ok(())
+            }
+        }
+    }
+
+    /// 关闭 Touch ID：先重新验证（`docs/ux.md` §5），再在新一代中去掉 AUK 的包裹。
+    ///
+    /// # Errors
+    /// 同 [`Vault::reverify`]；写入失败时返回对应错误。
+    pub fn disable_touch_id(&mut self, proof: Reverify<'_>) -> Result<()> {
+        if !self.touch_id_enabled() && !self.touch_id_broken {
+            return Ok(());
+        }
+        // Touch ID 已失效时只能用主密码验证
+        self.reverify(proof)?;
         let account = self.store.account()?.ok_or(CoreError::NoAccount)?;
         let device_id = self.device_id;
         let Some(local) = self.local.as_mut() else {
@@ -743,23 +777,7 @@ impl Vault {
         }
         let account = self.store.account()?.ok_or(CoreError::NoAccount)?;
         let params = KdfParams::decode(&account.kdf_params)?;
-        let local = self.local.as_ref().ok_or(CoreError::TouchIdUnavailable)?;
-        let unwrapped = match local.auk(&account.id, &self.device_id) {
-            Err(CoreError::AuthenticationFailed) => {
-                let n = self.touch_id_failures()?.saturating_add(1);
-                self.store.set_meta(META_TOUCH_ID_FAILURES, &[n])?;
-                return Err(CoreError::AuthenticationFailed);
-            }
-            other => other?,
-        };
-        let auk = match unwrapped {
-            Unwrapped::Ok(auk) => auk,
-            Unwrapped::Missing => return Err(CoreError::TouchIdUnavailable),
-            Unwrapped::Unusable => {
-                self.touch_id_broken = true;
-                return Err(CoreError::TouchIdUnavailable);
-            }
-        };
+        let auk = self.auk_from_touch_id(&account)?;
         match self.open_session(&account, &params, &auk) {
             Ok(()) => {
                 self.store.set_meta(META_TOUCH_ID_FAILURES, &[0])?;
@@ -774,6 +792,31 @@ impl Vault {
                 Err(CoreError::TouchIdUnavailable)
             }
             Err(e) => Err(e),
+        }
+    }
+
+    /// 用 Touch ID 从 Secure Enclave 解开 AUK。服从 [`Vault::password_reason`]；指纹不匹配计入连续失败次数，
+    /// 材料失效时标记 Touch ID 已失效。
+    fn auk_from_touch_id(&mut self, account: &AccountRow) -> Result<SymmetricKey> {
+        if self.password_reason()?.is_some() {
+            return Err(CoreError::TouchIdUnavailable);
+        }
+        let local = self.local.as_ref().ok_or(CoreError::TouchIdUnavailable)?;
+        let unwrapped = match local.auk(&account.id, &self.device_id) {
+            Err(CoreError::AuthenticationFailed) => {
+                let n = self.touch_id_failures()?.saturating_add(1);
+                self.store.set_meta(META_TOUCH_ID_FAILURES, &[n])?;
+                return Err(CoreError::AuthenticationFailed);
+            }
+            other => other?,
+        };
+        match unwrapped {
+            Unwrapped::Ok(auk) => Ok(auk),
+            Unwrapped::Missing => Err(CoreError::TouchIdUnavailable),
+            Unwrapped::Unusable => {
+                self.touch_id_broken = true;
+                Err(CoreError::TouchIdUnavailable)
+            }
         }
     }
 
@@ -1556,6 +1599,18 @@ fn now_ms() -> u64 {
 fn id_from(bytes: &[u8]) -> Result<Id128> {
     let arr: [u8; 16] = bytes.try_into().map_err(|_| CoreError::Tampered)?;
     Ok(Id128::from_bytes(arr))
+}
+
+/// AUK 能否打开账户密钥集：不能时返回 [`CoreError::WrongCredentials`]。
+fn check_auk(account: &AccountRow, params: &KdfParams, auk: &SymmetricKey) -> Result<()> {
+    AccountKeyset::open(auk, &account.id, account.epoch, params, &account.keyset_ct)
+        .map(drop)
+        .map_err(|e| match e {
+            CryptoError::KeyIdMismatch | CryptoError::DecryptionFailed => {
+                CoreError::WrongCredentials
+            }
+            other => CoreError::Crypto(other),
+        })
 }
 
 /// 提交新一代前的验证：不要求用户在场的包裹必须能解开（`spec/crypto.md` §8.7）。

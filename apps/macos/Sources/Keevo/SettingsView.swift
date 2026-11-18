@@ -17,6 +17,7 @@ struct SettingsView: View {
 private struct SecuritySettings: View {
     @Environment(AppModel.self) private var model
     @ViewState private var askPassword = false
+    @ViewState private var askDisable = false
 
     var body: some View {
         @Bindable var model = model
@@ -31,20 +32,27 @@ private struct SecuritySettings: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
+            Section("隐私") {
+                Toggle("不允许截屏或屏幕共享 Keevo 的窗口", isOn: $model.hideFromScreenCapture)
+                Text("开启后，遵守 macOS 窗口共享设置的截屏、录屏与屏幕共享软件看不到 Keevo 的窗口，可以避免在共享屏幕时意外露出密码。并非所有截屏方式都遵守这一设置，它不能防范这台 Mac 上的恶意软件。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
             Section("解锁") {
                 Toggle("使用 Touch ID 解锁", isOn: Binding(
                     get: { model.touchIDEnabled },
                     set: { on in
-                        if on { askPassword = true } else { model.disableTouchID() }
+                        if on { askPassword = true } else { askDisable = true }
                     }
                 ))
-                .disabled(!model.touchIDEnabled && (!model.touchIDAvailable || model.phase != .unlocked))
+                // 启用与关闭都需要在已解锁时验证身份
+                .disabled(model.phase != .unlocked || (!model.touchIDEnabled && !model.touchIDAvailable))
                 if !model.touchIDAvailable {
                     Text("这台 Mac 没有可用的 Touch ID，或还没有登记指纹。")
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                } else if model.phase != .unlocked && !model.touchIDEnabled {
-                    Text("解锁 Keevo 之后才能启用。")
+                } else if model.phase != .unlocked {
+                    Text("解锁 Keevo 之后才能更改。")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -66,6 +74,9 @@ private struct SecuritySettings: View {
         .padding()
         .sheet(isPresented: $askPassword) {
             ConfirmPasswordSheet()
+        }
+        .sheet(isPresented: $askDisable) {
+            DisableTouchIDSheet()
         }
     }
 }
@@ -91,6 +102,43 @@ private struct ConfirmPasswordSheet: View {
                     Task {
                         if await model.enableTouchID(password: password) { dismiss() }
                     }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(password.isEmpty || model.busy)
+            }
+        }
+        .padding(24)
+    }
+}
+
+/// 关闭 Touch ID 前重新验证：Touch ID 或主密码（docs/ux.md §5"重新验证"）。
+private struct DisableTouchIDSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @ViewState private var password = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("关闭 Touch ID").font(.title3.weight(.semibold))
+            Text("请先确认是你本人。关闭后，解锁时需要输入主密码。").foregroundStyle(.secondary)
+            if model.touchIDUsable {
+                Button {
+                    Task { if await model.disableTouchID(password: nil) { dismiss() } }
+                } label: {
+                    Label("用 Touch ID 确认", systemImage: "touchid")
+                }
+                .disabled(model.busy)
+                Text("或者输入主密码：").font(.callout).foregroundStyle(.secondary)
+            }
+            SecureField("主密码", text: $password)
+                .frame(width: 320)
+            ErrorText()
+            HStack {
+                Spacer()
+                Button("取消") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("关闭 Touch ID") {
+                    Task { if await model.disableTouchID(password: password) { dismiss() } }
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(password.isEmpty || model.busy)

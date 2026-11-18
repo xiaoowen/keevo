@@ -42,8 +42,8 @@ struct ConflictPanel: View {
                 .font(KV.Typography.caption)
                 .foregroundStyle(KV.Colors.fgSecondary)
                 .frame(width: 52, alignment: .leading)
-            if version.concealed && version.value != nil {
-                SecretText(value: version.value ?? "", revealed: revealed.contains(revealKey))
+            if version.concealed, let secret = version.value {
+                SecretText(secret: secret, revealed: revealed.contains(revealKey))
                 Button(revealed.contains(revealKey) ? "隐藏" : "显示") {
                     if revealed.contains(revealKey) { revealed.remove(revealKey) } else { revealed.insert(revealKey) }
                 }

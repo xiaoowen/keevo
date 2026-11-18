@@ -7,7 +7,10 @@ import KeevoKit
 import SwiftUI
 
 /// 编辑中的字段。
-struct DraftField: Identifiable, Equatable {
+///
+/// 秘密字段在用户点"显示"之前不取出原值（docs/architecture.md §4.2）：输入框为空，提示"保持不变"；
+/// 这时输入的内容整体替换原值。点"显示"后才把原值取出到输入框中，可以部分修改。
+struct DraftField: Identifiable {
     /// 已有字段为字段 ID；新字段为临时 ID。
     let id: String
     var label: String
@@ -15,14 +18,20 @@ struct DraftField: Identifiable, Equatable {
     var value: String
     let concealed: Bool
     let isNew: Bool
+    /// 已有字段的原值句柄。
+    let original: SecretValue?
+    /// 原值是否已取出到 `value`。非秘密字段一开始就取出。
+    private(set) var loaded: Bool
 
     init(_ f: FieldEntry) {
         id = f.id
         label = f.label
         kind = f.kind
-        value = f.value
         concealed = f.concealed
         isNew = false
+        original = f.value
+        loaded = !f.concealed
+        value = f.concealed ? "" : f.value.expose()
     }
 
     init(newKind kind: String) {
@@ -32,6 +41,22 @@ struct DraftField: Identifiable, Equatable {
         value = ""
         concealed = kind == "concealed"
         isNew = true
+        original = nil
+        loaded = true
+    }
+
+    /// 把原值取出到输入框（用户点"显示"）。已经输入了新值时保留新值。
+    mutating func load() {
+        guard !loaded, let original else { return }
+        if value.isEmpty { value = original.expose() }
+        loaded = true
+    }
+
+    /// 与原值相比是否有改动。没有取出原值时，输入了内容即为改动。
+    var changed: Bool {
+        guard let original else { return true }
+        if !loaded { return !value.isEmpty }
+        return !original.equals(other: value)
     }
 
     static func defaultLabel(_ kind: String) -> String {
@@ -173,13 +198,12 @@ struct ItemEditorSheet: View {
         if favorite != base.favorite { out.append(.setFavorite(favorite: favorite)) }
         for tag in tags where !base.tags.contains(tag) { out.append(.addTag(tag: tag)) }
         for tag in base.tags where !tags.contains(tag) { out.append(.removeTag(tag: tag)) }
-        let original = Dictionary(uniqueKeysWithValues: base.fields.map { ($0.id, $0) })
         for field in fields {
             if field.isNew {
                 out.append(.addField(kind: field.kind, label: field.label, purpose: nil, value: field.value))
             } else if removed.contains(field.id) {
                 out.append(.removeField(fieldId: field.id))
-            } else if let o = original[field.id], o.value != field.value, FieldKindInfo.editable(field.kind) {
+            } else if field.changed, FieldKindInfo.editable(field.kind) {
                 out.append(.setFieldValue(fieldId: field.id, value: field.value))
             }
         }
@@ -224,12 +248,10 @@ struct ItemEditorSheet: View {
         if title == base.title { title = new.title }
         if favorite == base.favorite { favorite = new.favorite }
         if tags == base.tags { tags = new.tags }
-        let old = Dictionary(uniqueKeysWithValues: base.fields.map { ($0.id, $0.value) })
         var updated: [DraftField] = []
         for f in new.fields {
-            if var draft = fields.first(where: { $0.id == f.id }) {
-                if draft.value == old[f.id] { draft.value = f.value }
-                updated.append(draft)
+            if let draft = fields.first(where: { $0.id == f.id }) {
+                updated.append(draft.changed ? draft : DraftField(f))
             } else if !removed.contains(f.id) {
                 updated.append(DraftField(f))
             }
@@ -276,10 +298,13 @@ struct DraftFieldRow: View {
                 if revealed {
                     TextField("值", text: $field.value).font(KV.Typography.mono)
                 } else {
-                    SecureField("值", text: $field.value)
+                    SecureField("值", text: $field.value, prompt: Text(field.loaded ? "" : "保持不变"))
                 }
             }
-            Button { revealed.toggle() } label: { Image(systemName: revealed ? "eye.slash" : "eye") }
+            Button {
+                field.load()
+                revealed.toggle()
+            } label: { Image(systemName: revealed ? "eye.slash" : "eye") }
                 .buttonStyle(.borderless)
                 .accessibilityLabel(revealed ? "隐藏" : "显示")
         } else if field.kind == "multiline" {

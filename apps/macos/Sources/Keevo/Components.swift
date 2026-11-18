@@ -2,6 +2,7 @@
 //
 // 设计系统 v0 的核心组件（design/README.md）。颜色、间距、圆角、字体一律取自 KV 令牌。
 
+import KeevoKit
 import SwiftUI
 
 // MARK: - 网站图标
@@ -53,14 +54,14 @@ struct SiteIcon: View {
 
 // MARK: - 秘密值
 
-/// 秘密值：默认显示为圆点，用户主动显示后才露出明文（docs/ux.md §5）。
+/// 秘密值：默认显示为圆点，用户主动显示后才从 Rust 取出明文（docs/ux.md §5、docs/architecture.md §4.2）。
 struct SecretText: View {
-    let value: String
+    let secret: SecretValue
     let revealed: Bool
 
     var body: some View {
         if revealed {
-            Text(value)
+            Text(secret.expose())
                 .font(KV.Typography.mono)
                 .foregroundStyle(KV.Colors.fgPrimary)
                 .textSelection(.enabled)

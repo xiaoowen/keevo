@@ -106,14 +106,14 @@ struct HistorySheet: View {
                     LabeledContent(field.label) {
                         if field.concealed {
                             HStack {
-                                SecretText(value: field.value, revealed: revealed.contains(field.id))
+                                SecretText(secret: field.value, revealed: revealed.contains(field.id))
                                 Button(revealed.contains(field.id) ? "隐藏" : "显示") {
                                     if revealed.contains(field.id) { revealed.remove(field.id) } else { revealed.insert(field.id) }
                                 }
                                 .buttonStyle(.borderless)
                             }
                         } else {
-                            Text(field.value).textSelection(.enabled)
+                            Text(field.value.expose()).textSelection(.enabled)
                         }
                     }
                 }

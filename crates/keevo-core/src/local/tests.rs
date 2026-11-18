@@ -402,7 +402,25 @@ fn touch_id_lifecycle() {
     vault.lock();
     vault.unlock_with_touch_id().unwrap();
 
-    vault.disable_touch_id().unwrap();
+    // 关闭前必须重新验证：主密码错误时不关闭；Touch ID 取消时不关闭
+    assert_eq!(
+        vault
+            .disable_touch_id(crate::Reverify::Password("wrong"))
+            .err(),
+        Some(CoreError::WrongCredentials)
+    );
+    mac.enclave
+        .state()
+        .fail
+        .insert(LocalPurpose::Auk, EnclaveError::Cancelled);
+    assert_eq!(
+        vault.disable_touch_id(crate::Reverify::TouchId).err(),
+        Some(CoreError::Cancelled)
+    );
+    assert!(vault.touch_id_enabled());
+    let prompts = mac.enclave.state().prompts;
+    vault.disable_touch_id(crate::Reverify::TouchId).unwrap();
+    assert_eq!(mac.enclave.state().prompts, prompts + 1, "用 Touch ID 验证");
     assert!(!vault.touch_id_enabled());
     drop(vault);
     let vault = mac.open().unwrap();
@@ -604,5 +622,52 @@ fn password_is_required_after_restart_interval_and_failures() {
     assert_eq!(
         vault.password_reason().unwrap(),
         Some(PasswordReason::Invalidated)
+    );
+}
+
+/// 重新验证：锁定时不可用；主密码验证记作刚输入过主密码；Touch ID 服从必须输入主密码的情形。
+#[test]
+fn reverify_requires_unlocked_session_and_follows_policy() {
+    use crate::{PasswordReason, Reverify};
+
+    let mac = Mac::new();
+    let (mut vault, _) = mac.create();
+    vault.enable_touch_id("pw").unwrap();
+    vault.reverify(Reverify::Password("pw")).unwrap();
+    vault.reverify(Reverify::TouchId).unwrap();
+    assert_eq!(
+        vault.reverify(Reverify::Password("nope")).err(),
+        Some(CoreError::WrongCredentials)
+    );
+    vault.lock();
+    assert_eq!(
+        vault.reverify(Reverify::Password("pw")).err(),
+        Some(CoreError::Locked)
+    );
+    assert_eq!(
+        vault.disable_touch_id(Reverify::Password("pw")).err(),
+        Some(CoreError::Locked)
+    );
+    assert!(vault.touch_id_enabled());
+
+    vault.unlock_with_password("pw").unwrap();
+    let day = 24 * 60 * 60 * 1000u64;
+    vault.set_meta_for_tests(
+        "password_unlock_ms",
+        &(crate::vault_now_ms_for_tests() - 20 * day).to_be_bytes(),
+    );
+    assert_eq!(
+        vault.password_reason().unwrap(),
+        Some(PasswordReason::IntervalElapsed)
+    );
+    assert_eq!(
+        vault.reverify(Reverify::TouchId).err(),
+        Some(CoreError::TouchIdUnavailable)
+    );
+    vault.reverify(Reverify::Password("pw")).unwrap();
+    assert_eq!(
+        vault.password_reason().unwrap(),
+        None,
+        "主密码验证记作刚输入过主密码"
     );
 }
