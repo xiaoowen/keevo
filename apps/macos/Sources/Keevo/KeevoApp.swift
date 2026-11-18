@@ -45,11 +45,29 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        switch model.phase {
-        case .onboarding: OnboardingView()
-        case .unavailable: EnclaveUnavailableView()
-        case .locked: LockView()
-        case .unlocked: MainView()
+        @Bindable var model = model
+        Group {
+            switch model.phase {
+            case .onboarding: OnboardingView()
+            case .unavailable: EnclaveUnavailableView()
+            case .locked: LockView()
+            case .unlocked: MainView()
+            }
+        }
+        // 浏览器配对：每次尝试都对用户可见；确认界面只出现在 Keevo.app 中（spec/ipc.md §4.2、§5.2）
+        .overlay(alignment: .top) {
+            if let browser = model.pairingNotice {
+                Banner(kind: .info, message: "\(browserName(browser)) 中的扩展正在请求与 Keevo 配对……")
+                    .frame(maxWidth: 440)
+                    .padding(.top, KV.Space.s3)
+                    .task {
+                        try? await Task.sleep(for: .seconds(60))
+                        model.pairingNotice = nil
+                    }
+            }
+        }
+        .sheet(item: $model.pairingRequest) { request in
+            PairingConfirmSheet(request: request).interactiveDismissDisabled()
         }
     }
 }

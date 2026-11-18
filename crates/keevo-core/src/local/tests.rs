@@ -671,3 +671,32 @@ fn reverify_requires_unlocked_session_and_follows_policy() {
         "主密码验证记作刚输入过主密码"
     );
 }
+
+/// Vault Service 的静态密钥：第一次生成并包裹，之后取回同一把；包裹失效（换到另一台 Mac）时生成新的身份。
+#[test]
+fn service_static_key_is_wrapped_and_stable() {
+    let mac = Mac::new();
+    let (mut vault, _) = mac.create();
+    let (first, created) = vault.service_static_key().unwrap();
+    assert!(created);
+    vault.lock();
+    let (again, created) = vault.service_static_key().unwrap();
+    assert!(!created, "锁定时也能取回，不需要会话");
+    assert_eq!(again.public_key(), first.public_key());
+    drop(vault);
+    let mut reopened = mac.open().unwrap();
+    assert_eq!(
+        reopened.service_static_key().unwrap().0.public_key(),
+        first.public_key(),
+        "重新打开后不变"
+    );
+
+    let other = mac.restore_to_another_mac();
+    copy_dir(&mac.local_dir(), &other.local_dir());
+    let mut moved = other.open().unwrap();
+    let (fresh, created) = moved.service_static_key().unwrap();
+    assert!(
+        created && fresh.public_key() != first.public_key(),
+        "另一台 Mac 上生成新的服务身份"
+    );
+}

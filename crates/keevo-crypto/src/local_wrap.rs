@@ -250,6 +250,48 @@ pub fn wrap_device_marker(
     )
 }
 
+/// 包裹 Vault Service 的 Noise 静态私钥（用途 0x03）。
+///
+/// # Errors
+/// 随机数错误时返回 [`CryptoError::Random`]。
+pub fn wrap_service_static(
+    key: &crate::noise::StaticKeypair,
+    account_id: &Id128,
+    device_id: &Id128,
+    agreement: &LocalAgreement,
+) -> Result<Vec<u8>> {
+    let private = key.export_private();
+    seal(
+        LocalPurpose::ServiceStatic,
+        private.as_ref(),
+        account_id,
+        Some(device_id),
+        agreement,
+    )
+}
+
+/// 解开 Vault Service 的 Noise 静态私钥。
+///
+/// # Errors
+/// 同 [`unwrap_auk`]。
+pub fn unwrap_service_static(
+    wrapped: &[u8],
+    account_id: &Id128,
+    device_id: &Id128,
+    shared: &[u8],
+) -> Result<crate::noise::StaticKeypair> {
+    let plain = open(
+        LocalPurpose::ServiceStatic,
+        wrapped,
+        account_id,
+        Some(device_id),
+        shared,
+    )?;
+    let mut private = Zeroizing::new([0u8; 32]);
+    private.copy_from_slice(&plain);
+    Ok(crate::noise::StaticKeypair::from_private(private))
+}
+
 /// 解开设备标记，得到 `device_id`。
 ///
 /// # Errors
@@ -412,6 +454,12 @@ mod tests {
                 .expose(),
             sk.expose()
         );
+
+        let svc = crate::noise::StaticKeypair::generate().unwrap();
+        let w = wrap_service_static(&svc, &ACCOUNT, &DEVICE, &a).unwrap();
+        assert_eq!(w.len(), MAX_LOCAL_WRAP_LEN);
+        let back = unwrap_service_static(&w, &ACCOUNT, &DEVICE, &shared(3)).unwrap();
+        assert_eq!(back.public_key(), svc.public_key());
 
         let w = wrap_device_marker(&DEVICE, &ACCOUNT, &a).unwrap();
         assert_eq!(

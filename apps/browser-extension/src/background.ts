@@ -10,7 +10,7 @@ import init, { KeevoClient } from "./wasm/keevo_wasm.js";
 import { fillPage, type FillOutcome } from "./fill.js";
 import type { Candidate, PopupRequest, PopupResponse, ServerMessage, ViewState } from "./types.js";
 
-const NATIVE_HOST = "app.keevo.native_host";
+const NATIVE_HOST = "io.github.xiaoowen.keevo";
 const REQUEST_TIMEOUT_MS = 10_000;
 
 interface Stored {

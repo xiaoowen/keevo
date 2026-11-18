@@ -825,7 +825,11 @@ name = "keevo-ffi"
 version = "0.0.0"
 dependencies = [
  "keevo-core",
+ "keevo-crypto",
  "keevo-format",
+ "keevo-ipc",
+ "keevo-service",
+ "serde_json",
  "uniffi",
  "zeroize",
 ]

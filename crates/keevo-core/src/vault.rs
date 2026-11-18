@@ -846,6 +846,38 @@ impl Vault {
         }
     }
 
+    /// Vault Service 的 Noise 静态密钥（`spec/crypto.md` §8.7 用途 0x03）：由 Secure Enclave 包裹存在本机。
+    /// 第一次调用时生成并包裹；包裹已失效（例如数据库恢复到了另一台 Mac）时生成新的服务身份，已配对的扩展
+    /// 需要重新配对。不需要已解锁：服务在首次解锁前也要能回应 `locked`（`spec/ipc.md` §4.3）。
+    ///
+    /// 没有本机密钥目录时（测试与开发服务；应用总是带着本机密钥目录打开），生成只在内存中的密钥，
+    /// 进程退出后失效。返回值的第二项表示这是新的服务身份。
+    ///
+    /// # Errors
+    /// Secure Enclave 暂时不可用时返回 [`CoreError::EnclaveUnavailable`]，此时什么都没有改变。
+    pub fn service_static_key(&mut self) -> Result<(keevo_crypto::StaticKeypair, bool)> {
+        let account = self.store.account()?.ok_or(CoreError::NoAccount)?;
+        let device_id = self.device_id;
+        let Some(local) = self.local.as_mut() else {
+            return Ok((keevo_crypto::StaticKeypair::generate()?, true));
+        };
+        if let Unwrapped::Ok(key) = local.service_static(&account.id, &device_id)? {
+            return Ok((key, false));
+        }
+        let key = keevo_crypto::StaticKeypair::generate()?;
+        let mut entries = local.entries();
+        entries.insert(
+            LocalPurpose::ServiceStatic,
+            local.new_entry(LocalPurpose::ServiceStatic, |a| {
+                keevo_crypto::wrap_service_static(&key, &account.id, &device_id, a)
+            })?,
+        );
+        local.commit(entries, |keys, p| {
+            verify_entry(keys, p, &account.id, &device_id)
+        })?;
+        Ok((key, true))
+    }
+
     /// 用 Touch ID 从 Secure Enclave 解开 AUK。服从 [`Vault::password_reason`]；指纹不匹配计入连续失败次数，
     /// 材料失效时标记 Touch ID 已失效。
     fn auk_from_touch_id(&mut self, account: &AccountRow) -> Result<SymmetricKey> {
@@ -1972,7 +2004,13 @@ fn verify_entry(
         LocalPurpose::SecretKey => {
             matches!(keys.secret_key(account_id, device_id)?, Unwrapped::Ok(_))
         }
-        LocalPurpose::Auk | LocalPurpose::ServiceStatic => true,
+        LocalPurpose::ServiceStatic => {
+            matches!(
+                keys.service_static(account_id, device_id)?,
+                Unwrapped::Ok(_)
+            )
+        }
+        LocalPurpose::Auk => true,
     })
 }
 

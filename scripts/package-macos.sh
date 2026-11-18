@@ -28,15 +28,28 @@ done
 fail() { echo "✗ $*" >&2; exit 1; }
 pass() { echo "  ✓ $*"; }
 
-"$ROOT/scripts/build-macos.sh" >/dev/null
+# 1. 先构建并签名 native host，取得它的 cdhash（spec/ipc.md §3.1）
+HOST_STAGE="$OUT/stage"
+rm -rf "$HOST_STAGE"
+mkdir -p "$HOST_STAGE"
+(cd "$ROOT" && cargo build -p keevo-native-host --release --locked)
+cp "$ROOT/target/release/keevo-native-host" "$HOST_STAGE/keevo-native-host"
+codesign --force --sign - --options runtime --identifier "$BUNDLE_ID.native-host" --timestamp=none "$HOST_STAGE/keevo-native-host"
+HOST_CDHASH="$(codesign -dvvv "$HOST_STAGE/keevo-native-host" 2>&1 | sed -n 's/^CDHash=//p')"
+[[ ${#HOST_CDHASH} == 40 ]] || fail "读不到 native host 的 cdhash"
+
+# 2. 把 cdhash 编译进主程序，再构建应用。运行时不从磁盘读取（§3.1，第二轮评审 G6）
+KEEVO_HOST_CDHASHES="$HOST_CDHASH" "$ROOT/scripts/build-macos.sh" >/dev/null
 
 # 版本：短版本取自 Cargo 工作区，构建号为提交数（可复现，不含时间戳）
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
 BUILD="$(git -C "$ROOT" rev-list --count HEAD)"
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
 cp "$APP_SRC/.build/release/Keevo" "$APP/Contents/MacOS/Keevo"
+# 3. 放入已签名的 host（复制不改变签名），之后签名整个应用包，host 的签名作为嵌套代码被封存
+cp "$HOST_STAGE/keevo-native-host" "$APP/Contents/Helpers/keevo-native-host"
 # SwiftPM 会加上 @loader_path 与构建机上工具链的绝对路径作为 rpath。主程序不引用任何 @rpath 库，
 # 这些 rpath 用不到，却给"在旁边放一个同名库"留了入口，也让产物带上构建机的路径。只保留系统的 /usr/lib/swift。
 rpaths() { otool -l "$1" | awk '/cmd LC_RPATH/{getline; getline; print $2}'; }
@@ -90,6 +103,12 @@ pass "rpath 只有 /usr/lib/swift，不引用 @rpath 库"
 CDHASH="$(sed -n 's/^CDHash=//p' <<<"$INFO")"
 [[ -n "$CDHASH" ]] || fail "读不到 cdhash"
 echo "  · cdhash：$CDHASH"
+HOST_INFO="$(codesign -dvvv "$APP/Contents/Helpers/keevo-native-host" 2>&1)"
+BUNDLED_HOST_CDHASH="$(sed -n 's/^CDHash=//p' <<<"$HOST_INFO")"
+[[ "$BUNDLED_HOST_CDHASH" == "$HOST_CDHASH" ]] || fail "应用包内 host 的 cdhash 与编译进主程序的不一致"
+grep -q "$HOST_CDHASH" "$APP/Contents/MacOS/Keevo" || fail "主程序中没有编译进 host 的 cdhash"
+grep -q "flags=0x10002(adhoc,runtime)" <<<"$HOST_INFO" || fail "host 不是 adhoc + runtime 签名"
+pass "native host 已签名并放入应用包，它的 cdhash 已编译进主程序（${HOST_CDHASH}）"
 
 if [[ "$VERIFY" == 1 ]]; then
   echo "进程加固实测"

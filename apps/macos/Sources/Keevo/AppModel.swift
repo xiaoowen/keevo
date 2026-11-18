@@ -30,6 +30,18 @@ final class AppModel {
     /// 每次条目数据变化时加 1。详情等视图据此重新读取。
     private(set) var dataVersion = 0
 
+    /// 有浏览器正在请求配对（spec/ipc.md §4.2 第 8 步：每次尝试都对用户可见）。值为浏览器标识。
+    var pairingNotice: String?
+    /// 待确认的配对。
+    var pairingRequest: PairingRequest?
+    /// 已配对的浏览器扩展。
+    private(set) var browserPairings: [BrowserPairing] = []
+    /// 浏览器服务没有启动的原因。
+    private(set) var browserServiceError: String?
+    /// 有撤销没能写入数据库（spec/ipc.md §4.4）。
+    private(set) var pendingRevocationWarning = false
+    @ObservationIgnored private lazy var browserPrompt = BrowserPromptBridge(model: self)
+
     /// 本机没有可用的账户密钥，解锁时需要用户从应急包输入。
     private(set) var needsSecretKey = false
     /// Touch ID 已启用且未失效。
@@ -104,6 +116,7 @@ final class AppModel {
                 : try openVault(path: dbPath, local: environment)
             refreshLocalState()
             phase = .locked
+            startBrowserService()
         } catch KeevoError.EnclaveUnavailable {
             phase = .unavailable
         } catch {
@@ -123,6 +136,7 @@ final class AppModel {
             self.vault = account.vault
             self.pendingSecretKey = account.secretKey
             try self.didUnlock()
+            self.startBrowserService()
         }
     }
 
@@ -224,11 +238,48 @@ final class AppModel {
         }
     }
 
+    // MARK: - 浏览器扩展
+
+    /// 启动浏览器扩展的本地服务（spec/ipc.md）。没有从打包的应用运行时（未编译进 host 的 cdhash）启动失败，
+    /// 应用其余功能不受影响。
+    private func startBrowserService() {
+        guard let vault else { return }
+        do {
+            _ = try vault.startBrowserService(prompt: browserPrompt)
+            browserServiceError = nil
+        } catch {
+            browserServiceError = Self.describe(error)
+        }
+    }
+
+    func refreshBrowserPairings() {
+        browserPairings = vault?.browserPairings() ?? []
+    }
+
+    /// 解除配对：先重新验证（docs/ux.md §5），再删除记录并立即断开（spec/ipc.md §4.4）。
+    func revokeBrowserPairing(id: String, password: String?) async -> Bool {
+        guard let vault else { return false }
+        var ok = false
+        await run {
+            do {
+                try await Task.detached { try vault.reverify(password: password) }.value
+            } catch KeevoError.Cancelled {
+                return
+            }
+            let persisted = try vault.revokeBrowserPairing(id: id)
+            self.pendingRevocationWarning = !persisted
+            self.refreshBrowserPairings()
+            ok = true
+        }
+        return ok
+    }
+
     /// 锁定：Rust 端清除全部密钥，界面同时丢弃所有已解密的数据。
     func lock() {
         vault?.lock()
         vaults = []
         items = []
+        browserPairings = []
         pendingSecretKey = nil
         pendingKdf = nil
         dataVersion &+= 1
@@ -500,6 +551,10 @@ final class AppModel {
             return "这个条目合并其他设备的内容后超出了上限，只能查看。可以把它重建为一个新条目后继续编辑。"
         case .NotFound:
             return "这个条目已不存在。"
+        case .BrowserServiceUnavailable(let reason) where reason.contains("cdhash"):
+            return "这个构建没有编译进 native host 的 cdhash，请用 scripts/package-macos.sh 打包后运行。"
+        case .BrowserServiceUnavailable(let reason):
+            return "浏览器服务无法启动（\(reason)）。"
         default:
             return "操作失败：\(error)"
         }

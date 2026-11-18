@@ -11,6 +11,12 @@ APP="$ROOT/apps/macos"
 LIB_DIR="$ROOT/target/release"
 
 cd "$ROOT"
+# 扩展 ID 由扩展清单中的公钥决定（SHA-256 的前 16 字节，十六进制映射到 a–p），编译进应用，写入 host 清单
+if [[ -z "${KEEVO_EXTENSION_ID:-}" ]]; then
+  KEEVO_EXTENSION_ID="$(python3 -I "$ROOT/scripts/extension-id.py" "$ROOT/apps/browser-extension/static/manifest.json")"
+  export KEEVO_EXTENSION_ID
+fi
+# KEEVO_HOST_CDHASHES 由 scripts/package-macos.sh 在签名 native host 之后设置（spec/ipc.md §3.1）
 cargo build -p keevo-ffi --release --locked
 cargo build -p uniffi-bindgen --release --locked
 

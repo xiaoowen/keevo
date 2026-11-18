@@ -635,3 +635,114 @@ fn templates_sections_and_structured_fields() {
         Err(KeevoError::InvalidInput { .. })
     ));
 }
+
+/// 浏览器服务（debug 构建，只靠目录权限）：经真实 socket 配对；确认界面收到"开始"与短认证串；
+/// 配对记录存入加密数据库并列出；撤销后新的会话被拒绝。
+#[test]
+fn browser_service_pairs_lists_and_revokes() {
+    use keevo_crypto::StaticKeypair;
+    use keevo_ipc::client::{ClientEvent, ExtensionClient};
+    use keevo_ipc::frame::{read_socket_frame, write_socket_frame};
+    use keevo_ipc::message::HostHello;
+    use std::os::unix::net::UnixStream;
+
+    struct Accept(Mutex<Vec<String>>);
+    impl BrowserPrompt for Accept {
+        fn pairing_started(&self, browser: String) {
+            self.0.lock().unwrap().push(format!("started {browser}"));
+        }
+        fn confirm_pairing(&self, sas: String, name: String, _: String, timeout_ms: u64) -> bool {
+            assert!(timeout_ms > 0 && timeout_ms <= 60_000);
+            self.0.lock().unwrap().push(format!("confirm {name} {sas}"));
+            true
+        }
+    }
+
+    let f = Fixture::new();
+    // Unix socket 路径有长度上限（SUN_LEN），系统临时目录太深，改用 /tmp 下的短路径
+    let short = std::path::PathBuf::from(format!(
+        "/tmp/kv-{}",
+        &Id128::random().unwrap().to_hex()[..8]
+    ));
+    let socket = short.join("s");
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(short.clone());
+    let prompt = Arc::new(Accept(Mutex::new(Vec::new())));
+    let info = f.vault.start_service_at(prompt.clone(), &socket).unwrap();
+    assert!(info.new_identity);
+    let again = f.vault.start_service_at(prompt.clone(), &socket).unwrap();
+    assert!(!again.new_identity, "重复启动直接返回");
+
+    let origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
+    let connect = || {
+        let mut stream = UnixStream::connect(&socket).unwrap();
+        let hello = serde_json::to_vec(&HostHello {
+            v: 1,
+            client: "native-host".into(),
+            extension_origin: origin.into(),
+            browser: "com.google.Chrome".into(),
+        })
+        .unwrap();
+        write_socket_frame(&mut stream, &hello).unwrap();
+        stream
+    };
+    let key = StaticKeypair::generate().unwrap();
+    let private = key.export_private();
+    let mut client = ExtensionClient::new(key, origin, "测试扩展");
+    let mut stream = connect();
+    write_socket_frame(&mut stream, &client.start_pairing().unwrap()).unwrap();
+    let mut service_public = None;
+    while service_public.is_none() {
+        let frame = read_socket_frame(&mut stream).unwrap();
+        let (out, events) = client.on_frame(&frame).unwrap();
+        for o in out {
+            write_socket_frame(&mut stream, &o).unwrap();
+        }
+        for e in events {
+            if let ClientEvent::Paired { service_public: pk } = e {
+                service_public = Some(pk);
+            }
+        }
+    }
+    let log = prompt.0.lock().unwrap().clone();
+    assert_eq!(log[0], "started com.google.Chrome");
+    assert!(log[1].starts_with("confirm 测试扩展 "), "{log:?}");
+    let pairings = f.vault.browser_pairings();
+    assert_eq!(pairings.len(), 1);
+    assert_eq!(
+        (
+            pairings[0].name.as_str(),
+            pairings[0].extension_origin.as_str()
+        ),
+        ("测试扩展", origin)
+    );
+
+    assert!(
+        f.vault
+            .revoke_browser_pairing(pairings[0].id.clone())
+            .unwrap(),
+        "写入数据库成功"
+    );
+    assert!(f.vault.browser_pairings().is_empty());
+    let mut again = ExtensionClient::new(StaticKeypair::from_private(private), origin, "测试扩展");
+    let mut stream = connect();
+    write_socket_frame(
+        &mut stream,
+        &again.start_session(&service_public.unwrap()).unwrap(),
+    )
+    .unwrap();
+    let frame = read_socket_frame(&mut stream).unwrap();
+    let (_, events) = again.on_frame(&frame).unwrap();
+    assert!(
+        matches!(
+            events.as_slice(),
+            [ClientEvent::Error(keevo_ipc::message::ErrorCode::NotPaired)]
+        ),
+        "撤销后不能再建立会话"
+    );
+}

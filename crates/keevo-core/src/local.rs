@@ -216,6 +216,16 @@ impl LocalKeys {
         })
     }
 
+    pub(crate) fn service_static(
+        &self,
+        account_id: &Id128,
+        device_id: &Id128,
+    ) -> Result<Unwrapped<keevo_crypto::StaticKeypair>> {
+        self.unwrap_with(LocalPurpose::ServiceStatic, |w, s| {
+            keevo_crypto::unwrap_service_static(w, account_id, device_id, s)
+        })
+    }
+
     pub(crate) fn auk(
         &self,
         account_id: &Id128,

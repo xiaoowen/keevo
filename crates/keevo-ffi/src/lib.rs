@@ -68,6 +68,11 @@ pub enum KeevoError {
     AuthenticationFailed,
     /// 一次性密码的配置不合法（不是 `otpauth://totp/` URI 或 Base32 密钥，或参数超出范围）。
     InvalidOtp,
+    /// 浏览器扩展的本地服务无法启动。
+    BrowserServiceUnavailable {
+        /// 原因（不含秘密）。
+        reason: String,
+    },
     /// 输入不合法。
     InvalidInput {
         /// 说明。
@@ -99,6 +104,9 @@ impl fmt::Display for KeevoError {
             Self::TouchIdUnavailable => f.write_str("touch id unavailable"),
             Self::AuthenticationFailed => f.write_str("touch id authentication failed"),
             Self::InvalidOtp => f.write_str("invalid one-time password"),
+            Self::BrowserServiceUnavailable { reason } => {
+                write!(f, "browser service unavailable: {reason}")
+            }
             Self::InvalidInput { message } => write!(f, "invalid input: {message}"),
             Self::Internal { message } => write!(f, "internal: {message}"),
         }
@@ -932,7 +940,10 @@ pub fn open_vault_reenrolling(
 /// 一个本地保险库及其解锁状态。线程安全。
 #[derive(uniffi::Object)]
 pub struct KeevoVault {
-    inner: Mutex<Vault>,
+    /// 与 Vault Service 共享：浏览器扩展的请求与应用的操作使用同一个保险库与同一把锁。
+    inner: Arc<Mutex<Vault>>,
+    /// 浏览器扩展的本地服务（`spec/ipc.md`），由 [`KeevoVault::start_browser_service`] 启动。
+    service: Mutex<Option<keevo_service::VaultService>>,
     secrets: SecretRegistry,
     /// 搜索索引（解密后的概要），锁定时丢弃。
     search_index: Mutex<Option<SearchIndex>>,
@@ -941,7 +952,8 @@ pub struct KeevoVault {
 impl KeevoVault {
     fn new(vault: Vault) -> Self {
         Self {
-            inner: Mutex::new(vault),
+            inner: Arc::new(Mutex::new(vault)),
+            service: Mutex::new(None),
             secrets: SecretRegistry::default(),
             search_index: Mutex::new(None),
         }
@@ -978,7 +990,9 @@ impl KeevoVault {
             AccountSecretKey::parse(&secret_key).map_err(|e| KeevoError::InvalidSecretKey {
                 code: e.code().to_owned(),
             })?;
-        Ok(self.vault().unlock(&password, &sk)?)
+        self.vault().unlock(&password, &sk)?;
+        self.after_unlock();
+        Ok(())
     }
 
     /// 只用主密码解锁：账户密钥取自本机包裹。耗时约 1 秒（Argon2id），请在后台线程调用。
@@ -987,7 +1001,9 @@ impl KeevoVault {
     /// 本机没有可用的账户密钥时返回 [`KeevoError::SecretKeyRequired`]，此时询问账户密钥并调用
     /// [`KeevoVault::unlock`]；主密码错误返回 [`KeevoError::WrongCredentials`]。
     pub fn unlock_with_password(&self, password: String) -> Result<(), KeevoError> {
-        Ok(self.vault().unlock_with_password(&password)?)
+        self.vault().unlock_with_password(&password)?;
+        self.after_unlock();
+        Ok(())
     }
 
     /// 用 Touch ID 解锁。会弹出系统的 Touch ID 提示，请在后台线程调用。
@@ -995,7 +1011,9 @@ impl KeevoVault {
     /// # Errors
     /// 用户取消返回 [`KeevoError::Cancelled`]；未启用或已失效返回 [`KeevoError::TouchIdUnavailable`]。
     pub fn unlock_with_touch_id(&self) -> Result<(), KeevoError> {
-        Ok(self.vault().unlock_with_touch_id()?)
+        self.vault().unlock_with_touch_id()?;
+        self.after_unlock();
+        Ok(())
     }
 
     /// 启用 Touch ID：用户再输入一次主密码。耗时约 1 秒，请在后台线程调用。
@@ -1431,8 +1449,257 @@ impl KeevoVault {
             Some(sk) => vault.unlock_confirmed_expensive_kdf(&password, &sk, &params)?,
             None => vault.unlock_with_password_confirmed(&password, &params)?,
         }
+        drop(vault);
+        self.after_unlock();
         Ok(())
     }
+
+    /// 启动浏览器扩展的本地服务（`spec/ipc.md`）：监听 socket，按固定的 cdhash 校验 native host（§3.1）。
+    /// 服务与应用共用同一个保险库；锁定时只回答 `status`。已启动时直接返回。
+    ///
+    /// # Errors
+    /// 构建时没有编译进 native host 的 cdhash（release 构建）、Secure Enclave 暂时不可用、socket 无法创建时
+    /// 返回 [`KeevoError::BrowserServiceUnavailable`] 等。
+    pub fn start_browser_service(
+        &self,
+        prompt: Arc<dyn BrowserPrompt>,
+    ) -> Result<BrowserServiceInfo, KeevoError> {
+        let path =
+            keevo_ipc::paths::socket_path().map_err(|e| KeevoError::BrowserServiceUnavailable {
+                reason: e.to_string(),
+            })?;
+        self.start_service_at(prompt, &path)
+    }
+
+    /// 重新验证用户（`docs/ux.md` §5）：解除浏览器配对等敏感操作之前调用。`password` 为 `None` 时用 Touch ID，
+    /// 会弹出提示，请在后台线程调用。
+    ///
+    /// # Errors
+    /// 主密码错误、用户取消、Touch ID 未能识别等，返回对应错误。
+    pub fn reverify(&self, password: Option<String>) -> Result<(), KeevoError> {
+        let proof = password.as_deref().map_or(
+            keevo_core::Reverify::TouchId,
+            keevo_core::Reverify::Password,
+        );
+        Ok(self.vault().reverify(proof)?)
+    }
+
+    /// 已配对的浏览器扩展（"设置 → 浏览器"）。服务未启动或首次解锁前为空。
+    pub fn browser_pairings(&self) -> Vec<BrowserPairing> {
+        self.with_service(|svc| {
+            svc.pairings()
+                .into_iter()
+                .map(|r| BrowserPairing {
+                    id: hex(&r.extension_public),
+                    name: r.name,
+                    browser: r.browser,
+                    extension_origin: r.extension_origin,
+                    paired_at_ms: r.paired_at_ms,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+    }
+
+    /// 解除配对：删除记录并立即断开该扩展的会话（`spec/ipc.md` §4.4）。返回 `false` 表示写入数据库失败：
+    /// 撤销已在内存中生效，但必须提示用户"撤销可能在重启后失效"。
+    ///
+    /// # Errors
+    /// 服务未启动或 ID 不合法时返回错误。
+    pub fn revoke_browser_pairing(&self, id: String) -> Result<bool, KeevoError> {
+        let pk: [u8; 32] = unhex(&id)
+            .and_then(|b| b.try_into().ok())
+            .ok_or_else(|| invalid("pairing id"))?;
+        self.with_service(|svc| svc.revoke(&pk).is_ok())
+            .ok_or_else(|| KeevoError::BrowserServiceUnavailable {
+                reason: "not started".into(),
+            })
+    }
+}
+
+impl KeevoVault {
+    fn start_service_at(
+        &self,
+        prompt: Arc<dyn BrowserPrompt>,
+        path: &Path,
+    ) -> Result<BrowserServiceInfo, KeevoError> {
+        let mut slot = self
+            .service
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if slot.is_some() {
+            return Ok(BrowserServiceInfo {
+                new_identity: false,
+            });
+        }
+        let unavailable = |e: std::io::Error| KeevoError::BrowserServiceUnavailable {
+            reason: e.to_string(),
+        };
+        let policy = peer_policy()?;
+        let (key, new_identity) = self.vault().service_static_key()?;
+        let svc = keevo_service::VaultService::new(
+            Arc::clone(&self.inner),
+            key,
+            Arc::new(PromptAdapter(prompt)),
+            policy,
+        )
+        .map_err(unavailable)?;
+        let listener = keevo_service::bind(path).map_err(unavailable)?;
+        if self.vault().is_unlocked() {
+            let _ = svc.load_pairings();
+        }
+        let serving = svc.clone();
+        std::thread::Builder::new()
+            .name("keevo-browser-service".into())
+            .spawn(move || serving.serve(&listener))
+            .map_err(unavailable)?;
+        *slot = Some(svc);
+        Ok(BrowserServiceInfo { new_identity })
+    }
+
+    fn with_service<T>(&self, f: impl FnOnce(&keevo_service::VaultService) -> T) -> Option<T> {
+        let slot = self
+            .service
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        slot.as_ref().map(f)
+    }
+
+    /// 解锁之后：服务读入配对记录（先应用待提交的撤销，`spec/ipc.md` §4.2）。
+    fn after_unlock(&self) {
+        self.with_service(|svc| {
+            let _ = svc.load_pairings();
+        });
+    }
+}
+
+/// Chrome native messaging host 的名称，与扩展 `background.ts` 中的 `NATIVE_HOST` 一致。
+pub const BROWSER_HOST_NAME: &str = "io.github.xiaoowen.keevo";
+
+/// native messaging host 的名称（写入浏览器的 host 清单）。
+#[uniffi::export]
+pub fn browser_host_name() -> String {
+    BROWSER_HOST_NAME.to_owned()
+}
+
+/// Keevo 扩展的 ID：构建时由扩展清单中的公钥计算（`scripts/build-macos.sh`），写入 host 清单的
+/// `allowed_origins`（`spec/ipc.md` §3.2）。没有编译进来时为 `None`。
+#[uniffi::export]
+pub fn browser_extension_id() -> Option<String> {
+    option_env!("KEEVO_EXTENSION_ID").map(str::to_owned)
+}
+
+/// 构建时编译进主程序的 native host cdhash（`spec/ipc.md` §3.1）：逗号分隔的十六进制，由
+/// `scripts/package-macos.sh` 在签名 host 之后设置。运行时不从磁盘读取。
+const HOST_CDHASHES: Option<&str> = option_env!("KEEVO_HOST_CDHASHES");
+
+fn peer_policy() -> Result<keevo_service::PeerPolicy, KeevoError> {
+    let hashes: Vec<&str> = HOST_CDHASHES
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .collect();
+    if hashes.is_empty() {
+        if cfg!(debug_assertions) {
+            return Ok(keevo_service::PeerPolicy::DevSameUserOnly);
+        }
+        return Err(KeevoError::BrowserServiceUnavailable {
+            reason: "native host cdhash was not compiled in; build with scripts/package-macos.sh"
+                .into(),
+        });
+    }
+    if hashes
+        .iter()
+        .any(|h| h.len() != 40 || !h.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Err(KeevoError::BrowserServiceUnavailable {
+            reason: "malformed compiled-in cdhash".into(),
+        });
+    }
+    let requirement = hashes
+        .iter()
+        .map(|h| format!("cdhash H\"{h}\""))
+        .collect::<Vec<_>>()
+        .join(" or ");
+    Ok(keevo_service::PeerPolicy::CodeRequirement(requirement))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn unhex(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    s.as_bytes()
+        .chunks(2)
+        .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok())
+        .collect()
+}
+
+/// 由 Swift 实现的原生确认界面（`spec/ipc.md` §4.2、§5.2：只出现在 Keevo.app 中，扩展与网页无法伪造）。
+/// 这些方法在服务的工作线程中调用，可以阻塞，直到用户回答或超时。
+#[uniffi::export(with_foreign)]
+pub trait BrowserPrompt: Send + Sync {
+    /// 收到配对请求的第 1 条消息：立即告诉用户"有浏览器正在请求配对"，每次尝试都可见。
+    fn pairing_started(&self, browser: String);
+    /// 请用户确认两边的短认证串一致。必须在 `timeout_ms` 毫秒内返回，超时按拒绝处理。
+    fn confirm_pairing(&self, sas: String, name: String, browser: String, timeout_ms: u64) -> bool;
+}
+
+struct PromptAdapter(Arc<dyn BrowserPrompt>);
+
+impl keevo_service::PairingPrompt for PromptAdapter {
+    fn started(&self, browser: &str) {
+        self.0.pairing_started(browser.to_owned());
+    }
+
+    fn confirm(
+        &self,
+        sas: [u8; 6],
+        name: &str,
+        browser: &str,
+        deadline: std::time::Instant,
+    ) -> bool {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        let ms = u64::try_from(left.as_millis()).unwrap_or(u64::MAX);
+        // M1.3 换成 SAS 词表 v1；在此之前与扩展一样显示 6 组两位十六进制
+        let code = sas
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        self.0
+            .confirm_pairing(code, name.to_owned(), browser.to_owned(), ms)
+            && std::time::Instant::now() <= deadline
+    }
+}
+
+/// 启动结果。
+#[derive(uniffi::Record)]
+pub struct BrowserServiceInfo {
+    /// 这次启动生成了新的服务身份（第一次启动，或本机密钥包裹已失效）。已配对的扩展需要重新配对。
+    pub new_identity: bool,
+}
+
+/// 一个已配对的浏览器扩展。
+#[derive(uniffi::Record)]
+pub struct BrowserPairing {
+    /// ID（扩展静态公钥的十六进制），撤销时传回。
+    pub id: String,
+    /// 显示名（已清洗）。
+    pub name: String,
+    /// 浏览器标识，如 `com.google.Chrome`。
+    pub browser: String,
+    /// 扩展来源。
+    pub extension_origin: String,
+    /// 配对时间（Unix 毫秒）。
+    pub paired_at_ms: u64,
 }
 
 const fn kdf_info(p: &KdfParams) -> KdfInfo {

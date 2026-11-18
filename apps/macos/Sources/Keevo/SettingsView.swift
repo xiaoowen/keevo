@@ -9,6 +9,8 @@ struct SettingsView: View {
         TabView {
             SecuritySettings()
                 .tabItem { Label("安全", systemImage: "lock.shield") }
+            BrowserSettings()
+                .tabItem { Label("浏览器", systemImage: "puzzlepiece.extension") }
         }
         .frame(width: 480)
     }

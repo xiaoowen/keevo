@@ -5,12 +5,12 @@
 #   scripts/install-native-host-dev.sh              # 安装
 #   scripts/install-native-host-dev.sh --uninstall  # 卸载
 #
-# 写入：~/Library/Application Support/Google/Chrome/NativeMessagingHosts/app.keevo.native_host.json
+# 写入：~/Library/Application Support/Google/Chrome/NativeMessagingHosts/io.github.xiaoowen.keevo.json
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
-MANIFEST="$DIR/app.keevo.native_host.json"
+MANIFEST="$DIR/io.github.xiaoowen.keevo.json"
 
 if [[ "${1:-}" == "--uninstall" ]]; then
   rm -f "$MANIFEST"
@@ -23,18 +23,12 @@ cargo build -p keevo-native-host --locked
 HOST_BIN="$ROOT/target/debug/keevo-native-host"
 
 # 扩展 ID 由 static/manifest.json 中的公钥决定：SHA-256 的前 16 字节，十六进制映射到 a–p
-EXT_ID="$(python3 - "$ROOT/apps/browser-extension/static/manifest.json" <<'PY'
-import base64, hashlib, json, sys
-key = json.load(open(sys.argv[1]))["key"]
-digest = hashlib.sha256(base64.b64decode(key)).hexdigest()[:32]
-print("".join(chr(ord("a") + int(c, 16)) for c in digest))
-PY
-)"
+EXT_ID="$(python3 -I "$ROOT/scripts/extension-id.py" "$ROOT/apps/browser-extension/static/manifest.json")"
 
 mkdir -p "$DIR"
 cat > "$MANIFEST" <<JSON
 {
-  "name": "app.keevo.native_host",
+  "name": "io.github.xiaoowen.keevo",
   "description": "Keevo native messaging host (development build)",
   "path": "$HOST_BIN",
   "type": "stdio",
