@@ -17,7 +17,7 @@ pub use local::{EnclaveError, EnclaveKey, EphemeralAgreement, LocalKeys, SecureE
 #[cfg(test)]
 pub(crate) use vault::vault_now_ms_for_tests;
 pub use vault::{
-    DEFAULT_PASSWORD_INTERVAL_DAYS, Edit, HistoryEntry, ItemSummary, ItemView,
+    DEFAULT_PASSWORD_INTERVAL_DAYS, Edit, HistoryEntry, ItemSummary, ItemView, LocalRecords,
     MAX_TOUCH_ID_FAILURES, NewField, PASSWORD_INTERVAL_DAYS, PasswordReason, Reverify, Vault,
     VaultInfo,
 };

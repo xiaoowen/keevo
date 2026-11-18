@@ -12,7 +12,7 @@ use keevo_crypto::Id128;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 /// 当前 schema 版本。
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 const SCHEMA_V1: &str = r"
 CREATE TABLE meta (
@@ -75,6 +75,21 @@ const MIGRATE_V2: &str = "ALTER TABLE revision ADD COLUMN stored_ms INTEGER NOT 
 /// v2 → v3：`stored_ms` 的含义改为 Keevo 的累计运行时间。v2 的开发数据库存的是墙上时间，
 /// 年龄未知，一律记为 0（第四轮评审 J1）。
 const MIGRATE_V3: &str = "UPDATE revision SET stored_ms = 0;";
+
+/// v3 → v4：本机记录（`spec/crypto.md` §8.8）：浏览器配对记录与站点授权，用 ASK 派生的密钥加密。
+const MIGRATE_V4: &str = "
+CREATE TABLE local_record (
+  kind  TEXT NOT NULL,
+  id    BLOB NOT NULL,
+  ct    BLOB NOT NULL,
+  PRIMARY KEY (kind, id)
+) STRICT;
+";
+
+/// 本机记录密文的长度上限：64 KiB 明文加版本、nonce 与认证标签。
+pub const MAX_LOCAL_RECORD_CT: usize = 64 * 1024 + 1 + 24 + 16;
+/// 每种本机记录最多的条数。
+pub const MAX_LOCAL_RECORDS: usize = 4096;
 
 /// 普通修订最多的父修订数（`spec/revisions.md` §7.1）。写时收敛以全部头为父，头更多时条目只能重建。
 pub const MAX_PARENTS: usize = 4096;
@@ -298,6 +313,9 @@ impl Store {
         if version < 3 {
             tx.execute_batch(MIGRATE_V3)?;
         }
+        if version < 4 {
+            tx.execute_batch(MIGRATE_V4)?;
+        }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         Ok(())
@@ -333,6 +351,59 @@ impl Store {
             Some((Some(v), _)) => Ok(Some(v)),
             Some((None, _)) => Err(StoreError::Corrupt("meta value exceeds its size limit")),
         }
+    }
+
+    /// 某种本机记录的全部条目：(id, 密文)，按 id 排序（`spec/crypto.md` §8.8）。
+    ///
+    /// # Errors
+    /// SQLite 错误；某条密文或 id 超长、条数超过上限时返回 [`StoreError::Corrupt`]。
+    pub fn local_records(&self, kind: &str) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        let tx = self.conn.unchecked_transaction()?;
+        // 先在同一个读事务里检查条数与长度，超长的值不会被取出（第三轮评审 H3）
+        let (count, oversized): (i64, i64) = tx.query_row(
+            "SELECT count(*), coalesce(sum(length(ct) > ?2 OR length(id) > 64), 0)
+             FROM local_record WHERE kind = ?1",
+            params![kind, i64::try_from(MAX_LOCAL_RECORD_CT).unwrap_or(i64::MAX)],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if oversized > 0 || usize::try_from(count).unwrap_or(usize::MAX) > MAX_LOCAL_RECORDS {
+            return Err(StoreError::Corrupt("local record exceeds its size limit"));
+        }
+        let mut stmt = tx.prepare("SELECT id, ct FROM local_record WHERE kind = ?1 ORDER BY id")?;
+        let rows = stmt
+            .query_map(params![kind], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<core::result::Result<Vec<_>, _>>()?;
+        drop(stmt);
+        tx.commit()?;
+        Ok(rows)
+    }
+
+    /// 写入或替换一条本机记录。
+    ///
+    /// # Errors
+    /// SQLite 错误；密文超长时返回 [`StoreError::TooLarge`]。
+    pub fn put_local_record(&mut self, kind: &str, id: &[u8], ct: &[u8]) -> Result<()> {
+        if ct.len() > MAX_LOCAL_RECORD_CT || id.len() > 64 {
+            return Err(StoreError::TooLarge);
+        }
+        self.conn.execute(
+            "INSERT INTO local_record (kind, id, ct) VALUES (?1, ?2, ?3)
+             ON CONFLICT(kind, id) DO UPDATE SET ct = excluded.ct",
+            params![kind, id, ct],
+        )?;
+        Ok(())
+    }
+
+    /// 删除一条本机记录。不存在时也算成功。
+    ///
+    /// # Errors
+    /// SQLite 错误。
+    pub fn delete_local_record(&mut self, kind: &str, id: &[u8]) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM local_record WHERE kind = ?1 AND id = ?2",
+            params![kind, id],
+        )?;
+        Ok(())
     }
 
     /// 写入元数据。

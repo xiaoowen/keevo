@@ -22,7 +22,6 @@ use keevo_crypto::{Id128, StaticKeypair};
 use keevo_ipc::client::{ClientEvent, ExtensionClient};
 use keevo_ipc::frame::{read_native_frame, write_native_frame};
 use keevo_ipc::message::{Call, CallResult, ControlFrame, ErrorCode, ServerMessage};
-use keevo_ipc::service::MemoryPairingStore;
 use keevo_service::{PairingPrompt, PeerPolicy, VaultService, bind};
 
 const ORIGIN: &str = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
@@ -44,7 +43,7 @@ struct World {
     socket: PathBuf,
     vault: Arc<Mutex<Vault>>,
     prompt: Arc<AutoConfirm>,
-    svc: VaultService<MemoryPairingStore>,
+    svc: VaultService,
 }
 
 impl Drop for World {
@@ -96,11 +95,11 @@ fn start() -> World {
     let svc = VaultService::new(
         Arc::clone(&vault),
         StaticKeypair::generate().unwrap(),
-        Arc::new(Mutex::new(MemoryPairingStore::default())),
         prompt.clone(),
         PeerPolicy::DevSameUserOnly,
     )
     .unwrap();
+    svc.load_pairings().unwrap();
     let socket = dir.join("ipc").join("keevo.sock");
     let listener = bind(&socket).unwrap();
     let server = svc.clone();

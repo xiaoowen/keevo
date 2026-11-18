@@ -926,3 +926,60 @@ fn field_system() {
         .unwrap();
     assert_eq!(&layout(&vault)[0].1[..2], ["密码", "邮箱地址"]);
 }
+
+/// 本机记录：加密存放；锁定时不可读写；被篡改的条目跳过并计数；可以删除。
+#[test]
+fn local_records() {
+    let (mut vault, sk) =
+        Vault::create_with_store(Store::open_in_memory().unwrap(), "pw", fast_params()).unwrap();
+    vault
+        .put_local_record("pairing", b"pk-a", br#"{"name":"a"}"#)
+        .unwrap();
+    vault
+        .put_local_record("pairing", b"pk-b", br#"{"name":"b"}"#)
+        .unwrap();
+    vault
+        .put_local_record("pairing", b"pk-a", br#"{"name":"a2"}"#)
+        .unwrap();
+    vault
+        .put_local_record("authorization", b"x", b"{}")
+        .unwrap();
+    let (records, skipped) = vault.local_records("pairing").unwrap();
+    assert_eq!(skipped, 0);
+    let names: Vec<&[u8]> = records.iter().map(|(_, p)| p.as_slice()).collect();
+    assert_eq!(
+        names,
+        [&br#"{"name":"a2"}"#[..], br#"{"name":"b"}"#],
+        "按 id 排序，替换旧值"
+    );
+
+    // 换到另一条记录上的密文解不开：跳过并计数
+    let stolen = vault.store.local_records("pairing").unwrap()[0].1.clone();
+    vault
+        .store
+        .put_local_record("pairing", b"pk-c", &stolen)
+        .unwrap();
+    let (records, skipped) = vault.local_records("pairing").unwrap();
+    assert_eq!((records.len(), skipped), (2, 1));
+
+    vault.delete_local_record("pairing", b"pk-b").unwrap();
+    vault.lock();
+    assert_eq!(
+        vault.local_records("pairing").err(),
+        Some(CoreError::Locked)
+    );
+    assert_eq!(
+        vault.put_local_record("pairing", b"x", b"{}").err(),
+        Some(CoreError::Locked)
+    );
+    assert_eq!(
+        vault.delete_local_record("pairing", b"pk-a").err(),
+        Some(CoreError::Locked)
+    );
+    vault.unlock("pw", &sk).unwrap();
+    assert_eq!(
+        vault.local_records("pairing").unwrap().0.len(),
+        1,
+        "pk-b 已删除，pk-c 解不开"
+    );
+}

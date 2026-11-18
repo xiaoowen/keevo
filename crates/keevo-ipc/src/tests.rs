@@ -892,3 +892,41 @@ fn review4_declared_error_codes_are_decodable() {
         assert_eq!(frame.to_json().unwrap(), json.into_bytes());
     }
 }
+
+/// 首次解锁前配对记录还不可读（它们存在加密数据库中）：IK 握手返回 `locked`，而不是 `not_paired`
+/// （spec/ipc.md §4.2 第 6 步、§4.3 第 2 步）。
+#[test]
+fn ik_before_pairings_are_loaded_returns_locked() {
+    struct NotLoaded<'a>(&'a MemoryPairingStore);
+    impl PairingStore for NotLoaded<'_> {
+        fn is_loaded(&self) -> bool {
+            false
+        }
+        fn find(&self, pk: &[u8; 32]) -> Option<crate::service::PairingRecord> {
+            self.0.find(pk)
+        }
+        fn save(&mut self, _: crate::service::PairingRecord) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn revoke(&mut self, _: &[u8; 32]) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut svc = Service::new();
+    let (client, service_public, _) = pair(&mut svc, true);
+    let mut client = client_with_same_key(client);
+    let mut conn = svc.connect(ORIGIN);
+    let frame = client.start_session(&service_public.unwrap()).unwrap();
+    let out = collect(conn.on_frame(&frame, &NotLoaded(&svc.store), &svc.backend));
+    assert!(out.closed);
+    let err: ControlFrame = ControlFrame::from_json(&out.to_client[0]).unwrap();
+    assert!(
+        matches!(
+            err,
+            ControlFrame::Error {
+                code: ErrorCode::Locked
+            }
+        ),
+        "{err:?}"
+    );
+}

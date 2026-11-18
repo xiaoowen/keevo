@@ -6,7 +6,7 @@
 
 | 规范 | 版本 | 状态 | 测试向量 |
 |---|---|---|---|
-| [crypto.md](crypto.md)：账户密钥、KDF、2SKD、密钥集、加密信封 | 1.1 | **已冻结**（§8.7 本机密钥包裹是本机格式，不在冻结范围内） | [test-vectors/crypto-v1.json](test-vectors/crypto-v1.json) |
+| [crypto.md](crypto.md)：账户密钥、KDF、2SKD、密钥集、加密信封 | 1.2 | **已冻结**（§8.7 本机密钥包裹、§8.8 本机记录是本机格式，不在冻结范围内） | [test-vectors/crypto-v1.json](test-vectors/crypto-v1.json) |
 | [revisions.md](revisions.md)：修订图、记录、HLC、合并 | 1.1 | **已冻结** | [test-vectors/revisions-v1.json](test-vectors/revisions-v1.json)（24 个合并场景） |
 | [vault-format.md](vault-format.md)：条目与保险库的明文结构 | 1.2 | **已冻结** | [test-vectors/vault-format-v1.json](test-vectors/vault-format-v1.json)（规范编码、正向与负向解码） |
 | [ipc.md](ipc.md)：浏览器扩展与桌面应用的本地通信 | 1.0 | **已冻结**（浏览器 IPC 协议 v1） | 计划中（M1.3） |
@@ -49,7 +49,7 @@
    - **域分隔标签**中的 `v1`（如 `keevo/v1/aad`）是协议常量，不随文档版本变化。
 2. **改变格式时**：新的版本标识必须与旧的区分开；实现必须继续读取全部已冻结的旧版本，必要时提供迁移。不允许"不兼容但仍叫 v1"。
 3. **v1 没有扩展点**：未知字段、未知取值、未知消息一律拒绝。扩展只能通过新版本完成。
-4. **本机存储**：SQLite schema（`crates/keevo-store`）与本机密钥包裹（crypto §8.7，本机格式 v1）不属于共享格式，由实现自行版本化与迁移；它们不得改变共享格式中的对象、身份或密钥。
+4. **本机存储**：SQLite schema（`crates/keevo-store`）、本机密钥包裹（crypto §8.7）与本机记录（crypto §8.8）不属于共享格式，由实现自行版本化与迁移；它们不得改变共享格式中的对象、身份或密钥。
 
 ## 其他规则
 

@@ -12,9 +12,10 @@ use std::thread;
 use keevo_core::Vault;
 use keevo_crypto::StaticKeypair;
 use keevo_ipc::frame::{read_socket_frame, write_socket_frame};
-use keevo_ipc::service::{Output, PairingGate, PairingStore, ServiceConnection};
+use keevo_ipc::service::{Output, PairingGate, PairingRecord, PairingStore, ServiceConnection};
 
 use crate::backend::CoreBackend;
+use crate::pairing::{Bound, LoadReport, PairingCache, ReadOnly};
 
 /// socket 对端的校验策略（`spec/ipc.md` §3.1）。
 #[derive(Debug, Clone)]
@@ -46,11 +47,11 @@ pub trait PairingPrompt: Send + Sync {
 /// 已建立会话的登记表：连接编号 → (扩展公钥, 用于主动断开的 socket 句柄)。
 type Sessions = Arc<Mutex<HashMap<u64, ([u8; 32], UnixStream)>>>;
 
-/// 本地 IPC 服务。
-pub struct VaultService<S: PairingStore + Send + 'static> {
+/// 本地 IPC 服务。加锁顺序固定为"保险库 → 配对记录 → 会话登记表"，任何路径都不反向加锁。
+pub struct VaultService {
     vault: Arc<Mutex<Vault>>,
     key: Arc<StaticKeypair>,
-    pairings: Arc<Mutex<S>>,
+    pairings: Arc<Mutex<PairingCache>>,
     prompt: Arc<dyn PairingPrompt>,
     policy: PeerPolicy,
     sessions: Sessions,
@@ -58,7 +59,7 @@ pub struct VaultService<S: PairingStore + Send + 'static> {
     gate: Arc<PairingGate>,
 }
 
-impl<S: PairingStore + Send + 'static> Clone for VaultService<S> {
+impl Clone for VaultService {
     fn clone(&self) -> Self {
         Self {
             vault: Arc::clone(&self.vault),
@@ -77,15 +78,14 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-impl<S: PairingStore + Send + 'static> VaultService<S> {
-    /// 创建服务。
+impl VaultService {
+    /// 创建服务。配对记录在 [`VaultService::load_pairings`] 之前不可读（首次解锁前 IK 返回 `locked`）。
     ///
     /// # Errors
     /// release 构建中使用 [`PeerPolicy::DevSameUserOnly`] 时返回错误。
     pub fn new(
         vault: Arc<Mutex<Vault>>,
         key: StaticKeypair,
-        pairings: Arc<Mutex<S>>,
         prompt: Arc<dyn PairingPrompt>,
         policy: PeerPolicy,
     ) -> std::io::Result<Self> {
@@ -97,7 +97,7 @@ impl<S: PairingStore + Send + 'static> VaultService<S> {
         Ok(Self {
             vault,
             key: Arc::new(key),
-            pairings,
+            pairings: Arc::default(),
             prompt,
             policy,
             sessions: Arc::default(),
@@ -111,13 +111,42 @@ impl<S: PairingStore + Send + 'static> VaultService<S> {
     /// # Errors
     /// 配对记录持久化失败时返回错误；此时内存中的记录已删除、会话已断开，但重启后撤销可能失效。
     pub fn revoke(&self, extension_public: &[u8; 32]) -> std::io::Result<()> {
-        let result = lock(&self.pairings).revoke(extension_public);
+        let result = {
+            let mut vault = lock(&self.vault);
+            let mut cache = lock(&self.pairings);
+            Bound {
+                cache: &mut cache,
+                vault: &mut vault,
+            }
+            .revoke(extension_public)
+        };
         for (pk, stream) in lock(&self.sessions).values() {
             if pk == extension_public {
                 let _ = stream.shutdown(Shutdown::Both);
             }
         }
         result
+    }
+
+    /// 解锁后调用：读入配对记录（先应用待提交的撤销）。
+    ///
+    /// # Errors
+    /// 保险库已锁定或读取失败时返回错误。
+    pub fn load_pairings(&self) -> std::io::Result<LoadReport> {
+        let mut vault = lock(&self.vault);
+        lock(&self.pairings).load(&mut vault)
+    }
+
+    /// 全部配对记录（"设置 → 浏览器"）。
+    #[must_use]
+    pub fn pairings(&self) -> Vec<PairingRecord> {
+        lock(&self.pairings).records().to_vec()
+    }
+
+    /// 仍未写入数据库的撤销数（§4.4：大于 0 时提示"撤销可能在重启后失效"）。
+    #[must_use]
+    pub fn pending_revocations(&self) -> usize {
+        lock(&self.pairings).pending_revocations()
     }
 
     /// 服务的静态公钥。
@@ -157,7 +186,7 @@ impl<S: PairingStore + Send + 'static> VaultService<S> {
             let outputs = {
                 let vault = lock(&self.vault);
                 let pairings = lock(&self.pairings);
-                conn.on_frame(&frame, &*pairings, &CoreBackend::new(&vault))
+                conn.on_frame(&frame, &ReadOnly(&pairings), &CoreBackend::new(&vault))
             };
             // 会话一建立就登记，早于任何可能阻塞的发送（第二轮评审 G7）；
             // 配对确认发生在 emit 内，那里同样先登记再发送（第三轮评审 H6）
@@ -181,7 +210,7 @@ impl<S: PairingStore + Send + 'static> VaultService<S> {
             return true;
         }
         // 登记前再核对一次：若握手与撤销同时发生，确保不会留下未被断开的会话
-        if lock(&self.pairings).find(&pk).is_none() {
+        if ReadOnly(&lock(&self.pairings)).find(&pk).is_none() {
             return false;
         }
         match stream.try_clone() {
@@ -230,11 +259,16 @@ impl<S: PairingStore + Send + 'static> VaultService<S> {
                     let accepted = self.prompt.confirm(sas, &name, &browser, deadline);
                     // 持有保险库锁读取解锁代次并提交：确认与锁定之间有确定的先后（第四轮评审 J5）
                     let more = {
-                        let vault = lock(&self.vault);
+                        let mut vault = lock(&self.vault);
+                        let epoch = vault.unlock_epoch();
+                        let mut cache = lock(&self.pairings);
                         conn.confirm_pairing(
                             accepted,
-                            &mut *lock(&self.pairings),
-                            vault.unlock_epoch(),
+                            &mut Bound {
+                                cache: &mut cache,
+                                vault: &mut vault,
+                            },
+                            epoch,
                         )
                     };
                     // 确认后会话才建立：先登记，再发送 `paired`（第三轮评审 H6）
@@ -304,7 +338,6 @@ mod tests {
     use keevo_ipc::client::{ClientEvent, ExtensionClient};
     use keevo_ipc::frame::read_socket_frame;
     use keevo_ipc::message::HostHello;
-    use keevo_ipc::service::MemoryPairingStore;
 
     use super::*;
 
@@ -315,7 +348,7 @@ mod tests {
         }
     }
 
-    fn service() -> (VaultService<MemoryPairingStore>, std::path::PathBuf) {
+    fn service() -> (VaultService, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!(
             "keevo-svc-{}-{}",
             std::process::id(),
@@ -327,11 +360,11 @@ mod tests {
         let svc = VaultService::new(
             Arc::new(Mutex::new(vault)),
             StaticKeypair::generate().unwrap(),
-            Arc::new(Mutex::new(MemoryPairingStore::default())),
             Arc::new(Accept),
             PeerPolicy::DevSameUserOnly,
         )
         .unwrap();
+        svc.load_pairings().unwrap();
         (svc, dir)
     }
 
@@ -381,7 +414,7 @@ mod tests {
         let step = |conn: &mut ServiceConnection, frame: &[u8]| {
             let vault = lock(&svc.vault);
             let pairings = lock(&svc.pairings);
-            conn.on_frame(frame, &*pairings, &CoreBackend::new(&vault))
+            conn.on_frame(frame, &ReadOnly(&pairings), &CoreBackend::new(&vault))
         };
         assert!(step(&mut conn, &hello).is_empty());
         let out = step(&mut conn, &client.start_pairing().unwrap());

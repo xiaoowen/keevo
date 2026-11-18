@@ -78,6 +78,9 @@ pub enum PasswordReason {
     TooManyFailures,
 }
 
+/// 解开的本机记录 (id, 明文)，以及因解不开而跳过的条数（[`Vault::local_records`]）。
+pub type LocalRecords = (Vec<(Vec<u8>, keevo_crypto::SecretBytes)>, usize);
+
 /// 历史中的一个修订（[`Vault::history`]）。
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
@@ -1385,6 +1388,57 @@ impl Vault {
             },
             _ => Err(CoreError::NotFound),
         }
+    }
+
+    /// 某种本机记录（`spec/crypto.md` §8.8）的全部条目：(id, 明文)。解不开的条目（被篡改或损坏）跳过，
+    /// 返回其个数：跳过只会让对应的配对或授权失效，是安全的方向。
+    ///
+    /// # Errors
+    /// 已锁定返回 [`CoreError::Locked`]；SQLite 错误。
+    pub fn local_records(&self, kind: &str) -> Result<LocalRecords> {
+        let session = self.session()?;
+        let mut out = Vec::new();
+        let mut skipped = 0usize;
+        for (id, ct) in self.store.local_records(kind)? {
+            match keevo_crypto::open_local_record(
+                session.keyset.account_key(),
+                &session.account_id,
+                kind,
+                &id,
+                &ct,
+            ) {
+                Ok(plain) => out.push((id, plain)),
+                Err(_) => skipped = skipped.saturating_add(1),
+            }
+        }
+        Ok((out, skipped))
+    }
+
+    /// 写入或替换一条本机记录。
+    ///
+    /// # Errors
+    /// 已锁定返回 [`CoreError::Locked`]；`kind`、`id` 不合法或明文过大时返回对应错误；SQLite 错误。
+    pub fn put_local_record(&mut self, kind: &str, id: &[u8], plaintext: &[u8]) -> Result<()> {
+        let session = self.session()?;
+        let ct = keevo_crypto::seal_local_record(
+            session.keyset.account_key(),
+            &session.account_id,
+            kind,
+            id,
+            plaintext,
+        )?;
+        self.store.put_local_record(kind, id, &ct)?;
+        Ok(())
+    }
+
+    /// 删除一条本机记录。与写入一样要求已解锁（撤销只在解锁时进行，`spec/ipc.md` §4.2）。
+    ///
+    /// # Errors
+    /// 已锁定返回 [`CoreError::Locked`]；SQLite 错误。
+    pub fn delete_local_record(&mut self, kind: &str, id: &[u8]) -> Result<()> {
+        self.session()?;
+        self.store.delete_local_record(kind, id)?;
+        Ok(())
     }
 
     /// 条目的历史修订数（含已清理内容的修订）。

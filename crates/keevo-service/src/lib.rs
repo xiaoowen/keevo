@@ -12,5 +12,5 @@ mod pairing;
 mod server;
 
 pub use backend::CoreBackend;
-pub use pairing::FilePairingStore;
+pub use pairing::{LoadReport, PAIRING_KIND, PairingCache};
 pub use server::{PairingPrompt, PeerPolicy, VaultService, bind};

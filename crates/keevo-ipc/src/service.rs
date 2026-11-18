@@ -80,6 +80,11 @@ pub struct PairingRecord {
 
 /// 配对记录的存储。正式实现保存在加密数据库中；撤销配对即删除记录。
 pub trait PairingStore {
+    /// 配对记录是否已读入。记录存在加密数据库中，进程启动后、首次解锁前不可读，此时 IK 握手一律返回
+    /// `locked`（§4.2 第 6 步）。
+    fn is_loaded(&self) -> bool {
+        true
+    }
     /// 按扩展的静态公钥查找。
     fn find(&self, extension_public: &[u8; 32]) -> Option<PairingRecord>;
     /// 保存配对记录。只有保存成功，才会向扩展发送 `paired`（第三轮评审 §4.4）。
@@ -441,6 +446,10 @@ impl ServiceConnection {
                         return Err(ErrorCode::BadRequest);
                     }
                     let remote = hs.remote_static().ok_or(ErrorCode::BadRequest)?;
+                    // 首次解锁前配对记录还不可读（§4.3 第 2 步）
+                    if !store.is_loaded() {
+                        return Err(ErrorCode::Locked);
+                    }
                     // 公钥必须已配对，且来源与配对时一致（§4.3 第 2 步）
                     match store.find(&remote) {
                         Some(r) if r.extension_origin == hello.extension_origin => {}

@@ -27,6 +27,7 @@ mod id;
 mod kdf;
 mod key;
 mod keyset;
+mod local_record;
 mod local_wrap;
 mod noise;
 mod padding;
@@ -49,6 +50,7 @@ pub use id::{Id128, KeyId};
 pub use kdf::KdfParams;
 pub use key::SymmetricKey;
 pub use keyset::AccountKeyset;
+pub use local_record::{MAX_LOCAL_RECORD_LEN, open_local_record, seal_local_record};
 pub use local_wrap::{
     EPH_PUB_LEN, LocalAgreement, LocalPurpose, LocalWrapHeader, MAX_LOCAL_WRAP_LEN, SHARED_LEN,
     unwrap_auk, unwrap_device_marker, unwrap_secret_key, wrap_auk, wrap_device_marker,

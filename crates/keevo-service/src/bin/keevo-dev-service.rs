@@ -27,7 +27,7 @@ use keevo_core::{
     AccountSecretKey, FieldData, FieldKind, ItemType, KdfParams, NewField, Purpose, Vault,
 };
 use keevo_crypto::StaticKeypair;
-use keevo_service::{FilePairingStore, PairingPrompt, PeerPolicy, VaultService, bind};
+use keevo_service::{PairingPrompt, PeerPolicy, VaultService, bind};
 use zeroize::Zeroizing;
 
 const DEMO_PASSWORD: &str = "keevo-dev-only-password";
@@ -118,7 +118,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     let vault = open_or_create_demo(&dir)?;
     let key = load_or_create_service_key(&dir.join("service-key"))?;
-    let pairings = FilePairingStore::open(&dir.join("pairings.json"))?;
     let prompt: Arc<dyn PairingPrompt> = if auto_confirm {
         Arc::new(AutoConfirm)
     } else {
@@ -128,10 +127,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let svc = VaultService::new(
         Arc::new(Mutex::new(vault)),
         key,
-        Arc::new(Mutex::new(pairings)),
         prompt,
         PeerPolicy::DevSameUserOnly,
     )?;
+    // 演示保险库已解锁：读入配对记录（存在加密数据库中，spec/ipc.md §4.2）
+    svc.load_pairings()?;
     let socket = keevo_ipc::paths::socket_path()?;
     let listener = bind(&socket)?;
     eprintln!("正在监听 {}", socket.display());
