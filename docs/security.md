@@ -86,7 +86,7 @@ flowchart TD
 | 本地 IPC、局域网配对 | `Noise_XX/IK_25519_ChaChaPoly_SHA256` | — |
 | 随机数 | 操作系统 CSPRNG（`getrandom`） | — |
 | TOTP | HMAC-SHA-1/256/512（RFC 6238） | — |
-| 生物识别包裹 | Secure Enclave P-256 ECIES（`eciesEncryptionCofactorVariableIVX963SHA256AESGCM`） | 访问控制 `privateKeyUsage` + `biometryCurrentSet` |
+| 生物识别包裹 | Secure Enclave P-256 ECDH + HKDF-SHA256 + AES-256-GCM（CryptoKit，密钥以 blob 存成文件） | 访问控制 `privateKeyUsage` + `biometryCurrentSet` |
 
 **算法敏捷性**：
 - 每个信封都带 `format_version` 与 `alg_id`。
@@ -142,13 +142,14 @@ AAD = fixed_binary_encode(
 - **主密码解锁**：2SKD → AUK → 解封密钥集。
 - **Touch ID 解锁**：
   - 首次用主密码解锁后，生成一把 Secure Enclave P-256 密钥，访问控制为 `biometryCurrentSet`。
-  - 用这把密钥对 AUK 做 ECIES 加密，结果存入数据保护钥匙串（`WhenUnlockedThisDeviceOnly`）。
+  - 用这把密钥包裹 AUK，Secure Enclave 密钥的 blob 与包裹结果存入数据目录下的文件（0600）。Keevo 不绑定开发者团队，用不了数据保护钥匙串（ADR-0003）。
+  - blob 只能由本机的 Secure Enclave 使用，但不绑定应用身份：同用户进程拿到 blob 后可以自己发起 Touch ID 请求，提示文字可以伪造（A7 的残余风险）。
   - 解锁时由 Secure Enclave 解密，必须通过 Touch ID。
   - 指纹集合一旦变化，Secure Enclave 密钥即失效，必须输入主密码。
-- **账户密钥**：默认存于数据保护钥匙串（`WhenUnlockedThisDeviceOnly`，`synchronizable = false`），不进入 iCloud 钥匙串，也不随备份迁移到其他设备。用户可以选择通过 iCloud 钥匙串同步（见 §10）。
+- **账户密钥**：由不需要用户在场的 Secure Enclave 密钥包裹后存成文件，不随备份迁移到其他设备（blob 在别的 Mac 上解不开）。不提供 iCloud 钥匙串同步（需要团队签发的权限）。
 - **设备签名密钥（M2）**：在 Secure Enclave 中生成，访问控制为 `privateKeyUsage`，不需要 Touch ID，以免每次写同步数据都弹出验证。私钥不可导出。
 - **必须输入主密码的情形**：重启后的首次解锁；距上次输入超过 N 天（默认 14）；Touch ID 连续失败 3 次。
-- **锁定**：用 `zeroize` 清除内存中的 AUK、密钥集、全部 VK 与 IK 以及解密缓存。钥匙串里只留下 Secure Enclave 包裹的密文。
+- **锁定**：用 `zeroize` 清除内存中的 AUK、密钥集、全部 VK 与 IK 以及解密缓存。磁盘上只留下 Secure Enclave 包裹的密文。
 
 ## 9. 运行时与内存防护
 
@@ -163,7 +164,7 @@ AAD = fixed_binary_encode(
   - 日志用 `%{private}`。
   - 不进入窗口状态恢复。
   - Quick Look 等系统预览中不出现秘密。
-- **进程加固**：Hardened Runtime + Library Validation，阻止 `DYLD_*` 注入和加载未签名库。
+- **进程加固**：Hardened Runtime，阻止 `DYLD_*` 注入；Rust 核心静态链接、不加载第三方动态库。临时签名下无法按团队启用 Library Validation（ADR-0003）。
 - **诊断**：默认不做任何远程上报。用户手动导出的诊断包会先自动脱敏，导出前可预览内容。
 
 ## 10. 设备、加入与密钥轮换（M2）
@@ -175,7 +176,6 @@ AAD = fixed_binary_encode(
   - 设备证书由账户签名密钥签发。没有账户密钥就无法伪造设备，也就写不出能被其他设备接受的数据。
 - **加入新设备**：必须同时具备主密码、账户密钥和同步位置的访问权。
   - 账户密钥的传递方式：局域网配对（Noise XX，6 个词的短认证串由用户确认）、扫码，或手动输入应急包。
-  - 也可以通过 iCloud 钥匙串同步账户密钥。这是可选项，默认关闭，开启前会向用户说明代价。
 - **新设备审批**：没有服务端，无法强制审批。其他设备在发现新的设备证书后会立即通知用户，用户可以一键撤销并轮换密钥。
 - **撤销**：
   - 撤销记录由账户密钥签名，写明被撤销设备最后一个被接受的段序号，之后该设备的段一律拒绝。

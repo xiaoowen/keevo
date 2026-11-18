@@ -49,8 +49,8 @@ flowchart LR
 
 | 层 | 选择 | 理由 | 备选与不选的原因 |
 |---|---|---|---|
-| 核心逻辑 | **Rust**（cargo workspace） | 内存安全；一套实现服务 macOS、扩展（WASM）、CLI，以及未来的 iOS / Windows / Linux；密码学生态成熟（1Password、Bitwarden 也都用 Rust 写核心） | Go：有 GC，难以可靠清除内存中的秘密，WASM 体积大。各端各写一套：实现不一致本身就是漏洞来源 |
-| macOS 应用 | **Swift 6 + SwiftUI**（必要处用 AppKit） | 原生体验最好；与 Touch ID、Secure Enclave、AutoFill 扩展、菜单栏的系统集成最好；攻击面比 Electron 小 | Electron：体积大、攻击面大、缺乏原生感。Tauri：跨平台好，但 macOS 原生度与系统扩展支持不如 SwiftUI，可作为未来 Windows/Linux 的候选 |
+| 核心逻辑 | **Rust**（cargo workspace） | 内存安全；一套实现服务 macOS、扩展（WASM）、CLI，以及未来的 Windows / Linux；密码学生态成熟（1Password、Bitwarden 也都用 Rust 写核心） | Go：有 GC，难以可靠清除内存中的秘密，WASM 体积大。各端各写一套：实现不一致本身就是漏洞来源 |
+| macOS 应用 | **Swift 6 + SwiftUI**（必要处用 AppKit） | 原生体验最好；与 Touch ID、Secure Enclave、菜单栏的系统集成最好；攻击面比 Electron 小 | Electron：体积大、攻击面大、缺乏原生感。Tauri：跨平台好，但 macOS 原生度与系统扩展支持不如 SwiftUI，可作为未来 Windows/Linux 的候选 |
 | Rust ↔ Swift | **UniFFI** | Mozilla 维护；支持 async 与对象句柄；产物打包为 XCFramework | 手写 C ABI：工作量大，易出内存错误 |
 | 浏览器扩展 | **TypeScript（strict）+ Svelte 5 + Vite**，Manifest V3 | 编译后运行时极小、依赖少，降低供应链风险；性能好 | React：生态大，但依赖树与包体积更大 |
 | 本地存储 | **SQLite**（rusqlite，WAL 模式） | 可靠、支持事务、单文件；行内只存密文 | SQLCipher：应用层已全量加密，整库加密收益有限，可作为后续纵深防御 |
@@ -88,7 +88,7 @@ flowchart LR
 - **M1 采用单进程常驻**：开机登录项启动，关闭所有窗口后继续在菜单栏运行。
 - **Vault Service** 是应用内的一个模块，持有唯一的解锁状态，为 UI、扩展、CLI、SSH Agent 提供统一接口。
 - Vault Service 的接口从 M1 起就**按进程边界设计**（消息化、无共享内存假设）。以后可以把它拆成独立的后台 helper（`SMAppService`）做权限分离，改动将是机械性的。
-- **M2 的 AutoFill 凭据提供扩展**是独立的沙盒进程，通过 App Group 内的 IPC 向 Vault Service 请求数据，具体设计在 M2 定稿。
+- **AutoFill 凭据提供扩展**（系统级自动填充）需要团队签发的 entitlement，Keevo 不绑定开发者团队，因此不做（ADR-0003）。
 
 ### 4.2 Swift ↔ Rust 边界
 
@@ -103,13 +103,13 @@ flowchart LR
 
 | 内容 | 位置 |
 |---|---|
-| 保险库数据库（只有密文） | `~/Library/Group Containers/<TeamID>.keevo/vault.sqlite` |
+| 保险库数据库（只有密文） | `~/Library/Application Support/Keevo/vault.sqlite`（不使用需要 Team ID 的 App Group 容器，ADR-0003） |
 | 附件分块（密文） | `…/attachments/<id>/<n>` |
 | 自动备份（密文） | `…/backups/`，可另选外部位置 |
 | IPC socket | `…/ipc/`（目录权限 0700） |
-| 账户密钥 | 数据保护钥匙串，`WhenUnlockedThisDeviceOnly`，不同步到 iCloud |
-| Touch ID 解锁材料 | Secure Enclave 密钥包裹后存入钥匙串 |
-| 浏览器配对密钥 | 钥匙串 |
+| 账户密钥 | Secure Enclave 密钥包裹后存成文件（`…/keys/`，0600），只能在本机解开 |
+| Touch ID 解锁材料 | 需要用户在场的 Secure Enclave 密钥包裹 AUK，存成文件 |
+| Vault Service 静态密钥、浏览器配对记录 | Secure Enclave 密钥包裹后存成文件；配对记录存入加密数据库 |
 | 设备签名密钥（M2） | Secure Enclave，不可导出，仅限本机 |
 | iCloud 同步数据（M2） | `iCloud 云盘/Keevo/`（`~/Library/Mobile Documents/com~apple~CloudDocs/Keevo/`），只有密文 |
 | 本设备日志段的本地副本（M2） | `…/sync-outbox/` |
@@ -122,11 +122,12 @@ flowchart LR
 
 ### 4.4 构建与分发
 
-- **M0 空壳**：用 SwiftPM 构建（`scripts/build-macos.sh`），先编译 Rust 静态库，再生成 UniFFI 绑定，最后编译 Swift。**M1.1** 改为 Xcode 工程，以支持签名、entitlements、钥匙串与 Touch ID。
-- Developer ID 签名、Hardened Runtime、Library Validation、Apple 公证。
-- **M1 不启用 App Sandbox**：需要向各浏览器目录写入 Native Messaging 清单、自定义 SSH Agent socket 路径、安装 CLI。以最小 entitlements 作为补偿；Mac App Store 版本后续再评估。
+- **M0 空壳**：用 SwiftPM 构建（`scripts/build-macos.sh`），先编译 Rust 库，再生成 UniFFI 绑定，最后编译 Swift。**M1.1** 打包为完整的应用包（含 native host 与 CLI），Rust 核心静态链接。
+- **签名**：临时签名 + Hardened Runtime。不公证；不加载第三方动态库，以此代替按团队放行的 Library Validation（ADR-0003）。
+- **分发**：GitHub Releases，附 SHA-256 校验和与 Sigstore 签名，可复现构建；另提供从源码构建的脚本。首次打开需要用户在"系统设置 → 隐私与安全性"中放行。
+- **不启用 App Sandbox**：需要向各浏览器目录写入 Native Messaging 清单、自定义 SSH Agent socket 路径、安装 CLI。不使用任何需要团队签发的 entitlement；不上 Mac App Store。
 - **iCloud**：同步使用 iCloud 云盘中的普通文件夹，不需要 iCloud 权限与描述文件（[ADR-0002](adr/0002-icloud-drive-folder-without-team.md)）。
-- **团队与签名**：开发构建使用临时签名，不绑定任何现有团队。Developer ID 公证、native host 的签名校验、Touch ID（数据保护钥匙串）需要 Keevo 自己的开发者账号，最迟在 M3 前申请。
+- **团队**：不绑定任何 Apple 开发者团队，也不为 Keevo 申请（[ADR-0003](adr/0003-no-apple-developer-team.md)）。native host 的身份校验改为固定 cdhash；Touch ID 与本机密钥改用 Secure Enclave 包裹的文件（[技术验证](spikes/2026-11-18-secure-enclave-without-team.md)）。
 - **局域网配对**：需要声明 `NSLocalNetworkUsageDescription` 与 `NSBonjourServices`，以便触发系统的本地网络权限提示。
 - 自动更新用 Sparkle 2（EdDSA 签名，禁止降级），同时提供 Homebrew Cask。
 - 提供 Universal 二进制（Apple Silicon 优先）。
@@ -190,8 +191,8 @@ sequenceDiagram
 扩展 → native host → Vault Service 这条链路有三层防护：
 
 1. **操作系统层：对端身份校验**
-   - Socket 位于 App Group 容器内，目录权限 0700。
-   - Vault Service 通过对端的 audit token 取得代码签名，要求对端由 Keevo 的 Team ID 签名，且是预期的二进制（`keevo-native-host` 或 `keevo` CLI）。
+   - Socket 位于数据目录 `~/Library/Application Support/Keevo/ipc/`，目录权限 0700。
+   - Vault Service 通过对端的 audit token 取得代码签名，要求对端的 cdhash 与本应用包内的 `keevo-native-host` 或 `keevo` CLI 一致（Keevo 不绑定团队，没有 Team ID 可校验，`spec/ipc.md` §3.1）。
    - native host 启动时检查父进程是否为已知浏览器（按代码签名 Team ID 白名单），并检查 Chrome 传入的扩展来源。浏览器侧的清单 `allowed_origins` 只包含 Keevo 扩展 ID。
    - 父进程检查**只是纵深防御**：同用户进程可以用 fork→exec 让 host 看到一个签名浏览器父进程（`spec/ipc.md` §3.2）。因此设计上假设扩展落盘的静态私钥可能被冒充使用，由第 3 层的按站点授权兜底。
 2. **应用层：端到端加密**
@@ -230,7 +231,7 @@ sequenceDiagram
 
 ## 8. SSH Agent
 
-- **Socket**：`~/Library/Group Containers/<TeamID>.keevo/ssh/agent.sock`，另提供便捷软链 `~/.keevo/agent.sock`。
+- **Socket**：`~/Library/Application Support/Keevo/ssh/agent.sock`，另提供便捷软链 `~/.keevo/agent.sock`。
 - **支持的算法**：Ed25519、`rsa-sha2-256/512`、ECDSA P-256 签名。只暴露标记为"在 Agent 中可用"的密钥，**不接受 `ssh-add` 加入外部密钥**。
 - **授权**：
   - 通过 socket 对端 PID 解析进程树，识别出终端应用与具体命令，显示在授权弹窗里。

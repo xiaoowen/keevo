@@ -13,11 +13,11 @@ pub const SOCKET_NAME: &str = "keevo.sock";
 /// Vault Service 的 socket 路径。
 ///
 /// - **debug 构建**：`KEEVO_DEV_SOCKET`，否则为 `~/Library/Application Support/Keevo-Dev/ipc/keevo.sock`。
-/// - **release 构建**：App Group 容器 `~/Library/Group Containers/<Team ID>.app.keevo/ipc/keevo.sock`。
-///   Team ID 在构建时通过 `KEEVO_TEAM_ID` 提供；未提供时返回错误（宁可不工作，也不用不确定的位置）。
+/// - **release 构建**：`~/Library/Application Support/Keevo/ipc/keevo.sock`。Keevo 不绑定开发者团队，
+///   不使用 App Group 容器（ADR-0003）。
 ///
 /// # Errors
-/// 无法确定主目录，或 release 构建未配置 Team ID 时返回错误。
+/// 无法确定主目录时返回错误。
 pub fn socket_path() -> Result<PathBuf, IpcError> {
     if cfg!(debug_assertions) {
         if let Some(p) = std::env::var_os(DEV_SOCKET_ENV) {
@@ -27,10 +27,8 @@ pub fn socket_path() -> Result<PathBuf, IpcError> {
             .join("Library/Application Support/Keevo-Dev/ipc")
             .join(SOCKET_NAME));
     }
-    let team = option_env!("KEEVO_TEAM_ID")
-        .ok_or_else(|| IpcError::Io("KEEVO_TEAM_ID not configured".into()))?;
     Ok(home()?
-        .join(format!("Library/Group Containers/{team}.app.keevo/ipc"))
+        .join("Library/Application Support/Keevo/ipc")
         .join(SOCKET_NAME))
 }
 

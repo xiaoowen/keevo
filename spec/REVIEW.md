@@ -184,7 +184,7 @@ kid(AUK) = HKDF(AUK, salt = account_id, info = "keevo/v1/auk-kid", L = 16)
 | 附件分块加密（STREAM） | 未定义，crypto.md v0.2 |
 | Ed25519 公钥派生与签名格式、同步文件格式、设备证书 | 未定义，M2 |
 | IPC 会话 24 小时上限、填充前要求 Touch ID | 规范已写，**尚未实现** |
-| socket 对端的代码签名要求 | 机制已实现；因 Keevo 尚无自己的 Team ID，开发服务只依赖目录权限（release 构建拒绝该模式） |
+| socket 对端的代码签名要求 | 机制已实现；Keevo 不绑定开发者团队（ADR-0003），改为固定应用包内 host 与 CLI 的 cdhash，待 M1.1 打包时实现；目前开发服务只依赖目录权限（release 构建拒绝该模式） |
 | 秘密跨越 Rust ↔ Swift 边界时是普通字符串 | M1 改为句柄 |
 | serde_json 处理转义时的临时缓冲区不清零 | 已知，属尽力而为 |
 | 短认证串单词表 | 未定稿，M0 原型以十六进制显示 |

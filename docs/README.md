@@ -49,7 +49,7 @@
 2. M1 纯本地 MVP（4–5 个月）
 3. M2 iCloud 与云盘同步，完成首次审计（3–4 个月）
 4. M3 1.0（2–3 个月）
-5. M4+：iOS、共享、更多平台
+5. M4+：共享、更多浏览器与桌面平台
 
 ## 关键决策
 
@@ -62,8 +62,8 @@
 | D5 | M1 是否包含同步 | 不包含。M1 纯本地，但数据格式从第一天起就为同步设计 | 已决定 |
 | D6 | 许可证 | 核心库 MIT OR Apache-2.0；客户端 GPL-3.0 + App Store 附加许可；将来的服务端 AGPL-3.0 | 已落地（见根目录 `LICENSE`；App Store 附加许可待法律审阅） |
 | D7 | 最低系统版本 | macOS 15+，按 macOS 26+ 的设计语言适配 | 已决定 |
-| D8 | M1 分发方式 | Developer ID 签名 + 公证，直接分发；暂不上 Mac App Store | 已决定 |
+| D8 | 分发方式 | 临时签名 + SHA-256 校验和 + Sigstore 签名 + 可复现构建，经 GitHub Releases 直接分发；不公证、不上 Mac App Store（[ADR-0003](adr/0003-no-apple-developer-team.md)） | 已决定 |
 | D9 | 可持续模式 | 以捐赠为主；官方托管同步依赖服务端，随服务端一起再议 | 已决定 |
 | D10 | 同步方案 | 基于不可变文件的加密日志；默认 iCloud，兼容任意同步文件夹；M2 交付（[ADR-0001](adr/0001-file-based-cloud-sync.md)） | 已决定 |
 | D11 | 自托管服务端 | 暂缓、不排期；同步引擎通过 `SyncStore` 预留扩展点 | 已决定 |
-| D12 | 开发者团队与 iCloud 位置 | 不绑定任何现有团队；iCloud 同步用 iCloud 云盘中的普通文件夹，专属容器待 Keevo 有自己的开发者账号后再评估（[ADR-0002](adr/0002-icloud-drive-folder-without-team.md)）。正式发布前（最迟 M3）为 Keevo 申请开发者账号 | 已决定 |
+| D12 | 开发者团队与 iCloud 位置 | 不绑定任何 Apple 开发者团队，也不为 Keevo 申请；iCloud 同步用 iCloud 云盘中的普通文件夹（[ADR-0002](adr/0002-icloud-drive-folder-without-team.md)、[ADR-0003](adr/0003-no-apple-developer-team.md)）。依赖团队的功能（公证、iOS、系统级自动填充、Safari、Mac App Store）移出路线图 | 已决定 |

@@ -1,7 +1,7 @@
 # Keevo 本地通信协议（IPC）
 
 - **版本**：0.2（草案）
-- **状态**：已按 2026-11-18 模型评审修订（[处理记录](../docs/reviews/2026-11-18-model-review-response.md)），待外部人工评审
+- **状态**：已按 2026-11-18 模型评审修订（[处理记录](../docs/reviews/2026-11-18-model-review-response.md)）
 - **参考实现**：
   - `crates/keevo-crypto` 的 `noise` 模块（Noise 握手与传输加密）
   - `crates/keevo-ipc`（分帧、消息、配对与会话）
@@ -32,23 +32,21 @@ CLI 的会话授权（按终端会话划分）在 v0.2 定义。
 | native host ↔ Vault Service | 4 字节**大端序**长度 + 内容 | 1 MiB |
 
 - 长度为 0 或超过上限时，接收方必须立即断开连接，不能尝试恢复。
-- Vault Service 的 socket 位于 App Group 容器内的 `ipc/` 目录，目录权限 0700。
+- Vault Service 的 socket 位于数据目录 `~/Library/Application Support/Keevo/ipc/`，目录权限 0700。Keevo 不绑定开发者团队，不使用 App Group 容器（ADR-0003）。
 
 ## 3. 对端身份校验（操作系统层）
 
 ### 3.1 Vault Service 校验 socket 对端
 
 1. 通过 `LOCAL_PEERTOKEN` 取得对端的 audit token，再以 `kSecGuestAttributeAudit` 属性调用 `SecCodeCopyGuestWithAttributes` 得到对端代码对象。不得只凭 PID 标识对端（PID 可被复用）。
-2. 用代码签名要求校验：
+2. **固定 cdhash 校验**：Keevo 不绑定任何开发者团队，所有产物都是临时签名，没有 Team ID 可供校验（ADR-0003）。改为：
+   - Vault Service 启动时读取**本应用包内** `Contents/MacOS/keevo-native-host` 与 `keevo` CLI 的代码签名，取得它们的 cdhash；
+   - 对端必须满足代码签名要求 `cdhash H"<其中之一>"`。
 
-```
-anchor apple generic
-and certificate leaf[subject.OU] = "<Keevo Team ID>"
-and (identifier "app.keevo.native-host" or identifier "app.keevo.cli")
-```
-
+   应用包内的 host、CLI 与 Vault Service 一同构建、一同更新，cdhash 随版本变化也始终一致。
 3. 校验失败时立即断开，并记入本地安全日志。
-4. 从源码自行构建的 CLI 不满足上述要求：用户在 App 中显式信任后，固定其 cdhash（v0.2）。
+4. 从源码自行构建、不在应用包内的 CLI：用户在 App 中显式信任后，固定其 cdhash（v0.2）。
+5. **信任边界**：同用户进程可以替换整个应用包，但那等于替换 Keevo 本身，属于非目标（`docs/security.md` §1）。
 
 ### 3.2 native host 校验父进程
 
@@ -61,7 +59,7 @@ and (identifier "app.keevo.native-host" or identifier "app.keevo.cli")
 
 > **M0 原型的实现状态**：
 > - §3.2 父进程校验：已实现，按代码签名（`crates/keevo-macos`）。白名单目前只有已在构建机上核实的 Google Chrome（Team ID `EQHXZ8M8AV`）。
-> - §3.1 socket 对端校验：机制已实现（基于 `LOCAL_PEERTOKEN` 取得的 audit token），但 Keevo 尚无 Team ID 与签名证书，开发服务只依赖 socket 目录的 0700 权限。release 构建拒绝这种模式。
+> - §3.1 socket 对端校验：按代码签名要求校验的机制已实现（基于 `LOCAL_PEERTOKEN` 取得的 audit token，要求字符串可以是 `cdhash H"…"`）；从自身应用包读取 cdhash 的部分待 M1.1 的应用打包实现。在此之前开发服务只依赖 socket 目录的 0700 权限，release 构建拒绝这种模式。
 > - 仅 debug 构建可用 `KEEVO_DEV_ALLOW_ANY_PARENT` 跳过父进程校验、用 `KEEVO_DEV_SOCKET` 指定 socket 路径，供端到端测试使用。
 >
 > 取得签名证书并启用 §3.1 的代码签名要求之前，不得处理真实数据。
@@ -85,7 +83,7 @@ and (identifier "app.keevo.native-host" or identifier "app.keevo.cli")
   任何一方看到的扩展来源不一致，握手都会失败，因此一个扩展的配对无法被挪给另一个扩展使用。
 - **双方的静态密钥**：
   - 扩展的静态密钥在首次配对时生成，存于 `chrome.storage.local`。
-  - Vault Service 的静态密钥在首次启动时生成，存于钥匙串（`ThisDeviceOnly`）。
+  - Vault Service 的静态密钥在首次启动时生成，由 Secure Enclave 密钥包裹后存入数据目录（不使用钥匙串，ADR-0003）。
 
 ### 4.2 配对（XX）
 
@@ -266,4 +264,4 @@ and (identifier "app.keevo.native-host" or identifier "app.keevo.cli")
 | 版本 | 日期 | 说明 |
 |---|---|---|
 | 0.1 | 2026-11-17 | 首个草案 |
-| 0.2 | 2026-11-18 | 按模型评审修订：配对承诺与从第 1 条消息起算的时限（I1）；握手负载必须检查；撤销时每个请求都重新核对配对记录并主动断开（F1）；父进程校验降为纵深防御（F2）；`fill` 按站点授权与频率限制（F2、I3），新增 `not_authorized`；更正 §3.1 的 API 名称；补充显示名处理规则 |
+| 0.2 | 2026-11-18 | 按模型评审修订：配对承诺与从第 1 条消息起算的时限（I1）；握手负载必须检查；撤销时每个请求都重新核对配对记录并主动断开（F1）；父进程校验降为纵深防御（F2）；`fill` 按站点授权与频率限制（F2、I3），新增 `not_authorized`；更正 §3.1 的 API 名称；补充显示名处理规则。按 ADR-0003（不绑定开发者团队）：§3.1 改为固定应用包内 host 与 CLI 的 cdhash，socket 与静态密钥移出 App Group 与钥匙串 |

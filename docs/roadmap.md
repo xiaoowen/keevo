@@ -10,9 +10,9 @@
 |---|---|---|---|
 | **M0 基础** | 6–8 周 | 规范、工程骨架、CI、设计系统 | 公开仓库与设计文档 |
 | **M1 本地保险库（MVP）** | 4–5 个月 | macOS 应用 + Chrome 扩展 + SSH Agent + CLI，纯本地运行 | 内测 Alpha |
-| **M2 云同步** | 3–4 个月 | iCloud 与文件夹同步、新设备加入、通行密钥、系统级自动填充；首次外部审计 | 公开 Beta |
+| **M2 云同步** | 3–4 个月 | iCloud 与文件夹同步、新设备加入、Chrome 扩展中的通行密钥；首次外部审计 | 公开 Beta |
 | **M3 1.0** | 2–3 个月 | 修复审计问题、稳定性、文档、可复现构建 | 1.0 正式版 |
-| **M4+ 扩展** | 持续 | iOS、共享保险库、更多浏览器与桌面平台 | — |
+| **M4+ 扩展** | 持续 | 共享保险库、更多浏览器与桌面平台 | — |
 
 ## 2. M0 基础（6–8 周）
 
@@ -27,16 +27,16 @@
 | ✅ | `keevo-crypto` | 2SKD、加密信封、密钥包裹、密钥集、账户密钥编码；含 RFC 已知答案测试与跨实现向量测试 |
 | ✅ | `keevo-format`、`keevo-store`、`keevo-core` | 记录映射与因果合并（含 300 组多设备随机模拟与分组合并检验）、SQLite schema v2、账户创建 / 解锁 / 锁定与条目读写、冲突处理 |
 | ✅ | iCloud 技术验证 | iCloud 云盘中的普通文件夹无需证书即可完成写入、上传状态、移除本地内容、按需下载、文件协调与变化监听，4 次运行全部通过（[报告](spikes/2026-11-18-icloud-folder.md)）；据此决定不绑定团队、采用普通文件夹（[ADR-0002](adr/0002-icloud-drive-folder-without-team.md)）。跨设备延迟与 Dropbox / OneDrive 移到 M2 的真实环境长测 |
-| ◐ | 打通 UniFFI → Swift | 已完成：`keevo-ffi`、SwiftUI 空壳应用、Swift 端冒烟测试（创建 → 锁定 → 解锁 → 读写条目）。待做：钥匙串保存账户密钥与 Touch ID，需要签名与 Xcode 工程，放到 M1.1 |
+| ◐ | 打通 UniFFI → Swift | 已完成：`keevo-ffi`、SwiftUI 空壳应用、Swift 端冒烟测试（创建 → 锁定 → 解锁 → 读写条目）。待做：账户密钥与 Touch ID 改用 Secure Enclave 包裹的文件（不需要团队，已做[技术验证](spikes/2026-11-18-secure-enclave-without-team.md)），放到 M1.1 |
 | ✅ | 扩展骨架 + Native Messaging 全链路原型 | `keevo-native-host`（父进程代码签名校验）、`keevo-service`（socket 服务与对端 audit token 校验机制）、`keevo-wasm` + MV3 扩展骨架（最小权限：无网站权限，点击弹窗才填充）。两套端到端测试：Rust 侧与扩展 WASM 侧都经真实 native host 与 socket 跑通配对 → 填充。待你在真实 Chrome 中手动验证一次 |
 | ✅ | 设计系统 v0 | `design/tokens` 单一来源，生成 CSS 与 Swift，160 组 WCAG 对比度校验接入 CI；macOS 与扩展已接入令牌和 v0 组件；高保真稿 6 张（总览、锁屏、主窗口浅色、开发者条目深色、扩展弹窗、内联菜单与钓鱼拦截） |
 | ✅ | CI | 格式、clippy、测试（Linux + macOS）、密码学边界、测试向量比对、cargo-deny、cargo-vet、macOS 冒烟测试、6 个模糊测试目标 |
 | ✅ | 治理文件 | 多许可证落地（App Store 附加许可为草案，待法律审阅）、`CONTRIBUTING.md`（DCO）、`SECURITY.md`、`CODE_OF_CONDUCT.md`、ADR 模板、CODEOWNERS、PR 模板 |
 
-| ✅ | 规范的模型评审 | 2026-11-18 完成，6 项发现与 10 处规范与实现的不一致全部处理（[处理记录](reviews/2026-11-18-model-review-response.md)）。不能替代下面的外部人工评审 |
+| ✅ | 规范的外部模型评审 | 2026-11-18 完成，6 项发现与 10 处规范与实现的不一致全部处理（[处理记录](reviews/2026-11-18-model-review-response.md)） |
 
 **退出标准**：
-- 规范至少经过一位有密码学背景的外部人士评审（评审说明：[spec/REVIEW.md](../spec/REVIEW.md)）。**尚未完成**。
+- 规范经过外部模型评审，评审发现全部处理（评审说明：[spec/REVIEW.md](../spec/REVIEW.md)）。不再要求外部人工评审。
 - "创建 → 锁定 → 解锁 → 读写条目"的完整流程，在 Rust 测试和 macOS 空壳应用中都能跑通。
 
 ## 3. M1 本地保险库 MVP（4–5 个月）
@@ -62,7 +62,7 @@
   - CLI（`read` / `run` / `inject` / `item` / `totp` / `generate` / `lock`）。
   - `keevo://` 引用；`.env` 导入导出。
 
-**不包含**：同步、通行密钥、Safari 与系统级 AutoFill、共享、iOS、信用卡与身份类型。
+**不包含**：同步、通行密钥、共享、信用卡与身份类型。Safari、系统级 AutoFill 与 iOS 依赖开发者团队，不在计划内（ADR-0003）。
 
 **为同步提前做的准备**：M1 的数据模型已经采用修订图、记录级 HLC 时间戳和墓碑（见 [sync.md §2–§3](sync.md#2-本地存储模型sqlite)），因此 M2 开启同步时不需要做数据迁移。
 
@@ -104,9 +104,7 @@
   - 新设备通知、撤销
   - 两种密钥轮换（修改主密码、应急轮换）
 - [ ] 同步状态界面与异常处理（[ux.md §3.9–§3.10](ux.md#39-开启同步m2)）
-- [ ] 通行密钥：
-  - Chrome 扩展中的 WebAuthn 支持
-  - macOS AutoFill 凭据提供扩展，覆盖 Safari 与原生应用
+- [ ] 通行密钥：Chrome 扩展中的 WebAuthn 支持。（覆盖 Safari 与原生应用的 AutoFill 凭据提供扩展需要开发者团队，不做，ADR-0003）
 - [ ] 首次外部审计：
   - 密码学设计
   - `keevo-crypto`、`keevo-format`、`keevo-sync`
@@ -130,14 +128,11 @@
 
 按当前优先级排列，会根据社区反馈调整：
 
-1. **iOS**：
-   - 复用 Rust 核心与 SwiftUI 组件，加上 AutoFill 扩展。移动端是大多数用户的硬需求。
-   - iCloud 同步可以直接复用同一个容器。
-2. **WebDAV 与 S3 直连同步**：方便 iOS 和不想安装云盘客户端的用户；可接入 Nextcloud、群晖、坚果云等。
-3. **更多浏览器**：Firefox、Safari Web Extension、Edge 商店。
-4. **Windows / Linux 桌面**：用 Tauri 或原生 UI，复用 Rust 核心。
-5. **CXF 标准导入导出**：视生态进度，可以提前。
-6. **共享保险库与家庭**：
+1. **WebDAV 与 S3 直连同步**：方便不想安装云盘客户端的用户；可接入 Nextcloud、群晖、坚果云等。
+2. **更多浏览器**：Firefox、Edge 商店。
+3. **Windows / Linux 桌面**：用 Tauri 或原生 UI，复用 Rust 核心。
+4. **CXF 标准导入导出**：视生态进度，可以提前。
+5. **共享保险库与家庭**：
    - 采用混合后量子 HPKE；成员公钥通过安全码比对验证。
    - 多人共享需要一个协调方：可以基于 iCloud 共享文件夹，也可以借此契机启动自托管服务端，届时单独评审。
 7. **紧急访问与社交恢复**。
@@ -155,7 +150,7 @@
 | 自动填充兼容性差 | 体验差 | 回归语料库；提供"无法填充"上报工具（用户主动提交脱敏的表单结构，不含任何值） |
 | Chrome 商店审核或政策变化 | 发布受阻 | 遵循 MV3 最佳实践；权限最小化；提前提交审核；准备开发者模式安装文档作为后备 |
 | Apple 平台变化 | 功能受限 | 跟进每年 WWDC；只使用公开 API |
-| 没有自己的开发者账号 | 无法公证发布；Touch ID 方案可能受限 | 最迟 M3 前为 Keevo 申请组织开发者账号；M1.1 先验证 Touch ID 对团队签名的依赖（ADR-0002） |
+| 不绑定开发者团队（ADR-0003） | 无法公证，首次安装需要用户手动放行；没有 iOS、系统级自动填充与 Safari | 安装说明写清放行步骤与校验和核对；提供从源码构建；Touch ID 已验证可用 Secure Enclave 包裹文件实现 |
 | 维护者单点（bus factor） | 长期风险 | 尽早吸引核心贡献者；发布密钥由多人持有；关键知识全部文档化 |
 | 与 1Password 的体验差距 | 影响采用率 | 设计系统先行；性能预算写进验收标准；可用性测试常态化 |
 

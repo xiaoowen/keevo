@@ -1,7 +1,7 @@
 # Keevo 加密规范
 
 - **版本**：0.2（草案）
-- **状态**：已按 2026-11-18 模型评审修订（[处理记录](../docs/reviews/2026-11-18-model-review-response.md)），待外部人工评审。评审通过前，格式可能有不兼容的变更。
+- **状态**：已按 2026-11-18 模型评审修订（[处理记录](../docs/reviews/2026-11-18-model-review-response.md)）。评审通过前，格式可能有不兼容的变更。
 - **参考实现**：`crates/keevo-crypto`（Rust）
 - **独立实现**：`spec/reference/generate_vectors.py`（Python，基于 argon2-cffi 与 libsodium），用来生成测试向量。
 - **测试向量**：`spec/test-vectors/crypto-v1.json`

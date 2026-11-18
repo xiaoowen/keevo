@@ -189,9 +189,10 @@ keevo://<保险库>/<条目>[/<分区>]/<字段>[?attribute=otp&profile=prod]
 | 安全中心 | ✅ | 当前网站提示 | | |
 | 多设备同步：iCloud / 云盘文件夹 / Syncthing / NAS | | | ✅ | |
 | 新 Mac 加入（局域网配对、扫码） | | | ✅ | |
-| 通行密钥（Passkey） | | | ✅ | |
-| 系统级自动填充（Safari 与原生 App） | | | ✅ | |
-| iOS、共享保险库、更多浏览器与桌面平台 | | | | ✅ |
+| 通行密钥（Passkey，Chrome 扩展中） | | | ✅ | |
+| 共享保险库、更多浏览器与桌面平台 | | | | ✅ |
+
+系统级自动填充（Safari 与原生 App）、Safari 扩展与 iOS 应用都依赖 Apple 开发者团队。Keevo 不绑定团队，因此不在计划内（[ADR-0003](adr/0003-no-apple-developer-team.md)）。
 | WebDAV / S3 直连同步、自托管服务端 | | | | ✅ |
 
 ## 6. 非功能需求
