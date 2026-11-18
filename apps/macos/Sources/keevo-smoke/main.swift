@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later（附加 App Store 许可，见仓库根目录 LICENSE）
 //
 // 端到端冒烟测试：经 UniFFI 从 Swift 调用 Rust 核心，覆盖 M0 退出标准
-// "创建 → 锁定 → 解锁 → 读写条目"，并验证重新打开数据库后数据完整。
+// "创建 → 锁定 → 解锁 → 读写条目"，并验证重新打开数据库后数据完整；
+// 以及 M1.1 的条目详情、批量编辑、历史与恢复、回收站与永久删除。
 
 import Foundation
 import KeevoKit
@@ -86,6 +87,44 @@ check(fields.contains { $0.kind == "url" && $0.value == "https://github.com" }, 
 
 try reopened.renameItem(itemId: itemId, title: "GitHub（工作）")
 check(try reopened.items().first?.title == "GitHub（工作）", "修改标题后读回新值")
+
+// M1.1：详情与批量编辑
+let password0 = fields.first { $0.purpose == "password" }
+check(password0 != nil, "密码字段带有自动填充用途")
+try reopened.updateItem(itemId: itemId, edits: [
+    .setFavorite(favorite: true),
+    .addTag(tag: "work"),
+    .setFieldValue(fieldId: password0?.id ?? "", value: "n3w-🔑"),
+    .addField(kind: "text", label: "备注", purpose: nil, value: "多行\n备注"),
+])
+let detail = try reopened.item(itemId: itemId)
+check(detail.favorite && detail.tags == ["work"] && detail.fields.count == 4, "一次写入应用多个编辑")
+check(detail.fields.contains { $0.id == password0?.id && $0.value == "n3w-🔑" }, "字段值已修改")
+check(detail.conflicts.isEmpty && detail.headCount == 1 && !detail.resurrected, "没有冲突与并发头")
+expectError("不支持的字段类型被拒绝", {
+    try reopened.updateItem(itemId: itemId, edits: [.addField(kind: "file", label: "x", purpose: nil, value: "")])
+}) { if case .InvalidInput = $0 { return true }; return false }
+
+// 历史与恢复到此版本
+let history = try reopened.history(itemId: itemId)
+check(history.count == 3 && history.last?.title == "GitHub", "历史从新到旧列出每次写入")
+let firstRev = history.last?.revId ?? ""
+check(try reopened.revisionFields(itemId: itemId, revId: firstRev).contains { $0.value == "s3cret-🔐" }, "可查看旧版本的字段")
+try reopened.restoreVersion(itemId: itemId, revId: firstRev)
+let restored = try reopened.item(itemId: itemId)
+check(restored.title == "GitHub" && restored.tags.isEmpty && restored.fields.count == 3, "恢复到此版本")
+
+// 回收站与永久删除
+try reopened.trashItem(itemId: itemId)
+check(try reopened.item(itemId: itemId).trashed, "移入回收站")
+try reopened.restoreItem(itemId: itemId)
+check(try !reopened.item(itemId: itemId).trashed, "从回收站恢复")
+try reopened.purgeItem(itemId: itemId)
+expectError("永久删除后读不到", { _ = try reopened.item(itemId: itemId) }) {
+    if case .NotFound = $0 { return true }; return false
+}
+check(try reopened.items().isEmpty, "列表中不再出现")
+check(try reopened.kdfParams().memoryKib > 0, "可读出 KDF 参数")
 
 if failures > 0 {
     print("失败 \(failures) 项")

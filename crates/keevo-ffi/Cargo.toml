@@ -16,5 +16,8 @@ name = "keevo_ffi"
 keevo-core = { path = "../keevo-core" }
 uniffi = "0.32"
 
+[dev-dependencies]
+keevo-format = { path = "../keevo-format" }
+
 [lints]
 workspace = true

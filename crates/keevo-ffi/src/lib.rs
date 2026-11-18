@@ -1,6 +1,7 @@
 //! 通过 UniFFI 把 `keevo-core` 导出给 Swift。
 //!
-//! M0 只导出空壳应用需要的最小接口：创建、打开、解锁、锁定，以及登录条目的读写。
+//! M1.1 导出条目的完整增删改查：详情、编辑、回收站、永久删除、历史与恢复、冲突处理、精简与重建，
+//! 以及 KDF 参数确认。
 //!
 //! **已知限制（M1 处理）**：
 //! - 秘密值（主密码、账户密钥、字段值）目前以普通 `String` 跨越 FFI 边界。
@@ -11,8 +12,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use keevo_core::{
-    AccountSecretKey, CoreError, Edit, FieldData, FieldKind, Id128, ItemType, KdfParams, NewField,
-    Purpose, RecordKey, RecordValue, Vault,
+    AccountSecretKey, CoreError, Edit, FieldData, FieldKind, Id128, ItemDoc, ItemType, KdfParams,
+    NewField, Purpose, RecordKey, RecordValue, RecordVersion, Vault,
 };
 
 uniffi::setup_scaffolding!();
@@ -149,6 +150,148 @@ pub struct FieldEntry {
     pub concealed: bool,
     /// 值。结构化字段（键值对、恢复码）每项一行。
     pub value: String,
+    /// 自动填充用途，如 `password`；没有时为 `None`。
+    pub purpose: Option<String>,
+}
+
+/// 条目详情（合并全部头修订之后的视图）。
+#[derive(uniffi::Record)]
+pub struct ItemDetail {
+    /// ID（十六进制）。
+    pub id: String,
+    /// 所属保险库 ID。
+    pub vault_id: String,
+    /// 条目类型，如 `login`。
+    pub item_type: String,
+    /// 标题。
+    pub title: String,
+    /// 是否收藏。
+    pub favorite: bool,
+    /// 标签，按名称排序。
+    pub tags: Vec<String>,
+    /// 是否在回收站。
+    pub trashed: bool,
+    /// 字段，按排序键排列。
+    pub fields: Vec<FieldEntry>,
+    /// 待处理的冲突。保存前必须先展示（`spec/revisions.md` §5.4）。
+    pub conflicts: Vec<ConflictEntry>,
+    /// 另一台设备删除了它，但这里有并发的修改，已撤销删除。保存即确认恢复。
+    pub resurrected: bool,
+    /// 合并时发现的出处不一致的记录数（`spec/revisions.md` §5.6），保存前必须提示。
+    pub integrity_issues: u32,
+    /// 头修订数；大于 1 表示有尚未收敛的并发修改。
+    pub head_count: u32,
+}
+
+/// 一个记录键上的冲突。
+#[derive(uniffi::Record)]
+pub struct ConflictEntry {
+    /// 记录键（如 `attr:title`、`field:<id>`），处理冲突时原样传回。
+    pub key: String,
+    /// 记录的种类：`title`、`favorite`、`tag`、`section`、`field`，其他属性为 `attr`。界面据此本地化显示。
+    pub kind: String,
+    /// 用户起的名字：字段名、分区名或标签名；标题、收藏等属性为 `None`。
+    pub label: Option<String>,
+    /// 当前胜出的版本。
+    pub current: ConflictVersion,
+    /// 其余并发版本。
+    pub others: Vec<ConflictVersion>,
+}
+
+/// 冲突中的一个版本。
+#[derive(uniffi::Record)]
+pub struct ConflictVersion {
+    /// 写入这个版本的修订 ID。
+    pub rev_id: String,
+    /// 值的文本；`None` 表示这个版本删除了该记录。布尔值为 `true` / `false`，标签为空字符串。
+    pub value: Option<String>,
+    /// 是否默认隐藏（密码等）。
+    pub concealed: bool,
+}
+
+/// 对条目的一次编辑。
+#[derive(uniffi::Enum)]
+pub enum ItemEdit {
+    /// 修改标题。
+    SetTitle {
+        /// 新标题。
+        title: String,
+    },
+    /// 收藏或取消收藏。
+    SetFavorite {
+        /// 是否收藏。
+        favorite: bool,
+    },
+    /// 添加标签。
+    AddTag {
+        /// 标签名。
+        tag: String,
+    },
+    /// 移除标签。
+    RemoveTag {
+        /// 标签名。
+        tag: String,
+    },
+    /// 新增文本类字段（M1.2 再支持键值对、恢复码等结构化字段）。
+    AddField {
+        /// 字段类型，如 `text`、`concealed`。
+        kind: String,
+        /// 显示名。
+        label: String,
+        /// 自动填充用途，如 `username`。
+        purpose: Option<String>,
+        /// 值。
+        value: String,
+    },
+    /// 修改文本类字段的值。
+    SetFieldValue {
+        /// 字段 ID。
+        field_id: String,
+        /// 新值。
+        value: String,
+    },
+    /// 删除字段。
+    RemoveField {
+        /// 字段 ID。
+        field_id: String,
+    },
+}
+
+/// 历史中的一个修订，从新到旧。
+#[derive(uniffi::Record)]
+pub struct HistoryItem {
+    /// 修订 ID。
+    pub rev_id: String,
+    /// 这一修订时的标题；墓碑或已清理时为 `None`。
+    pub title: Option<String>,
+    /// 这一修订时的最近修改时间（Unix 毫秒）；墓碑或已清理时为 `None`。
+    pub updated_ms: Option<u64>,
+    /// 是否为永久删除留下的墓碑。
+    pub deleted: bool,
+    /// 内容是否已被清理，只剩元数据。
+    pub pruned: bool,
+    /// 是否合并了多个分支（写时收敛）。
+    pub merge: bool,
+}
+
+/// 账户的 KDF 参数，用于向用户确认异常的解锁参数（`spec/crypto.md` §5.3）。
+#[derive(uniffi::Record, Clone, Copy, PartialEq, Eq)]
+pub struct KdfInfo {
+    /// 内存（KiB）。
+    pub memory_kib: u32,
+    /// 迭代次数。
+    pub iterations: u32,
+    /// 并行度。
+    pub parallelism: u32,
+}
+
+/// 精简时保留的版本。
+#[derive(uniffi::Record)]
+pub struct KeepVersion {
+    /// 记录键。
+    pub key: String,
+    /// 保留哪一个修订写入的版本。
+    pub rev_id: String,
 }
 
 /// 新建登录条目的输入。
@@ -310,26 +453,7 @@ impl KeevoVault {
     /// 已锁定或条目不存在时返回对应错误。
     pub fn fields(&self, item_id: String) -> Result<Vec<FieldEntry>, KeevoError> {
         let view = self.vault().item(parse_id(&item_id)?)?;
-        let mut fields: Vec<(String, FieldEntry)> = view
-            .doc
-            .records
-            .iter()
-            .filter_map(|(k, v)| match (k, &v.value) {
-                (RecordKey::Field(id), Some(RecordValue::Field(f))) => Some((
-                    f.order.clone(),
-                    FieldEntry {
-                        id: id.to_hex(),
-                        label: f.label.clone(),
-                        kind: field_kind_name(f.kind).to_owned(),
-                        concealed: f.kind.is_concealed(),
-                        value: field_text(&f.data),
-                    },
-                )),
-                _ => None,
-            })
-            .collect();
-        fields.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.id.cmp(&b.1.id)));
-        Ok(fields.into_iter().map(|(_, f)| f).collect())
+        Ok(doc_fields(&view.doc))
     }
 
     /// 修改条目标题。
@@ -348,6 +472,320 @@ impl KeevoVault {
     /// 已锁定或条目不存在时返回对应错误。
     pub fn trash_item(&self, item_id: String) -> Result<(), KeevoError> {
         Ok(self.vault().trash_item(parse_id(&item_id)?)?)
+    }
+
+    /// 条目详情：合并全部头修订之后的视图，含冲突与需要提示的状态。
+    ///
+    /// # Errors
+    /// 已锁定或条目不存在（含已永久删除）时返回对应错误。
+    pub fn item(&self, item_id: String) -> Result<ItemDetail, KeevoError> {
+        let view = self.vault().item(parse_id(&item_id)?)?;
+        let overview = view.doc.overview();
+        let conflicts = view
+            .conflicts
+            .iter()
+            .map(|c| conflict_entry(&view.doc, &c.key))
+            .collect();
+        Ok(ItemDetail {
+            id: view.id.to_hex(),
+            vault_id: view.vault_id.to_hex(),
+            item_type: item_type_name(view.doc.item_type).to_owned(),
+            title: overview.title,
+            favorite: overview.favorite,
+            tags: overview.tags,
+            trashed: overview.trashed_at.is_some(),
+            fields: doc_fields(&view.doc),
+            conflicts,
+            resurrected: view.resurrected,
+            integrity_issues: u32::try_from(view.integrity_issues.len()).unwrap_or(u32::MAX),
+            head_count: u32::try_from(view.head_count).unwrap_or(u32::MAX),
+        })
+    }
+
+    /// 在一次写入中应用多个编辑（写时收敛，`spec/revisions.md` §5.4）。
+    ///
+    /// # Errors
+    /// 输入不合法返回 [`KeevoError::InvalidInput`]；条目过大返回 [`KeevoError::ItemTooLarge`]；
+    /// 超出上限返回 [`KeevoError::ItemNeedsRebuild`]。
+    pub fn update_item(&self, item_id: String, edits: Vec<ItemEdit>) -> Result<(), KeevoError> {
+        let edits = edits
+            .into_iter()
+            .map(core_edit)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(self.vault().update_item(parse_id(&item_id)?, edits)?)
+    }
+
+    /// 从回收站恢复。
+    ///
+    /// # Errors
+    /// 已锁定或条目不存在时返回对应错误。
+    pub fn restore_item(&self, item_id: String) -> Result<(), KeevoError> {
+        Ok(self.vault().restore_item(parse_id(&item_id)?)?)
+    }
+
+    /// 永久删除。不可撤销；条目的内容随后进入正常的历史清理。
+    ///
+    /// # Errors
+    /// 已锁定或条目不存在时返回对应错误。
+    pub fn purge_item(&self, item_id: String) -> Result<(), KeevoError> {
+        Ok(self.vault().purge_item(parse_id(&item_id)?)?)
+    }
+
+    /// 条目的历史，从新到旧。
+    ///
+    /// # Errors
+    /// 已锁定或数据被篡改时返回对应错误。
+    pub fn history(&self, item_id: String) -> Result<Vec<HistoryItem>, KeevoError> {
+        Ok(self
+            .vault()
+            .history(parse_id(&item_id)?)?
+            .into_iter()
+            .map(|h| HistoryItem {
+                rev_id: h.rev_id.to_hex(),
+                title: h.overview.as_ref().map(|o| o.title.clone()),
+                updated_ms: h.overview.as_ref().map(|o| o.updated.millis()),
+                deleted: h.deleted,
+                pruned: h.pruned,
+                merge: h.parents.len() > 1,
+            })
+            .collect())
+    }
+
+    /// 某个历史修订的字段，按排序键排列。
+    ///
+    /// # Errors
+    /// 修订不存在、是墓碑或已清理时返回 [`KeevoError::NotFound`]。
+    pub fn revision_fields(
+        &self,
+        item_id: String,
+        rev_id: String,
+    ) -> Result<Vec<FieldEntry>, KeevoError> {
+        let doc = self
+            .vault()
+            .revision_doc(parse_id(&item_id)?, parse_id(&rev_id)?)?;
+        Ok(doc_fields(&doc))
+    }
+
+    /// 恢复到此版本：把历史修订的值作为一次新的编辑写入。
+    ///
+    /// # Errors
+    /// 修订不存在、是墓碑或已清理时返回 [`KeevoError::NotFound`]。
+    pub fn restore_version(&self, item_id: String, rev_id: String) -> Result<(), KeevoError> {
+        Ok(self
+            .vault()
+            .restore_version(parse_id(&item_id)?, parse_id(&rev_id)?)?)
+    }
+
+    /// 处理冲突：保留写于 `rev_id` 的版本。
+    ///
+    /// # Errors
+    /// 记录键或版本不存在时返回对应错误。
+    pub fn resolve_conflict(
+        &self,
+        item_id: String,
+        key: String,
+        rev_id: String,
+    ) -> Result<(), KeevoError> {
+        let key = parse_key(&key)?;
+        Ok(self
+            .vault()
+            .resolve_conflict(parse_id(&item_id)?, &key, parse_id(&rev_id)?)?)
+    }
+
+    /// 精简（`spec/revisions.md` §7.1）：在一次写入中处理冲突并删除字段，用于 [`KeevoError::ItemTooLarge`]。
+    ///
+    /// # Errors
+    /// 精简后仍然过大时返回 [`KeevoError::ItemTooLarge`]。
+    pub fn compact_item(
+        &self,
+        item_id: String,
+        keep: Vec<KeepVersion>,
+        remove: Vec<String>,
+    ) -> Result<(), KeevoError> {
+        let keep = keep
+            .iter()
+            .map(|k| Ok((parse_key(&k.key)?, parse_id(&k.rev_id)?)))
+            .collect::<Result<Vec<_>, KeevoError>>()?;
+        let remove = remove
+            .iter()
+            .map(|k| parse_key(k))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(self
+            .vault()
+            .compact_item(parse_id(&item_id)?, &keep, &remove)?)
+    }
+
+    /// 重建（`spec/revisions.md` §7.1）：用于 [`KeevoError::ItemNeedsRebuild`]，返回新条目的 ID。
+    ///
+    /// # Errors
+    /// 复制后仍超出上限时返回错误，需要在 `drop` 中选出更多不保留的键。
+    pub fn rebuild_item(&self, item_id: String, drop: Vec<String>) -> Result<String, KeevoError> {
+        let drop = drop
+            .iter()
+            .map(|k| parse_key(k))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(self
+            .vault()
+            .rebuild_item(parse_id(&item_id)?, &drop)?
+            .to_hex())
+    }
+
+    /// 账户的 KDF 参数。[`KeevoError::KdfNeedsConfirmation`] 时把它们展示给用户确认。
+    ///
+    /// # Errors
+    /// 没有账户或参数格式错误时返回对应错误。
+    pub fn kdf_params(&self) -> Result<KdfInfo, KeevoError> {
+        Ok(kdf_info(&self.vault().kdf_params()?))
+    }
+
+    /// 用户确认了 `confirmed` 这组 KDF 参数后解锁。参数已不是这一组时返回
+    /// [`KeevoError::KdfNeedsConfirmation`]，不执行派生（`spec/crypto.md` §5.3）。
+    ///
+    /// # Errors
+    /// 同 [`KeevoVault::unlock`]。
+    pub fn unlock_confirming_kdf(
+        &self,
+        password: String,
+        secret_key: String,
+        confirmed: KdfInfo,
+    ) -> Result<(), KeevoError> {
+        let sk =
+            AccountSecretKey::parse(&secret_key).map_err(|e| KeevoError::InvalidSecretKey {
+                code: e.code().to_owned(),
+            })?;
+        let mut vault = self.vault();
+        let params = vault.kdf_params()?;
+        if kdf_info(&params) != confirmed {
+            return Err(KeevoError::KdfNeedsConfirmation);
+        }
+        Ok(vault.unlock_confirmed_expensive_kdf(&password, &sk, &params)?)
+    }
+}
+
+const fn kdf_info(p: &KdfParams) -> KdfInfo {
+    KdfInfo {
+        memory_kib: p.memory_kib(),
+        iterations: p.iterations(),
+        parallelism: p.parallelism(),
+    }
+}
+
+fn parse_key(s: &str) -> Result<RecordKey, KeevoError> {
+    s.parse().map_err(|_| invalid("record key"))
+}
+
+fn invalid(what: &str) -> KeevoError {
+    KeevoError::InvalidInput {
+        message: what.into(),
+    }
+}
+
+fn core_edit(edit: ItemEdit) -> Result<Edit, KeevoError> {
+    Ok(match edit {
+        ItemEdit::SetTitle { title } => Edit::SetTitle(title),
+        ItemEdit::SetFavorite { favorite } => Edit::SetFavorite(favorite),
+        ItemEdit::AddTag { tag } => Edit::AddTag(tag),
+        ItemEdit::RemoveTag { tag } => Edit::RemoveTag(tag),
+        ItemEdit::AddField {
+            kind,
+            label,
+            purpose,
+            value,
+        } => {
+            let kind = field_kind_from(&kind).ok_or_else(|| invalid("field kind"))?;
+            if matches!(kind, FieldKind::KvList | FieldKind::RecoveryCodes) {
+                return Err(invalid("structured fields are not supported yet"));
+            }
+            let purpose = purpose
+                .map(|p| purpose_from(&p).ok_or_else(|| invalid("purpose")))
+                .transpose()?;
+            Edit::AddField(NewField {
+                kind,
+                label,
+                purpose,
+                data: FieldData::Text(value.as_str().into()),
+            })
+        }
+        ItemEdit::SetFieldValue { field_id, value } => Edit::SetFieldData {
+            field_id: parse_id(&field_id)?,
+            data: FieldData::Text(value.as_str().into()),
+        },
+        ItemEdit::RemoveField { field_id } => Edit::RemoveField(parse_id(&field_id)?),
+    })
+}
+
+/// 文档中的字段，按排序键排列。
+fn doc_fields(doc: &ItemDoc) -> Vec<FieldEntry> {
+    let mut fields: Vec<(String, FieldEntry)> = doc
+        .records
+        .iter()
+        .filter_map(|(k, v)| match (k, &v.value) {
+            (RecordKey::Field(id), Some(RecordValue::Field(f))) => Some((
+                f.order.clone(),
+                FieldEntry {
+                    id: id.to_hex(),
+                    label: f.label.clone(),
+                    kind: field_kind_name(f.kind).to_owned(),
+                    concealed: f.kind.is_concealed(),
+                    value: field_text(&f.data),
+                    purpose: f.purpose.map(|p| purpose_name(p).to_owned()),
+                },
+            )),
+            _ => None,
+        })
+        .collect();
+    fields.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.id.cmp(&b.1.id)));
+    fields.into_iter().map(|(_, f)| f).collect()
+}
+
+/// 冲突的显示：记录键的名称，以及每个版本的值。
+fn conflict_entry(doc: &ItemDoc, key: &RecordKey) -> ConflictEntry {
+    let versions = doc.versions(key);
+    let named = || {
+        versions.iter().find_map(|v| match &v.value {
+            Some(RecordValue::Field(f)) => Some(f.label.clone()),
+            Some(RecordValue::Section(s)) => Some(s.label.clone()),
+            _ => None,
+        })
+    };
+    let (kind, label) = match key {
+        RecordKey::Attr(n) if n == "title" || n == "favorite" => (n.as_str(), None),
+        RecordKey::Attr(_) => ("attr", None),
+        RecordKey::Tag(t) => ("tag", Some(t.clone())),
+        RecordKey::Section(_) => ("section", named()),
+        RecordKey::Field(_) => ("field", named()),
+    };
+    let version = |v: &RecordVersion| ConflictVersion {
+        rev_id: v.rev.to_hex(),
+        value: v.value.as_ref().map(value_text),
+        concealed: matches!(&v.value, Some(RecordValue::Field(f)) if f.kind.is_concealed()),
+    };
+    let mut iter = versions.into_iter();
+    let current = iter.next().map_or(
+        ConflictVersion {
+            rev_id: String::new(),
+            value: None,
+            concealed: false,
+        },
+        version,
+    );
+    ConflictEntry {
+        key: key.to_string(),
+        kind: kind.to_owned(),
+        label,
+        current,
+        others: iter.map(version).collect(),
+    }
+}
+
+fn value_text(v: &RecordValue) -> String {
+    match v {
+        RecordValue::Text(s) => s.expose().to_owned(),
+        RecordValue::Bool(b) => b.to_string(),
+        RecordValue::Int(i) => i.to_string(),
+        RecordValue::Tag => String::new(),
+        RecordValue::Section(s) => s.label.clone(),
+        RecordValue::Field(f) => field_text(&f.data),
     }
 }
 
@@ -423,3 +861,49 @@ const fn field_kind_name(k: FieldKind) -> &'static str {
         FieldKind::KvList => "kv_list",
     }
 }
+
+const ALL_FIELD_KINDS: [FieldKind; 14] = [
+    FieldKind::Text,
+    FieldKind::Multiline,
+    FieldKind::Concealed,
+    FieldKind::Email,
+    FieldKind::Url,
+    FieldKind::Phone,
+    FieldKind::Date,
+    FieldKind::MonthYear,
+    FieldKind::Select,
+    FieldKind::Totp,
+    FieldKind::SshPrivateKey,
+    FieldKind::Reference,
+    FieldKind::RecoveryCodes,
+    FieldKind::KvList,
+];
+
+fn field_kind_from(name: &str) -> Option<FieldKind> {
+    ALL_FIELD_KINDS
+        .into_iter()
+        .find(|k| field_kind_name(*k) == name)
+}
+
+const fn purpose_name(p: Purpose) -> &'static str {
+    match p {
+        Purpose::Username => "username",
+        Purpose::Password => "password",
+        Purpose::Otp => "otp",
+        Purpose::Notes => "notes",
+    }
+}
+
+fn purpose_from(name: &str) -> Option<Purpose> {
+    [
+        Purpose::Username,
+        Purpose::Password,
+        Purpose::Otp,
+        Purpose::Notes,
+    ]
+    .into_iter()
+    .find(|p| purpose_name(*p) == name)
+}
+
+#[cfg(test)]
+mod tests;

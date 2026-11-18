@@ -88,6 +88,15 @@ impl RecordKey {
     }
 }
 
+impl core::str::FromStr for RecordKey {
+    type Err = FormatError;
+
+    /// 从 `attr:title`、`field:<32 位十六进制>` 等字符串解析，规则与解码相同。
+    fn from_str(s: &str) -> Result<Self> {
+        Self::parse(s).ok_or(FormatError::InvalidKey)
+    }
+}
+
 impl fmt::Display for RecordKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

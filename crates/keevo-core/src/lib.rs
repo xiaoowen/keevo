@@ -8,10 +8,10 @@ pub mod url_match;
 mod vault;
 
 pub use error::{CoreError, Result};
-pub use vault::{Edit, ItemSummary, ItemView, NewField, Vault, VaultInfo};
+pub use vault::{Edit, HistoryEntry, ItemSummary, ItemView, NewField, Vault, VaultInfo};
 
 pub use keevo_crypto::{AccountSecretKey, Id128, KdfParams};
 pub use keevo_format::{
     Conflict, FieldData, FieldKind, FieldValue, ItemDoc, ItemOverview, ItemType, KvEntry, Purpose,
-    RecordKey, RecordValue, SecretString,
+    RecordKey, RecordValue, RecordVersion, SecretString,
 };

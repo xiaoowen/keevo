@@ -822,6 +822,7 @@ name = "keevo-ffi"
 version = "0.0.0"
 dependencies = [
  "keevo-core",
+ "keevo-format",
  "uniffi",
 ]
 

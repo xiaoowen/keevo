@@ -36,6 +36,21 @@ pub struct NewField {
     pub data: FieldData,
 }
 
+/// 历史中的一个修订（[`Vault::history`]）。
+#[derive(Debug, Clone)]
+pub struct HistoryEntry {
+    /// 修订 ID。
+    pub rev_id: Id128,
+    /// 父修订。多于一个表示这是一次合并（写时收敛）。
+    pub parents: Vec<Id128>,
+    /// 是否为永久删除留下的墓碑。
+    pub deleted: bool,
+    /// 内容是否已被清理（`spec/revisions.md` §7.2），只剩元数据。
+    pub pruned: bool,
+    /// 这一修订时的概要；墓碑或已清理时为 `None`。
+    pub overview: Option<ItemOverview>,
+}
+
 /// 对条目的一次编辑。
 #[derive(Debug, Clone)]
 pub enum Edit {
@@ -677,6 +692,79 @@ impl Vault {
         Ok(new_id)
     }
 
+    /// 条目的全部历史修订，从新到旧（本机写入或收到的顺序）。已清理与墓碑修订只有元数据。
+    ///
+    /// # Errors
+    /// 已锁定返回 [`CoreError::Locked`]；数据被篡改时返回 [`CoreError::Tampered`]。
+    pub fn history(&self, item_id: Id128) -> Result<Vec<HistoryEntry>> {
+        self.store
+            .history(&item_id)?
+            .into_iter()
+            .map(|row| {
+                let overview = if row.deleted || row.pruned {
+                    None
+                } else {
+                    Some(ItemOverview::decode(
+                        &self.decrypt_part(&row, Part::Overview)?,
+                    )?)
+                };
+                Ok(HistoryEntry {
+                    rev_id: row.rev_id,
+                    parents: row.parents,
+                    deleted: row.deleted,
+                    pruned: row.pruned,
+                    overview,
+                })
+            })
+            .collect()
+    }
+
+    /// 某个历史修订的完整内容。
+    ///
+    /// # Errors
+    /// 修订不属于该条目、是墓碑或内容已被清理时返回 [`CoreError::NotFound`]。
+    pub fn revision_doc(&self, item_id: Id128, rev_id: Id128) -> Result<ItemDoc> {
+        let row = self
+            .store
+            .revision(&rev_id)?
+            .filter(|r| r.object_id == item_id && !r.deleted && !r.pruned)
+            .ok_or(CoreError::NotFound)?;
+        Ok(ItemDoc::decode(&self.decrypt_part(&row, Part::Details)?)?)
+    }
+
+    /// 恢复到此版本（`spec/revisions.md` §7.2）：把历史修订中的记录值作为一次新的编辑写入，
+    /// 而不是回退修订图。回收站状态保持当前的样子；这一版本之后新增的记录被删除；
+    /// 被写入的键上若有未处理的冲突，也随之解决。
+    ///
+    /// # Errors
+    /// 同 [`Vault::revision_doc`] 与 [`Vault::update_item`]。
+    pub fn restore_version(&mut self, item_id: Id128, rev_id: Id128) -> Result<()> {
+        let old = self.revision_doc(item_id, rev_id)?;
+        self.revise(item_id, |doc, hlc, rev| {
+            let keys: std::collections::BTreeSet<RecordKey> = doc
+                .records
+                .keys()
+                .chain(old.records.keys())
+                .filter(|k| !k.is_deletion_state())
+                .cloned()
+                .collect();
+            for key in keys {
+                let before = old.records.get(&key).and_then(|v| v.value.clone());
+                let now = doc.records.get(&key).and_then(|v| v.value.clone());
+                let contested = doc.concurrent.contains_key(&key);
+                if before == now && !contested {
+                    continue;
+                }
+                match before {
+                    Some(value) => doc.set(key, value, hlc, rev)?,
+                    None if now.is_some() || contested => doc.delete(key, hlc, rev)?,
+                    None => {}
+                }
+            }
+            Ok(())
+        })
+    }
+
     /// 条目的历史修订数（含已清理内容的修订）。
     ///
     /// # Errors
@@ -727,26 +815,36 @@ impl Vault {
     }
 
     fn decrypt_heads(&self, heads: &[RevisionRow]) -> Result<Vec<Option<ItemDoc>>> {
-        let session = self.session()?;
         heads
             .iter()
             .map(|h| {
                 if h.deleted {
                     return Ok(None);
                 }
-                let ik = self.item_key(session, h)?;
-                let ct = h.details_ct.as_deref().ok_or(CoreError::Tampered)?;
-                let ctx = context(
-                    session.account_id,
-                    ObjectType::Item,
-                    Part::Details,
-                    h.vault_id,
-                    h.object_id,
-                    h.rev_id,
-                );
-                Ok(Some(ItemDoc::decode(&open(&ik, &ctx, ct)?)?))
+                let bytes = self.decrypt_part(h, Part::Details)?;
+                Ok(Some(ItemDoc::decode(&bytes)?))
             })
             .collect()
+    }
+
+    /// 解密一个条目修订的某个部分（概要或详情），上下文见 `spec/crypto.md` §8.6。
+    fn decrypt_part(&self, row: &RevisionRow, part: Part) -> Result<keevo_crypto::SecretBytes> {
+        let session = self.session()?;
+        let ik = self.item_key(session, row)?;
+        let ct = match part {
+            Part::Overview => row.overview_ct.as_deref(),
+            _ => row.details_ct.as_deref(),
+        }
+        .ok_or(CoreError::Tampered)?;
+        let ctx = context(
+            session.account_id,
+            ObjectType::Item,
+            part,
+            row.vault_id,
+            row.object_id,
+            row.rev_id,
+        );
+        Ok(open(&ik, &ctx, ct)?)
     }
 
     fn write_item_revision(

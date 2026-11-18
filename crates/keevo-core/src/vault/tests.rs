@@ -559,3 +559,58 @@ fn review4_j3_invalid_tag_is_rejected_before_writing() {
     assert_eq!(vault.revision_count(id).unwrap(), 1, "什么都没有写入");
     assert_eq!(vault.item(id).unwrap().doc.overview().title, "t");
 }
+
+/// 历史列出每次编辑；"恢复到此版本"写入一个新修订，恢复旧值，并删除之后新增的记录。
+#[test]
+fn history_and_restore_version() {
+    let (mut vault, _) =
+        Vault::create_with_store(Store::open_in_memory().unwrap(), "pw", fast_params()).unwrap();
+    let vault_id = vault.vaults().unwrap()[0].id;
+    let id = vault
+        .create_item(vault_id, ItemType::Login, "v1", login_fields())
+        .unwrap();
+    let first = vault.history(id).unwrap()[0].rev_id;
+    vault
+        .update_item(id, vec![Edit::SetTitle("v2".into())])
+        .unwrap();
+    vault
+        .update_item(
+            id,
+            vec![Edit::AddTag("work".into()), Edit::SetFavorite(true)],
+        )
+        .unwrap();
+
+    let history = vault.history(id).unwrap();
+    assert_eq!(history.len(), 3);
+    let titles: Vec<String> = history
+        .iter()
+        .map(|h| h.overview.as_ref().unwrap().title.clone())
+        .collect();
+    assert_eq!(titles, ["v2", "v2", "v1"], "从新到旧");
+    assert_eq!(
+        vault.revision_doc(id, first).unwrap().overview().title,
+        "v1"
+    );
+
+    vault.trash_item(id).unwrap();
+    vault.restore_version(id, first).unwrap();
+    let now = vault.item(id).unwrap().doc.overview();
+    assert_eq!(now.title, "v1");
+    assert!(now.tags.is_empty(), "之后新增的标签被删除");
+    assert!(!now.favorite);
+    assert!(now.trashed_at.is_some(), "回收站状态保持当前的样子");
+    assert_eq!(
+        vault.history(id).unwrap().len(),
+        5,
+        "创建、改名、加标签、移入回收站、恢复：恢复是一次新的编辑"
+    );
+
+    let other = vault
+        .create_item(vault_id, ItemType::Login, "x", vec![])
+        .unwrap();
+    assert_eq!(
+        vault.revision_doc(other, first).err(),
+        Some(CoreError::NotFound),
+        "修订不属于该条目"
+    );
+}
