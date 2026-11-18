@@ -20,13 +20,13 @@ mod secret;
 
 pub use error::{FormatError, Result};
 pub use graph::RevisionGraph;
-pub use hlc::{Hlc, HlcClock};
+pub use hlc::{Hlc, HlcClock, MAX_ADOPT_SKEW_MS};
 pub use item::{FieldKind, ItemDoc, ItemOverview, ItemType, Purpose, VaultMeta};
 pub use json::{from_json, to_json};
-pub use merge::{Conflict, HeadState, Merged, merge_heads};
+pub use merge::{Conflict, HeadState, Merged, PURGED_ATTR, TRASHED_ATTR, merge_heads};
 pub use record::{
-    CodeEntry, ConcurrentMap, FieldData, FieldValue, KvEntry, RecordKey, RecordMap, RecordValue,
-    RecordVersion, SectionValue,
+    CodeEntry, ConcurrentMap, FieldData, FieldValue, KvEntry, MAX_SAFE_INT, MAX_VALUE_LEN,
+    RecordKey, RecordMap, RecordValue, RecordVersion, SectionValue,
 };
 pub use secret::SecretString;
 

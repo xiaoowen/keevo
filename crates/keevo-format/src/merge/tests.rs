@@ -316,7 +316,7 @@ fn random_simulation_converges_deterministically() {
             let heads = repo.heads_of(&known[d]);
             let merged = repo.merge(&heads);
             let rev = random_id(&mut rng);
-            let hlc = clocks[d].next(step * 1_000 + skew[d]);
+            let hlc = clocks[d].next(step * 1_000 + skew[d]).unwrap();
             let doc = match merged.doc {
                 Some(mut doc) if !rng.chance(3) => {
                     doc.settle_for_write(hlc, rev);
@@ -580,4 +580,75 @@ fn concurrent_versions_survive_unrelated_edits_until_resolved() {
     assert!(m.conflicts.is_empty());
     assert!(m.doc.as_ref().unwrap().concurrent.is_empty());
     assert_eq!(m.doc.unwrap().get(&title()), Some(&text("A")));
+}
+
+// ---------------------------------------------------------------- 评审第二轮 G2
+
+/// 第二轮 G2：对象墓碑也必须进入可持久化的合并状态。先合并 {D, A} 并写成纯合并修订，
+/// 再与 C 合并，结果必须与一次合并 {D, C, A} 相同（都是已删除）。
+#[test]
+fn review2_g2_object_tombstone_survives_grouped_merge() {
+    let mut repo = Repo::default();
+    repo.commit(id(1), &[], id(100), Some(ItemDoc::new(ItemType::Login)));
+    let mut w = ItemDoc::new(ItemType::Login);
+    w.set(title(), text("W"), Hlc(20), id(2)).unwrap();
+    repo.commit(id(2), &[id(1)], id(100), Some(w.clone()));
+    repo.commit(id(3), &[id(2)], id(100), None); // D：永久删除
+    repo.commit(id(4), &[id(2)], id(101), Some(w)); // C：仍携带写于 W 的标题
+    let mut a = ItemDoc::new(ItemType::Login);
+    a.set(title(), text("A"), Hlc(15), id(5)).unwrap();
+    repo.commit(id(5), &[id(1)], id(102), Some(a));
+
+    let full = repo.merge(&[id(3), id(4), id(5)]);
+    assert!(full.doc.is_none(), "一次合并：删除成立");
+    let da = repo.merge(&[id(3), id(5)]);
+    assert!(da.resurrected);
+    repo.commit(id(6), &[id(3), id(5)], id(102), da.doc);
+    let grouped = repo.merge(&[id(6), id(4)]);
+    assert_eq!(grouped.doc, full.doc, "分组合并改变了对象是否存在");
+}
+
+/// 第二轮 G2：回收站状态在纯合并（不写入恢复操作）下与一次合并相同。
+#[test]
+fn review2_g2_trash_survives_grouped_pure_merge() {
+    let trashed = RecordKey::attr("trashed");
+    let mut repo = Repo::default();
+    repo.commit(id(1), &[], id(100), Some(base_doc(id(1))));
+    let mut d = base_doc(id(1));
+    d.set(trashed.clone(), RecordValue::Int(30), Hlc(30), id(2))
+        .unwrap();
+    repo.commit(id(2), &[id(1)], id(100), Some(d.clone()));
+    let mut a = base_doc(id(1));
+    a.set(title(), text("A"), Hlc(15), id(3)).unwrap();
+    repo.commit(id(3), &[id(1)], id(101), Some(a));
+    let mut c = d;
+    c.set(title(), text("C"), Hlc(40), id(4)).unwrap();
+    repo.commit(id(4), &[id(2)], id(100), Some(c));
+
+    let full = repo.merge(&[id(3), id(4)]);
+    assert!(
+        full.doc.as_ref().unwrap().trashed_at().is_some(),
+        "一次合并：仍在回收站"
+    );
+    let da = repo.merge(&[id(2), id(3)]);
+    assert!(da.resurrected);
+    repo.commit(id(5), &[id(2), id(3)], id(101), da.doc);
+    let grouped = repo.merge(&[id(5), id(4)]);
+    assert_eq!(grouped.doc, full.doc);
+}
+
+/// 第二轮评审 §4：(hlc, 来源设备) 完全相同时按 rev 决胜，结果与输入顺序无关。
+#[test]
+fn review2_equal_hlc_and_origin_break_ties_by_rev() {
+    let mut repo = Repo::default();
+    repo.commit(id(1), &[], id(100), Some(base_doc(id(1))));
+    for (rev, v) in [(id(2), "low"), (id(3), "high")] {
+        let mut d = base_doc(id(1));
+        d.set(title(), text(v), Hlc(50), rev).unwrap();
+        repo.commit(rev, &[id(1)], id(100), Some(d));
+    }
+    for heads in [[id(2), id(3)], [id(3), id(2)]] {
+        let m = repo.merge(&heads);
+        assert_eq!(m.doc.unwrap().get(&title()), Some(&text("high")));
+    }
 }

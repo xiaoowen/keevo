@@ -2,13 +2,12 @@
 //!
 //! 目前用于测试与开发工具；将来可编译为 WASM，供浏览器扩展复用同一套实现。
 
-use keevo_crypto::{
-    Handshake, PAIR_NONCE_LEN, StaticKeypair, Transport, pairing_commitment, pairing_nonce,
-};
+use keevo_crypto::{Handshake, StaticKeypair, Transport, pairing_commitment, pairing_nonce};
 
 use crate::error::IpcError;
 use crate::message::{
-    Call, ControlFrame, ErrorCode, Event, PROTOCOL_VERSION, Request, ServerMessage, b64, unb64,
+    Call, ControlFrame, ErrorCode, Event, MAX_NAME_BYTES, PROTOCOL_VERSION, Request, ServerMessage,
+    b64, sanitize_display_name, unb64,
 };
 
 /// 客户端事件。
@@ -31,7 +30,8 @@ pub enum ClientEvent {
 
 enum State {
     Idle,
-    Pairing(Box<Handshake>, [u8; PAIR_NONCE_LEN]),
+    /// 握手状态与第 3 条消息的负载（已在第 1 条消息中承诺）。
+    Pairing(Box<Handshake>, Vec<u8>),
     AwaitPaired(Box<Transport>),
     Session(Box<Handshake>),
     Established(Box<Transport>),
@@ -54,7 +54,7 @@ impl ExtensionClient {
         Self {
             key,
             origin: origin.to_owned(),
-            name: name.to_owned(),
+            name: truncate_utf8(name, MAX_NAME_BYTES).to_owned(),
             state: State::Idle,
             next_id: 1,
         }
@@ -83,6 +83,12 @@ impl ExtensionClient {
         .to_json()
     }
 
+    /// 清洗后的显示名，与 Keevo.app 中显示的一致（`spec/ipc.md` §4.2）。
+    #[must_use]
+    pub fn display_name(&self) -> String {
+        sanitize_display_name(&self.name)
+    }
+
     /// 开始配对（XX），返回要发送的帧。
     ///
     /// # Errors
@@ -92,11 +98,12 @@ impl ExtensionClient {
             return Err(IpcError::InvalidState);
         }
         let mut hs = Handshake::pair_initiator(&self.key, &self.origin)?;
-        // 第 1 条消息承诺第 3 条消息的全部内容（spec/ipc.md §4.2）
-        let nonce = pairing_nonce()?;
-        let commitment = pairing_commitment(&self.key.public_key(), &nonce, &self.name);
+        // 第 3 条消息的负载 = nonce ‖ 显示名的 UTF-8 字节；第 1 条消息承诺它的原始字节（spec/ipc.md §4.2）
+        let mut third = pairing_nonce()?.to_vec();
+        third.extend_from_slice(self.name.as_bytes());
+        let commitment = pairing_commitment(&self.key.public_key(), &third);
         let msg = hs.write(&commitment)?;
-        self.state = State::Pairing(Box::new(hs), nonce);
+        self.state = State::Pairing(Box::new(hs), third);
         ControlFrame::Pair { d: b64(&msg) }.to_json()
     }
 
@@ -147,16 +154,12 @@ impl ExtensionClient {
         };
         let data = unb64(&d)?;
         match std::mem::replace(&mut self.state, State::Closed) {
-            State::Pairing(mut hs, nonce) => {
+            State::Pairing(mut hs, third) => {
                 // XX 第二条消息的负载必须为空（spec/ipc.md §4.2）
                 if !hs.read(&data)?.is_empty() {
                     return Err(IpcError::BadMessage);
                 }
-                let payload = serde_json::to_vec(
-                    &serde_json::json!({ "name": self.name, "nonce": b64(&nonce) }),
-                )
-                .map_err(|_| IpcError::BadMessage)?;
-                let msg3 = hs.write(&payload)?;
+                let msg3 = hs.write(&third)?;
                 let sas = hs.sas()?;
                 let transport = hs.into_transport()?;
                 self.state = State::AwaitPaired(Box::new(transport));
@@ -200,4 +203,13 @@ impl ExtensionClient {
 fn decode(transport: &mut Transport, data: &[u8]) -> Result<ServerMessage, IpcError> {
     let plaintext = transport.decrypt(data)?;
     serde_json::from_slice(&plaintext).map_err(|_| IpcError::BadMessage)
+}
+
+/// 按 UTF-8 字符边界截断到最多 `max` 字节。
+fn truncate_utf8(s: &str, max: usize) -> &str {
+    let end = (0..=max.min(s.len()))
+        .rev()
+        .find(|i| s.is_char_boundary(*i))
+        .unwrap_or(0);
+    s.get(..end).unwrap_or_default()
 }

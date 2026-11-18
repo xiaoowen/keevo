@@ -27,15 +27,27 @@ impl RevisionGraph {
         Self::default()
     }
 
-    /// 加入一个修订。重复加入完全相同的元数据是幂等的。
+    /// 加入一个修订。父修订列表按集合处理（排序、去重）；重复加入完全相同的元数据是幂等的。
     ///
     /// # Errors
-    /// 同一修订已存在、但父修订或来源设备不同时返回 [`FormatError::RevisionConflict`]，
-    /// 不做"首次为准"的静默处理（`spec/revisions.md` §5.1 步骤 0）。
-    pub fn insert(&mut self, rev: Id128, parents: Vec<Id128>, origin_device: Id128) -> Result<()> {
+    /// - 同一修订已存在、但父修订或来源设备不同时返回 [`FormatError::RevisionConflict`]，
+    ///   不做"首次为准"的静默处理（`spec/revisions.md` §5.1 步骤 0）。
+    /// - 父修订不在图中（含以自身为父）时返回 [`FormatError::MissingParent`]：父修订必须先加入，
+    ///   因此图中不会出现环。
+    pub fn insert(
+        &mut self,
+        rev: Id128,
+        mut parents: Vec<Id128>,
+        origin_device: Id128,
+    ) -> Result<()> {
+        parents.sort_unstable();
+        parents.dedup();
         match self.nodes.get(&rev) {
             Some(n) if n.parents == parents && n.origin == origin_device => Ok(()),
             Some(_) => Err(FormatError::RevisionConflict),
+            None if parents.iter().any(|p| !self.nodes.contains_key(p)) => {
+                Err(FormatError::MissingParent)
+            }
             None => {
                 self.nodes.insert(
                     rev,
@@ -159,6 +171,17 @@ mod tests {
         assert_eq!(
             g.insert(id(5), vec![id(3), id(4)], id(101)),
             Err(crate::FormatError::RevisionConflict)
+        );
+        // 父修订按集合比较：顺序不同、重复都视为相同元数据
+        assert_eq!(g.insert(id(5), vec![id(4), id(3), id(4)], id(100)), Ok(()));
+        // 未知父修订、以自身为父（环）都拒绝
+        assert_eq!(
+            g.insert(id(6), vec![id(99)], id(100)),
+            Err(crate::FormatError::MissingParent)
+        );
+        assert_eq!(
+            g.insert(id(7), vec![id(7)], id(100)),
+            Err(crate::FormatError::MissingParent)
         );
         assert_eq!(g.heads(), vec![id(5)]);
         assert_eq!(g.origin(&id(4)), id(101));

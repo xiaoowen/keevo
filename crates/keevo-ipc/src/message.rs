@@ -96,6 +96,8 @@ pub enum ErrorCode {
     NotPaired,
     /// 用户拒绝配对或超时。
     PairingRejected,
+    /// 已有配对正在进行，或配对尝试过于频繁（§4.2）。
+    PairingLimited,
     /// Vault Service 已锁定。
     Locked,
     /// 条目与网址不匹配。
@@ -116,6 +118,7 @@ impl ErrorCode {
             Self::UnsupportedVersion => "unsupported_version",
             Self::NotPaired => "not_paired",
             Self::PairingRejected => "pairing_rejected",
+            Self::PairingLimited => "pairing_limited",
             Self::Locked => "locked",
             Self::UrlMismatch => "url_mismatch",
             Self::NotFound => "not_found",
@@ -258,4 +261,28 @@ pub enum Event {
     Locked,
     /// Vault Service 已解锁。
     Unlocked,
+}
+
+/// 配对显示名原始字节的上限。
+pub const MAX_NAME_BYTES: usize = 256;
+/// 清洗后的显示名最多保留的 Unicode 标量值个数。
+pub const MAX_NAME_CHARS: usize = 64;
+
+/// 清洗配对显示名（`spec/ipc.md` §4.2）：去掉控制字符（Cc）与格式字符（Cf，包括双向文字控制符和零宽字符），
+/// 再保留前 [`MAX_NAME_CHARS`] 个 Unicode 标量值。扩展与 Vault Service 用同一个函数，两边显示的名称一致。
+#[must_use]
+pub fn sanitize_display_name(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| !c.is_control() && !is_format_char(*c))
+        .take(MAX_NAME_CHARS)
+        .collect()
+}
+
+/// Unicode 一般类别 Cf（格式字符），按 Unicode 15.1。
+fn is_format_char(c: char) -> bool {
+    matches!(u32::from(c),
+        0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x0890..=0x0891 | 0x08E2 | 0x180E
+        | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF
+        | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F | 0x1BCA0..=0x1BCA3
+        | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
 }

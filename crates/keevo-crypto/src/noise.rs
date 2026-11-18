@@ -23,20 +23,14 @@ const PAIR_COMMIT_TAG: &[u8] = b"keevo/v1/ipc-pair-commit";
 /// 配对承诺随机数的长度。
 pub const PAIR_NONCE_LEN: usize = 32;
 
-/// 配对承诺（`spec/ipc.md` §4.2）：扩展在 XX 第 1 条消息中发送，承诺它将在第 3 条消息里发送的全部内容
-/// ——静态公钥、显示名、随机数。
+/// 配对承诺（`spec/ipc.md` §4.2）：扩展在 XX 第 1 条消息中发送，承诺它的静态公钥与第 3 条消息负载的
+/// **原始字节**（`nonce ‖ 显示名`）。
 ///
-/// 没有承诺时，最后发言的一方可以在看到对方的贡献之后反复调整自己的消息，离线搜索使两段握手 SAS 相同的
-/// 取值（评审 2026-11-18 I1）。有了承诺，扩展一侧的握手结果取决于它在第 3 条消息才公开的随机数；
-/// 服务一侧的握手结果取决于服务在攻击者作出承诺之后才发送的临时密钥。无论攻击者先完成哪一段，
-/// 另一段的 SAS 对它都是均匀随机的，每次配对只有 2⁻⁴⁸ 的机会。
+/// 承诺必须覆盖实际发送的字节，而不是解析后的字段：握手哈希覆盖的是密文字节，若同一语义允许多种编码，
+/// 发起方仍能在看到对方贡献之后挑选编码来改变 SAS（第二轮评审 G1）。
 #[must_use]
-pub fn pairing_commitment(
-    static_public: &[u8; 32],
-    nonce: &[u8; PAIR_NONCE_LEN],
-    name: &str,
-) -> [u8; 32] {
-    sha256(&[PAIR_COMMIT_TAG, static_public, nonce, name.as_bytes()])
+pub fn pairing_commitment(static_public: &[u8; 32], third_payload: &[u8]) -> [u8; 32] {
+    sha256(&[PAIR_COMMIT_TAG, static_public, third_payload])
 }
 
 /// 生成配对承诺用的随机数。
@@ -84,7 +78,8 @@ impl StaticKeypair {
         Ok(Self::from_private(private))
     }
 
-    /// 从持久化的私钥恢复（Vault Service 存于钥匙串，扩展存于 `chrome.storage.local`）。
+    /// 从持久化的私钥恢复（Vault Service 的私钥由 Secure Enclave 包裹后存成文件，见 ADR-0003；
+    /// 扩展的私钥存于 `chrome.storage.local`）。
     #[must_use]
     pub fn from_private(private: Zeroizing<[u8; 32]>) -> Self {
         let public = MontgomeryPoint::mul_base_clamped(*private).to_bytes();

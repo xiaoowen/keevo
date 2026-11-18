@@ -11,7 +11,7 @@ use std::thread;
 use keevo_core::Vault;
 use keevo_crypto::StaticKeypair;
 use keevo_ipc::frame::{read_socket_frame, write_socket_frame};
-use keevo_ipc::service::{Output, PairingStore, ServiceConnection};
+use keevo_ipc::service::{Output, PairingGate, PairingStore, ServiceConnection};
 
 use crate::backend::CoreBackend;
 
@@ -26,6 +26,11 @@ pub enum PeerPolicy {
 
 /// 请用户确认配对：展示短认证串，返回用户是否确认。实现应在 60 秒内未确认时返回 `false`。
 pub trait PairingPrompt: Send + Sync {
+    /// 收到配对请求的第 1 条消息时调用：立即告诉用户"有浏览器正在请求配对"，让每次尝试都可见
+    /// （`spec/ipc.md` §4.2）。
+    fn started(&self, browser: &str) {
+        let _ = browser;
+    }
     /// 展示并等待确认。
     fn confirm(&self, sas: [u8; 6], name: &str, browser: &str) -> bool;
 }
@@ -42,6 +47,7 @@ pub struct VaultService<S: PairingStore + Send + 'static> {
     policy: PeerPolicy,
     sessions: Sessions,
     next_conn: Arc<AtomicU64>,
+    gate: Arc<PairingGate>,
 }
 
 impl<S: PairingStore + Send + 'static> Clone for VaultService<S> {
@@ -54,6 +60,7 @@ impl<S: PairingStore + Send + 'static> Clone for VaultService<S> {
             policy: self.policy.clone(),
             sessions: Arc::clone(&self.sessions),
             next_conn: Arc::clone(&self.next_conn),
+            gate: Arc::clone(&self.gate),
         }
     }
 }
@@ -87,6 +94,7 @@ impl<S: PairingStore + Send + 'static> VaultService<S> {
             policy,
             sessions: Arc::default(),
             next_conn: Arc::default(),
+            gate: Arc::default(),
         })
     }
 
@@ -127,35 +135,57 @@ impl<S: PairingStore + Send + 'static> VaultService<S> {
             return;
         }
         let id = self.next_conn.fetch_add(1, Ordering::Relaxed);
-        let mut conn = ServiceConnection::new(Arc::clone(&self.key));
-        while let Ok(frame) = read_socket_frame(&mut stream) {
+        let mut conn =
+            ServiceConnection::new(Arc::clone(&self.key)).with_pairing_gate(Arc::clone(&self.gate));
+        loop {
+            // 配对进行中时，读超时取配对截止时间：到期即断开，释放连接与配对闸门（§4.2）
+            let timeout = conn
+                .pairing_deadline()
+                .map(|d| d.saturating_duration_since(std::time::Instant::now()));
+            if timeout.is_some_and(|t| t.is_zero()) || stream.set_read_timeout(timeout).is_err() {
+                break;
+            }
+            let Ok(frame) = read_socket_frame(&mut stream) else {
+                break;
+            };
             let outputs = {
                 let vault = lock(&self.vault);
                 let pairings = lock(&self.pairings);
                 conn.on_frame(&frame, &*pairings, &CoreBackend::new(&vault))
             };
-            if !self.emit(&mut stream, &mut conn, outputs) {
+            // 会话一建立就登记，早于任何可能阻塞的发送（第二轮评审 G7）
+            if !self.register(id, &conn, &stream) || !self.emit(&mut stream, &mut conn, outputs) {
                 break;
             }
-            self.register(id, &conn, &stream);
+            // 配对确认发生在 emit 内，确认后会话才建立
+            if !self.register(id, &conn, &stream) {
+                break;
+            }
         }
         lock(&self.sessions).remove(&id);
+        let _ = stream.shutdown(Shutdown::Both);
     }
 
-    /// 会话建立后登记连接，供撤销时主动断开。
-    fn register(&self, id: u64, conn: &ServiceConnection, stream: &UnixStream) {
-        let Some(pk) = conn.peer_public() else { return };
+    /// 会话建立后登记连接，供撤销时主动断开。返回 `false` 表示连接必须关闭：
+    /// 登记前发现配对已被撤销，或无法取得用于主动断开的句柄（第二轮评审 G7）。
+    fn register(&self, id: u64, conn: &ServiceConnection, stream: &UnixStream) -> bool {
+        let Some(pk) = conn.peer_public() else {
+            return true;
+        };
         let mut sessions = lock(&self.sessions);
         if sessions.contains_key(&id) {
-            return;
+            return true;
         }
         // 登记前再核对一次：若握手与撤销同时发生，确保不会留下未被断开的会话
         if lock(&self.pairings).find(&pk).is_none() {
-            let _ = stream.shutdown(Shutdown::Both);
-            return;
+            return false;
         }
-        if let Ok(handle) = stream.try_clone() {
-            sessions.insert(id, (pk, handle));
+        match stream.try_clone() {
+            Ok(handle) => {
+                sessions.insert(id, (pk, handle));
+                true
+            }
+            Err(_) => false,
         }
     }
 
@@ -173,6 +203,7 @@ impl<S: PairingStore + Send + 'static> VaultService<S> {
                         return false;
                     }
                 }
+                Output::PairingStarted { browser } => self.prompt.started(&browser),
                 Output::ConfirmPairing { sas, name, browser } => {
                     // 等待用户确认期间不持有任何锁
                     let accepted = self.prompt.confirm(sas, &name, &browser);

@@ -98,9 +98,9 @@ fn prune_keeps_heads_and_recent_revisions_but_not_graph() {
         store.insert_revision(&rev(n, &[n - 1])).unwrap();
     }
     // 全部修订都是刚写入的：时间规则保护它们，一个也不清理
-    assert_eq!(store.prune(&id(50), 3, 0).unwrap(), 0);
-    // 模拟 90 天之后：只剩数量规则
-    assert_eq!(store.prune(&id(50), 3, u64::MAX).unwrap(), 7);
+    assert_eq!(store.prune(&id(50), 3, DAYS_90, wall_now()).unwrap(), 0);
+    // 不要求保存时长（相当于已过保留期）：只剩数量规则
+    assert_eq!(store.prune(&id(50), 3, 0, wall_now()).unwrap(), 7);
     let history = store.history(&id(50)).unwrap();
     assert_eq!(history.iter().filter(|r| !r.pruned).count(), 3);
     let oldest = store.revision(&id(1)).unwrap().unwrap();
@@ -165,7 +165,7 @@ fn prune_keeps_revisions_stored_after_the_cutoff() {
         .conn
         .execute("UPDATE revision SET stored_ms = 1000 WHERE seq <= 5", [])
         .unwrap();
-    assert_eq!(store.prune(&id(50), 2, 2000).unwrap(), 5);
+    assert_eq!(store.prune(&id(50), 2, DAYS_90, wall_now()).unwrap(), 5);
     let kept: Vec<bool> = (1..=10u8)
         .map(|n| !store.revision(&id(n)).unwrap().unwrap().pruned)
         .collect();
@@ -191,4 +191,104 @@ fn migrates_schema_v1_to_v2() {
         .query_row("SELECT stored_ms FROM revision", [], |r| r.get(0))
         .unwrap();
     assert!(stored > 0);
+}
+
+const DAYS_90: u64 = 90 * 24 * 60 * 60 * 1000;
+
+fn wall_now() -> u64 {
+    u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap()
+}
+
+/// 第二轮评审 G3：墙上时钟突然前跳 91 天，不会立即清理近期写入的历史。
+#[test]
+fn review2_g3_clock_jump_does_not_expire_recent_history() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.insert_revision(&rev(1, &[])).unwrap();
+    for n in 2..=25u8 {
+        store.insert_revision(&rev(n, &[n - 1])).unwrap();
+    }
+    let jumped = wall_now() + 91 * 24 * 60 * 60 * 1000;
+    assert_eq!(store.prune(&id(50), 20, DAYS_90, jumped).unwrap(), 0);
+    // 时钟倒退再校正，同样不会让新内容突然过期
+    assert_eq!(
+        store
+            .prune(&id(50), 20, DAYS_90, wall_now() - DAYS_90)
+            .unwrap(),
+        0
+    );
+    assert_eq!(store.prune(&id(50), 20, DAYS_90, wall_now()).unwrap(), 0);
+}
+
+/// 第二轮评审 G3：v1 数据库中已有的修订年龄未知，迁移后按迁移时间计，不会立即被清理。
+#[test]
+fn review2_g3_migration_keeps_existing_history() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(SCHEMA_V1).unwrap();
+    conn.pragma_update(None, "user_version", 1).unwrap();
+    // 直接按 v1 的列写入 25 个修订（v1 没有 stored_ms）
+    for n in 1..=25u8 {
+        let parents: Vec<u8> = if n == 1 {
+            Vec::new()
+        } else {
+            id(n - 1).as_bytes().to_vec()
+        };
+        conn
+            .execute(
+                "INSERT INTO revision (rev_id, object_id, object_type, vault_id, parents, origin_device, details_ct)
+                 VALUES (?1, ?2, 3, ?3, ?4, ?5, x'00')",
+                rusqlite::params![
+                    id(n).as_bytes().to_vec(),
+                    id(50).as_bytes().to_vec(),
+                    id(60).as_bytes().to_vec(),
+                    parents,
+                    id(70).as_bytes().to_vec()
+                ],
+            )
+            .unwrap();
+    }
+    conn.execute(
+        "INSERT INTO head (object_id, rev_id) VALUES (?1, ?2)",
+        rusqlite::params![id(50).as_bytes().to_vec(), id(25).as_bytes().to_vec()],
+    )
+    .unwrap();
+    let mut store = Store::init(conn, false).unwrap();
+    assert_eq!(store.prune(&id(50), 20, DAYS_90, wall_now()).unwrap(), 0);
+}
+
+/// 第二轮评审 G4：超长的列在读入内存之前就被拒绝。
+#[test]
+fn review2_g4_oversized_columns_are_rejected_before_reading() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.insert_revision(&rev(1, &[])).unwrap();
+    store
+        .conn
+        .execute(
+            "UPDATE revision SET details_ct = zeroblob(?1)",
+            [i64::try_from(keevo_crypto::MAX_ENVELOPE_LEN + 1).unwrap()],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.revision(&id(1)),
+        Err(StoreError::Corrupt(_))
+    ));
+    assert!(matches!(store.heads(&id(50)), Err(StoreError::Corrupt(_))));
+    assert!(matches!(
+        store.history(&id(50)),
+        Err(StoreError::Corrupt(_))
+    ));
+    // 恰好等于上限的仍可读取
+    store
+        .conn
+        .execute(
+            "UPDATE revision SET details_ct = zeroblob(?1)",
+            [i64::try_from(keevo_crypto::MAX_ENVELOPE_LEN).unwrap()],
+        )
+        .unwrap();
+    assert!(store.revision(&id(1)).unwrap().is_some());
 }

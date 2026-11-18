@@ -52,9 +52,9 @@
   - 发布任务使用受保护环境，并需要人工审批。
 - **签名**：
   - 维护者的提交与 tag 都要签名。
-  - macOS 产物使用临时签名并启用 Hardened Runtime，不公证（ADR-0003）；发布 SHA-256 校验和。
+  - macOS 产物使用临时签名并启用 Hardened Runtime，不公证（ADR-0003）。
   - Sparkle 更新使用 EdDSA 签名。
-  - 发布产物使用 Sigstore 签名。
+  - 发布产物使用 Sigstore 签名。验证时固定期望的签名身份（发布 workflow）与 OIDC issuer；SHA-256 校验和只用来核对与经过验证的发布清单一致。
 - **更新安全**：客户端校验更新签名，禁止降级到旧版本。
 
 ## 5. 隐私承诺（产品层面）

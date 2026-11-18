@@ -35,6 +35,10 @@ const DEMO_PASSWORD: &str = "keevo-dev-only-password";
 struct TerminalPrompt;
 
 impl PairingPrompt for TerminalPrompt {
+    fn started(&self, browser: &str) {
+        eprintln!("\n[配对] 收到来自 {browser} 的配对请求，等待扩展完成握手……");
+    }
+
     fn confirm(&self, sas: [u8; 6], name: &str, browser: &str) -> bool {
         let code: Vec<String> = sas.iter().map(|b| format!("{b:02x}")).collect();
         eprintln!("\n浏览器「{name}」（{browser}）请求配对。");
@@ -195,7 +199,7 @@ fn load_or_create_service_key(path: &Path) -> Result<StaticKeypair, Box<dyn std:
         }
         return Ok(StaticKeypair::from_private(bytes));
     }
-    // M1 中服务静态密钥存于钥匙串（ThisDeviceOnly）
+    // M1 中服务静态密钥由 Secure Enclave 包裹后存成文件（ADR-0003）
     let key = StaticKeypair::generate()?;
     let hex: String = key
         .export_private()

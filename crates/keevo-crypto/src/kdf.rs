@@ -152,7 +152,14 @@ impl KdfParams {
     }
 
     /// 计算 Argon2id，输出 32 字节（§6 中的 `K_p`）。不使用 secret 与 associated data。
+    ///
+    /// 同一进程内的 KDF 一律串行执行（`spec/crypto.md` §5.3）：无论有多少个保险库实例，
+    /// 同一时刻最多只有一次 Argon2 占用内存。
     pub(crate) fn argon2id(&self, password: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
+        static KDF_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _gate = KDF_GATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let params =
             Params::new(self.m_kib, self.t, self.p, Some(32)).map_err(|_| CryptoError::Kdf)?;
         let mut out = Zeroizing::new([0u8; 32]);

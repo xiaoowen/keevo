@@ -121,8 +121,9 @@ struct ItemDocJson {
     v: u32,
     #[serde(rename = "type")]
     item_type: ItemType,
+    #[serde(deserialize_with = "record::unique_map")]
     records: RecordMap,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "record::unique_map")]
     concurrent: ConcurrentMap,
 }
 
@@ -148,6 +149,20 @@ impl ItemDoc {
             records: &self.records,
             concurrent: &self.concurrent,
         })
+    }
+
+    /// 编码为 JSON，并检查能否放进单个信封（`spec/revisions.md` §7.1）。写入修订前必须用它，
+    /// 而不是 [`ItemDoc::encode`]。
+    ///
+    /// # Errors
+    /// 超过 [`keevo_crypto::MAX_PLAINTEXT_LEN`] 时返回 [`FormatError::ItemTooLarge`]：合并后的状态可能
+    /// 超过上限，此时读取照常，但需要先精简才能保存，绝不静默丢弃版本。
+    pub fn encode_for_write(&self) -> Result<Zeroizing<Vec<u8>>> {
+        let bytes = self.encode()?;
+        if bytes.len() > keevo_crypto::MAX_PLAINTEXT_LEN {
+            return Err(FormatError::ItemTooLarge);
+        }
+        Ok(bytes)
     }
 
     /// 从 JSON 解码并校验。
@@ -179,9 +194,7 @@ impl ItemDoc {
     /// # Errors
     /// 值的类型与键不匹配时返回 [`FormatError::ValueKindMismatch`]。
     pub fn set(&mut self, key: RecordKey, value: RecordValue, hlc: Hlc, rev: Id128) -> Result<()> {
-        if !key.accepts(&value) {
-            return Err(FormatError::ValueKindMismatch);
-        }
+        record::check_value(&key, &value)?;
         // 新版本写于全部头之后，因果覆盖该键的所有并发版本（§4.2）
         self.concurrent.remove(&key);
         self.records.insert(
@@ -335,8 +348,10 @@ impl ItemDoc {
     #[must_use]
     pub fn has_unresolved_conflicts(&self) -> bool {
         self.concurrent.iter().any(|(key, versions)| {
-            let current = self.records.get(key).map(|v| &v.value);
-            versions.iter().any(|v| Some(&v.value) != current)
+            // 没有当前版本的键是被撤销的删除，由合并结果的 `resurrected` 表示，不算字段冲突
+            self.records
+                .get(key)
+                .is_some_and(|current| versions.iter().any(|v| v.value != current.value))
         })
     }
 }
@@ -443,6 +458,47 @@ mod tests {
     use super::*;
     use crate::record::{FieldData, FieldValue, KvEntry};
 
+    /// 第二轮评审 §4：重复的记录键、超过 256 KiB 的值、超出 ±(2⁵³−1) 的整数都拒绝。
+    #[test]
+    fn duplicate_keys_oversized_values_and_unsafe_ints_are_rejected() {
+        let dup = br#"{"v":1,"type":"login","records":{"attr:title":{"hlc":"0000000000000001","rev":"07070707070707070707070707070707","val":{"text":"a"}},"attr:title":{"hlc":"0000000000000002","rev":"07070707070707070707070707070707","val":{"text":"b"}}}}"#;
+        assert!(matches!(
+            ItemDoc::decode(dup),
+            Err(FormatError::Malformed(_))
+        ));
+
+        let mut d = ItemDoc::new(ItemType::SecureNote);
+        let rev = Id128::from_bytes([7; 16]);
+        let big = "x".repeat(record::MAX_VALUE_LEN);
+        assert_eq!(
+            d.set(
+                RecordKey::attr("note"),
+                RecordValue::Text(big.as_str().into()),
+                Hlc(1),
+                rev
+            ),
+            Err(FormatError::ValueTooLarge)
+        );
+        assert_eq!(
+            d.set(
+                RecordKey::attr("n"),
+                RecordValue::Int(record::MAX_SAFE_INT + 1),
+                Hlc(1),
+                rev
+            ),
+            Err(FormatError::ValueTooLarge)
+        );
+        assert!(
+            d.set(
+                RecordKey::attr("n"),
+                RecordValue::Int(record::MAX_SAFE_INT),
+                Hlc(1),
+                rev
+            )
+            .is_ok()
+        );
+    }
+
     #[test]
     fn concurrent_versions_roundtrip_and_are_validated() {
         let mut d = ItemDoc::new(ItemType::Login);
@@ -502,6 +558,27 @@ mod tests {
             bad(&|x| x.concurrent.get_mut(&title).unwrap()[0].value = Some(RecordValue::Tag)),
             "值与键不匹配"
         );
+        assert!(
+            bad(&|x| {
+                x.records.remove(&title);
+            }),
+            "普通键只有并发版本、没有当前版本"
+        );
+        // 删除状态键可以只有并发版本（撤销删除后）
+        let mut restored = ItemDoc::new(ItemType::Login);
+        restored.concurrent.insert(
+            RecordKey::attr("trashed"),
+            vec![RecordVersion {
+                hlc: Hlc(5),
+                rev: Id128::from_bytes([9; 16]),
+                value: Some(RecordValue::Int(1)),
+            }],
+        );
+        assert_eq!(
+            ItemDoc::decode(&restored.encode().unwrap()).unwrap(),
+            restored
+        );
+        assert!(!restored.has_unresolved_conflicts());
     }
 
     fn sample() -> ItemDoc {

@@ -154,6 +154,8 @@ final class AppModel {
             return "保险库已锁定。"
         case .KdfNeedsConfirmation:
             return "这个保险库的解锁参数异常地高，可能被篡改过。为安全起见，Keevo 没有自动解锁。"
+        case .ItemTooLarge:
+            return "这个条目合并其他设备的内容后过大，无法保存。请先处理冲突或删除部分字段。"
         default:
             return "操作失败：\(error)"
         }

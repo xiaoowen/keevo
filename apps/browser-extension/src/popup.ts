@@ -51,6 +51,7 @@ const ERRORS: Record<string, string> = {
   disconnected: "与 Keevo 的连接已断开。",
   not_paired: "Keevo 不认识这个浏览器了，请重新配对。",
   pairing_rejected: "配对已被拒绝或超时。",
+  pairing_limited: "Keevo 正在处理另一个配对，或配对尝试过于频繁，请稍后再试。",
   bad_request: "通信出错，请重试。",
   protocol: "通信出错，请重试。",
 };

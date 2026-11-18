@@ -29,6 +29,12 @@ pub enum RecordKey {
 }
 
 impl RecordKey {
+    /// 是否为删除状态键：`attr:trashed`（回收站）或 `attr:purged`（永久删除，合并时由墓碑头产生）。
+    #[must_use]
+    pub fn is_deletion_state(&self) -> bool {
+        matches!(self, Self::Attr(n) if n == "trashed" || n == "purged")
+    }
+
     /// 属性键。
     #[must_use]
     pub fn attr(name: &str) -> Self {
@@ -225,9 +231,15 @@ pub type RecordMap = BTreeMap<RecordKey, RecordVersion>;
 /// 并发版本映射（`spec/revisions.md` §4.3）。每个列表非空、按 `rev` 严格升序。
 pub type ConcurrentMap = BTreeMap<RecordKey, Vec<RecordVersion>>;
 
-/// 校验并发版本：列表非空，值与键匹配，按 `rev` 严格升序，且不与当前版本同 `rev`。
+/// 校验并发版本：列表非空，值与键匹配，按 `rev` 严格升序，且不与当前版本同 `rev`；
+/// 只有删除状态（`attr:trashed`、`attr:purged`）可以只有并发版本而没有当前版本（§4.3）。
 pub(crate) fn validate_concurrent(records: &RecordMap, concurrent: &ConcurrentMap) -> Result<()> {
     for (key, versions) in concurrent {
+        if !records.contains_key(key) && !key.is_deletion_state() {
+            return Err(FormatError::Malformed(
+                "concurrent: key without current version".into(),
+            ));
+        }
         if versions.is_empty() {
             return Err(FormatError::Malformed("concurrent: empty list".into()));
         }
@@ -247,23 +259,69 @@ pub(crate) fn validate_concurrent(records: &RecordMap, concurrent: &ConcurrentMa
             ));
         }
         for v in versions {
-            if let Some(value) = &v.value
-                && !key.accepts(value)
-            {
-                return Err(FormatError::ValueKindMismatch);
+            if let Some(value) = &v.value {
+                check_value(key, value)?;
             }
         }
     }
     Ok(())
 }
 
+/// 单个记录值编码后的上限：256 KiB。更大的内容应作为附件（`spec/vault-format.md` §2）。
+pub const MAX_VALUE_LEN: usize = 256 * 1024;
+/// 整数值的范围：±(2⁵³−1)，保证在 JavaScript 等环境中无损，规范编码也唯一。
+pub const MAX_SAFE_INT: i64 = (1 << 53) - 1;
+
+/// 校验一个值：类型与键匹配，整数在安全范围内，编码后不超过 [`MAX_VALUE_LEN`]。
+pub(crate) fn check_value(key: &RecordKey, value: &RecordValue) -> Result<()> {
+    if !key.accepts(value) {
+        return Err(FormatError::ValueKindMismatch);
+    }
+    if let RecordValue::Int(i) = value
+        && !(-MAX_SAFE_INT..=MAX_SAFE_INT).contains(i)
+    {
+        return Err(FormatError::ValueTooLarge);
+    }
+    if crate::json::to_json(value)?.len() > MAX_VALUE_LEN {
+        return Err(FormatError::ValueTooLarge);
+    }
+    Ok(())
+}
+
 pub(crate) fn validate(records: &RecordMap) -> Result<()> {
     for (key, version) in records {
-        if let Some(value) = &version.value
-            && !key.accepts(value)
-        {
-            return Err(FormatError::ValueKindMismatch);
+        if let Some(value) = &version.value {
+            check_value(key, value)?;
         }
     }
     Ok(())
+}
+
+/// 反序列化记录映射与并发版本映射时拒绝重复键：JSON 对象中同一记录键出现两次时，
+/// 不同实现可能保留第一个或最后一个，因此一律视为格式错误（`spec/vault-format.md` §1）。
+pub(crate) fn unique_map<'de, D, V>(d: D) -> core::result::Result<BTreeMap<RecordKey, V>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    V: serde::Deserialize<'de>,
+{
+    struct Visitor<V>(core::marker::PhantomData<V>);
+    impl<'de, V: serde::Deserialize<'de>> serde::de::Visitor<'de> for Visitor<V> {
+        type Value = BTreeMap<RecordKey, V>;
+        fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.write_str("a map with unique record keys")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> core::result::Result<Self::Value, A::Error> {
+            let mut out = BTreeMap::new();
+            while let Some((k, v)) = map.next_entry::<RecordKey, V>()? {
+                if out.insert(k, v).is_some() {
+                    return Err(serde::de::Error::custom("duplicate record key"));
+                }
+            }
+            Ok(out)
+        }
+    }
+    d.deserialize_map(Visitor(core::marker::PhantomData))
 }

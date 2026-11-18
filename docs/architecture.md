@@ -109,7 +109,8 @@ flowchart LR
 | IPC socket | `…/ipc/`（目录权限 0700） |
 | 账户密钥 | Secure Enclave 密钥包裹后存成文件（`…/keys/`，0600），只能在本机解开 |
 | Touch ID 解锁材料 | 需要用户在场的 Secure Enclave 密钥包裹 AUK，存成文件 |
-| Vault Service 静态密钥、浏览器配对记录 | Secure Enclave 密钥包裹后存成文件；配对记录存入加密数据库 |
+| Vault Service 的 Noise 静态私钥 | Secure Enclave 密钥包裹后存成文件（`spec/crypto.md` §8.6） |
+| 浏览器配对记录与站点授权 | 加密的保险库数据库，解锁时读入内存（`spec/ipc.md` §4.2） |
 | 设备签名密钥（M2） | Secure Enclave，不可导出，仅限本机 |
 | iCloud 同步数据（M2） | `iCloud 云盘/Keevo/`（`~/Library/Mobile Documents/com~apple~CloudDocs/Keevo/`），只有密文 |
 | 本设备日志段的本地副本（M2） | `…/sync-outbox/` |
@@ -123,8 +124,9 @@ flowchart LR
 ### 4.4 构建与分发
 
 - **M0 空壳**：用 SwiftPM 构建（`scripts/build-macos.sh`），先编译 Rust 库，再生成 UniFFI 绑定，最后编译 Swift。**M1.1** 打包为完整的应用包（含 native host 与 CLI），Rust 核心静态链接。
-- **签名**：临时签名 + Hardened Runtime。不公证；不加载第三方动态库，以此代替按团队放行的 Library Validation（ADR-0003）。
-- **分发**：GitHub Releases，附 SHA-256 校验和与 Sigstore 签名，可复现构建；另提供从源码构建的脚本。首次打开需要用户在"系统设置 → 隐私与安全性"中放行。
+- **签名**：临时签名 + Hardened Runtime，保留默认的 Library Validation（只放行 Apple 签名的库），因此 Rust 核心静态链接。不公证（ADR-0003）。
+- **构建顺序**：先签名 native host 与 CLI，把它们的 cdhash 编译进主程序，再签名主程序（`spec/ipc.md` §3.1）。
+- **分发**：GitHub Releases，Sigstore 签名（验证时固定签名身份与 issuer），可复现构建；另提供从源码构建的脚本。首次打开需要用户在"系统设置 → 隐私与安全性"中放行。
 - **不启用 App Sandbox**：需要向各浏览器目录写入 Native Messaging 清单、自定义 SSH Agent socket 路径、安装 CLI。不使用任何需要团队签发的 entitlement；不上 Mac App Store。
 - **iCloud**：同步使用 iCloud 云盘中的普通文件夹，不需要 iCloud 权限与描述文件（[ADR-0002](adr/0002-icloud-drive-folder-without-team.md)）。
 - **团队**：不绑定任何 Apple 开发者团队，也不为 Keevo 申请（[ADR-0003](adr/0003-no-apple-developer-team.md)）。native host 的身份校验改为固定 cdhash；Touch ID 与本机密钥改用 Secure Enclave 包裹的文件（[技术验证](spikes/2026-11-18-secure-enclave-without-team.md)）。
@@ -192,7 +194,7 @@ sequenceDiagram
 
 1. **操作系统层：对端身份校验**
    - Socket 位于数据目录 `~/Library/Application Support/Keevo/ipc/`，目录权限 0700。
-   - Vault Service 通过对端的 audit token 取得代码签名，要求对端的 cdhash 与本应用包内的 `keevo-native-host` 或 `keevo` CLI 一致（Keevo 不绑定团队，没有 Team ID 可校验，`spec/ipc.md` §3.1）。
+   - Vault Service 通过对端的 audit token 取得代码签名，要求对端的 cdhash 等于构建时编译进主程序的 `keevo-native-host` 或 `keevo` CLI 的 cdhash（Keevo 不绑定团队，没有 Team ID 可校验，`spec/ipc.md` §3.1）。
    - native host 启动时检查父进程是否为已知浏览器（按代码签名 Team ID 白名单），并检查 Chrome 传入的扩展来源。浏览器侧的清单 `allowed_origins` 只包含 Keevo 扩展 ID。
    - 父进程检查**只是纵深防御**：同用户进程可以用 fork→exec 让 host 看到一个签名浏览器父进程（`spec/ipc.md` §3.2）。因此设计上假设扩展落盘的静态私钥可能被冒充使用，由第 3 层的按站点授权兜底。
 2. **应用层：端到端加密**

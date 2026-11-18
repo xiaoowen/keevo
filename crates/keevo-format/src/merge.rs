@@ -3,12 +3,14 @@
 use std::collections::{BTreeSet, HashSet};
 
 use keevo_crypto::Id128;
+use zeroize::Zeroizing;
 
 use crate::error::{FormatError, Result};
 use crate::graph::RevisionGraph;
+use crate::hlc::Hlc;
 use crate::item::ItemDoc;
 use crate::json::to_json;
-use crate::record::{ConcurrentMap, RecordKey, RecordMap, RecordVersion};
+use crate::record::{ConcurrentMap, RecordKey, RecordMap, RecordValue, RecordVersion};
 
 /// 一个头修订的状态。
 #[derive(Debug, Clone, Copy)]
@@ -60,6 +62,21 @@ impl Merged {
     }
 }
 
+/// 对象永久删除的保留键（`spec/revisions.md` §6）。每个墓碑头在合并时视为在该键上写了一个"已删除"版本；
+/// 删除被撤销时，这些版本移入并发版本随合并状态保存，之后的合并仍能看到它们（第二轮评审 G2）。
+pub const PURGED_ATTR: &str = "purged";
+/// 回收站状态的属性名。
+pub const TRASHED_ATTR: &str = "trashed";
+
+/// 墓碑头 `rev` 在 `attr:purged` 上对应的版本。
+fn purge_version(rev: Id128) -> RecordVersion {
+    RecordVersion {
+        hlc: Hlc(0),
+        rev,
+        value: Some(RecordValue::Bool(true)),
+    }
+}
+
 /// 合并一个对象的全部头修订。结果与 `heads` 的顺序无关，重复的头会被忽略。
 ///
 /// `graph` 必须包含所有头修订及其祖先的元数据；修订内容是否已被清理不影响结果。
@@ -71,7 +88,7 @@ pub fn merge_heads(heads: &[HeadState<'_>], graph: &RevisionGraph) -> Result<Mer
     if heads.is_empty() {
         return Err(FormatError::NoHeads);
     }
-    let live: Vec<(Id128, &ItemDoc)> = heads
+    let mut live: Vec<(Id128, &ItemDoc)> = heads
         .iter()
         .filter_map(|h| match h {
             HeadState::Live { rev, doc } => Some((*rev, *doc)),
@@ -99,6 +116,18 @@ pub fn merge_heads(heads: &[HeadState<'_>], graph: &RevisionGraph) -> Result<Mer
         return Err(FormatError::ItemTypeMismatch);
     }
 
+    // §6：每个墓碑头视为只含 `attr:purged` 的文档，与普通记录一样参与"取极大元"
+    let purged_key = RecordKey::attr(PURGED_ATTR);
+    let tombstone_docs: Vec<(Id128, ItemDoc)> = deleted
+        .iter()
+        .map(|d| {
+            let mut doc = ItemDoc::new(item_type);
+            doc.records.insert(purged_key.clone(), purge_version(*d));
+            (*d, doc)
+        })
+        .collect();
+    live.extend(tombstone_docs.iter().map(|(rev, doc)| (*rev, doc)));
+
     // 每个头的祖先集合（含自身），用于校验记录版本声称的写入修订（§5.1 步骤 0）
     let ancestry: Vec<HashSet<Id128>> = live.iter().map(|(rev, _)| graph.ancestors(rev)).collect();
     let keys: BTreeSet<&RecordKey> = live
@@ -118,7 +147,8 @@ pub fn merge_heads(heads: &[HeadState<'_>], graph: &RevisionGraph) -> Result<Mer
             continue;
         }
         let (winner, others, conflict) = pick(key, candidates, graph);
-        if let Some(c) = conflict {
+        // 删除状态的冲突由 `resurrected` 表示，不作为字段冲突
+        if let Some(c) = conflict.filter(|_| *key != purged_key) {
             conflicts.push(c);
         }
         records.insert(key.clone(), winner);
@@ -128,28 +158,31 @@ pub fn merge_heads(heads: &[HeadState<'_>], graph: &RevisionGraph) -> Result<Mer
     }
 
     let mut resurrected = false;
+    let exempt = [RecordKey::attr(TRASHED_ATTR), purged_key.clone()];
 
     // §5.2：回收站状态与修改并发时撤销删除
-    let trashed_key = RecordKey::attr("trashed");
+    let trashed_key = RecordKey::attr(TRASHED_ATTR);
     if let Some(trash) = records.get(&trashed_key).filter(|v| !v.is_tombstone()) {
         let d = trash.rev;
-        if has_concurrent_record(&records, Some(&trashed_key), &d, graph)
-            && let Some(current) = records.remove(&trashed_key)
-        {
-            // 不是删除这些版本，而是让它们不再作为当前值：它们仍是之后合并的候选，
-            // 否则分组合并时更早的回收站版本会失去"已被覆盖"的信息而重新生效（§5.2）
-            let all = concurrent.entry(trashed_key.clone()).or_default();
-            all.push(current);
-            all.sort_by_key(|v| v.rev);
+        if has_concurrent_record(&records, &exempt, &d, graph) {
+            suppress(&mut records, &mut concurrent, &trashed_key);
             resurrected = true;
         }
     }
 
-    // §5.2 / §6：对象墓碑与修改并发时撤销删除；只要有一个墓碑覆盖了全部记录，删除即成立
-    if !deleted.is_empty() {
-        let deletion_stands = deleted
+    // §5.2、§6：永久删除。全部未被覆盖的"已删除"版本中，只要有一个没有与之并发的当前修改，删除即成立；
+    // 否则撤销删除，并把这些版本移入并发版本保存
+    let purges: Vec<Id128> = records
+        .get(&purged_key)
+        .into_iter()
+        .chain(concurrent.get(&purged_key).into_iter().flatten())
+        .filter(|v| !v.is_tombstone())
+        .map(|v| v.rev)
+        .collect();
+    if !purges.is_empty() {
+        let deletion_stands = purges
             .iter()
-            .any(|d| !has_concurrent_record(&records, None, d, graph));
+            .any(|d| !has_concurrent_record(&records, &exempt, d, graph));
         if deletion_stands {
             return Ok(Merged {
                 doc: None,
@@ -158,6 +191,7 @@ pub fn merge_heads(heads: &[HeadState<'_>], graph: &RevisionGraph) -> Result<Mer
                 integrity_issues,
             });
         }
+        suppress(&mut records, &mut concurrent, &purged_key);
         resurrected = true;
     }
 
@@ -194,24 +228,28 @@ fn candidates<'a>(
             }
         }
     }
-    let canonical = |v: &RecordVersion| to_json(&v.value).map(|b| b.to_vec()).unwrap_or_default();
-    out.sort_by(|a, b| {
-        a.rev
-            .cmp(&b.rev)
-            .then(a.hlc.cmp(&b.hlc))
-            .then_with(|| canonical(a).cmp(&canonical(b)))
-    });
+    out.sort_by_key(|v| v.rev);
     let mut deduped: Vec<&RecordVersion> = Vec::with_capacity(out.len());
-    for v in out {
-        match deduped.last_mut() {
-            Some(last) if last.rev == v.rev => {
-                if *last != v {
-                    suspicious = true;
-                }
-                // 排序后同一修订的最后一个即 (hlc, 规范 JSON) 最大者
-                *last = v;
-            }
-            _ => deduped.push(v),
+    for group in out.chunk_by(|a, b| a.rev == b.rev) {
+        let Some(first) = group.first().copied() else {
+            continue;
+        };
+        if group.iter().all(|v| *v == first) {
+            deduped.push(first);
+            continue;
+        }
+        // 同一修订出现不同内容：取 (hlc, 值的规范编码) 最大者。规范编码只在这种情况下计算，
+        // 并保存在会清零的缓冲区中
+        suspicious = true;
+        let keyed: Vec<(Hlc, Zeroizing<Vec<u8>>, &RecordVersion)> = group
+            .iter()
+            .map(|v| (v.hlc, to_json(&v.value).unwrap_or_default(), *v))
+            .collect();
+        if let Some((_, _, best)) = keyed.into_iter().max_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.as_slice().cmp(b.1.as_slice()))
+        }) {
+            deduped.push(best);
         }
     }
     (deduped, suspicious)
@@ -250,7 +288,8 @@ fn pick(
     let Some(winner) = pool
         .iter()
         .copied()
-        .max_by_key(|v| (v.hlc, graph.origin(&v.rev)))
+        // (hlc, 来源设备, rev) 构成全序：克隆设备或 HLC 饱和时前两者可能相同（§5.1 步骤 3）
+        .max_by_key(|v| (v.hlc, graph.origin(&v.rev), v.rev))
         .cloned()
     else {
         // candidates 非空时 maximal 也非空（DAG 中总存在极大元），这里只是防御
@@ -290,15 +329,27 @@ fn tombstone() -> RecordVersion {
 
 /// 是否存在一个与 `d` 并发的非墓碑记录（`except` 除外）：其写入修订既不是 `d` 的祖先，
 /// 也不是 `d` 的后代。后代表示修改发生在看到删除之后（例如在回收站中编辑），不算并发。
+/// 撤销删除：该键的当前版本不再作为当前值，与其余极大元一起保存在并发版本中。
+///
+/// 不能直接删除这些版本：它们仍是之后合并的候选，否则分组合并时更早的删除版本会失去
+/// "已被覆盖"的信息而重新生效（§5.2）。
+fn suppress(records: &mut RecordMap, concurrent: &mut ConcurrentMap, key: &RecordKey) {
+    if let Some(current) = records.remove(key) {
+        let all = concurrent.entry(key.clone()).or_default();
+        all.push(current);
+        all.sort_by_key(|v| v.rev);
+    }
+}
+
 fn has_concurrent_record(
     records: &RecordMap,
-    except: Option<&RecordKey>,
+    exempt: &[RecordKey],
     d: &Id128,
     graph: &RevisionGraph,
 ) -> bool {
     records
         .iter()
-        .filter(|(k, _)| Some(*k) != except)
+        .filter(|(k, _)| !exempt.contains(k))
         .any(|(_, v)| {
             !v.is_tombstone() && !graph.is_ancestor(&v.rev, d) && !graph.is_ancestor(d, &v.rev)
         })

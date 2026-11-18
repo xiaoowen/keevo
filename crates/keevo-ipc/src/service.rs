@@ -3,22 +3,64 @@
 //! 一条连接对应一个 [`ServiceConnection`]。调用方把 native host 转来的每一帧交给
 //! [`ServiceConnection::on_frame`]，再按返回的 [`Output`] 发帧、请求用户确认或断开连接。
 
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use keevo_crypto::{Handshake, PAIR_NONCE_LEN, StaticKeypair, Transport, pairing_commitment};
-use serde::Deserialize;
 
 use crate::error::IpcError;
 use crate::message::{
-    Call, CallResult, ControlFrame, ErrorBody, ErrorCode, Event, HostHello, PROTOCOL_VERSION,
-    Request, ServerMessage, b64, unb64,
+    Call, CallResult, ControlFrame, ErrorBody, ErrorCode, Event, HostHello, MAX_NAME_BYTES,
+    PROTOCOL_VERSION, Request, ServerMessage, b64, sanitize_display_name, unb64,
 };
 
-/// 配对名称的最大长度（字符）。
-const MAX_NAME_CHARS: usize = 64;
-/// 配对确认的时限（`spec/ipc.md` §4.2）：从握手完成起计算，超时视为拒绝。
+/// 配对的时限（`spec/ipc.md` §4.2）：从收到第 1 条消息起算，覆盖握手与用户确认，超时视为拒绝。
 pub const PAIRING_TIMEOUT: Duration = Duration::from_secs(60);
+/// 每小时最多开始的配对次数（§4.2）。
+pub const MAX_PAIRING_STARTS_PER_HOUR: usize = 10;
+
+/// 配对尝试的闸门（§4.2，第二轮评审 G1）：同一时刻最多一个配对；每小时最多开始
+/// [`MAX_PAIRING_STARTS_PER_HOUR`] 次。Vault Service 的所有连接共用一个。
+///
+/// 计数点是"服务发出第 2 条消息"：每一次都给了对方一个新的服务端贡献，无论之后是否发送第 3 条消息。
+#[derive(Debug, Default)]
+pub struct PairingGate {
+    inner: Mutex<GateState>,
+}
+
+#[derive(Debug, Default)]
+struct GateState {
+    active: bool,
+    starts: VecDeque<Instant>,
+}
+
+impl PairingGate {
+    fn begin(&self, now: Instant) -> bool {
+        let mut g = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let hour = Duration::from_secs(3600);
+        while g
+            .starts
+            .front()
+            .is_some_and(|t| now.saturating_duration_since(*t) >= hour)
+        {
+            g.starts.pop_front();
+        }
+        if g.active || g.starts.len() >= MAX_PAIRING_STARTS_PER_HOUR {
+            return false;
+        }
+        g.active = true;
+        g.starts.push_back(now);
+        true
+    }
+
+    fn end(&self) {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .active = false;
+    }
+}
 
 /// 配对记录（§4.2 第 4 步）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +148,12 @@ pub trait VaultBackend {
 pub enum Output {
     /// 发送一个控制层帧（JSON）。
     Send(Vec<u8>),
+    /// 收到配对请求的第 1 条消息：Keevo.app 应立即显示"有浏览器正在请求配对"，
+    /// 让每一次尝试都对用户可见（§4.2）。
+    PairingStarted {
+        /// 浏览器标识。
+        browser: String,
+    },
     /// 请用户比对短认证串并确认配对，然后调用 [`ServiceConnection::confirm_pairing`]。
     /// 应在 60 秒内未确认时以拒绝处理。
     ConfirmPairing {
@@ -149,29 +197,57 @@ pub struct ServiceConnection {
     key: Arc<StaticKeypair>,
     state: State,
     pairing_timeout: Duration,
+    gate: Arc<PairingGate>,
+    holds_gate: bool,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PairPayload {
-    name: String,
-    nonce: String,
+impl Drop for ServiceConnection {
+    fn drop(&mut self) {
+        self.release_gate();
+    }
 }
 
 impl ServiceConnection {
     /// 新连接。`key` 是 Vault Service 的静态密钥。
     #[must_use]
-    pub const fn new(key: Arc<StaticKeypair>) -> Self {
+    pub fn new(key: Arc<StaticKeypair>) -> Self {
         Self {
             key,
             state: State::AwaitHostHello,
             pairing_timeout: PAIRING_TIMEOUT,
+            gate: Arc::default(),
+            holds_gate: false,
+        }
+    }
+
+    /// 使用 Vault Service 共用的配对闸门。不设置时每条连接各用一个，只适合测试。
+    #[must_use]
+    pub fn with_pairing_gate(mut self, gate: Arc<PairingGate>) -> Self {
+        self.gate = gate;
+        self
+    }
+
+    /// 配对进行中时的截止时间。调用方应据此设置 socket 的读超时，到期即断开，释放连接与配对闸门。
+    #[must_use]
+    pub const fn pairing_deadline(&self) -> Option<Instant> {
+        match &self.state {
+            State::Pairing { deadline, .. } | State::AwaitConfirm { deadline, .. } => {
+                Some(*deadline)
+            }
+            _ => None,
+        }
+    }
+
+    fn release_gate(&mut self) {
+        if self.holds_gate {
+            self.holds_gate = false;
+            self.gate.end();
         }
     }
 
     /// 修改配对确认时限（测试用）。
     #[must_use]
-    pub const fn with_pairing_timeout(mut self, timeout: Duration) -> Self {
+    pub fn with_pairing_timeout(mut self, timeout: Duration) -> Self {
         self.pairing_timeout = timeout;
         self
     }
@@ -225,6 +301,7 @@ impl ServiceConnection {
         if !accepted || Instant::now() > deadline {
             return self.fail(ErrorCode::PairingRejected);
         }
+        self.release_gate();
         let origin = hello.extension_origin.clone();
         store.save(PairingRecord {
             extension_public: transport.remote_static(),
@@ -263,6 +340,7 @@ impl ServiceConnection {
 
     fn fail(&mut self, code: ErrorCode) -> Vec<Output> {
         self.state = State::Closed;
+        self.release_gate();
         let mut out = Vec::new();
         if let Ok(frame) = (ControlFrame::Error { code }).to_json() {
             out.push(Output::Send(frame));
@@ -294,6 +372,15 @@ impl ServiceConnection {
             }
             State::AwaitFirst { hello } => match parse(frame)? {
                 ControlFrame::Pair { d } => {
+                    // 时限从收到第 1 条消息的时刻起算（§4.2）
+                    let received = Instant::now();
+                    let deadline = received
+                        .checked_add(self.pairing_timeout)
+                        .ok_or(ErrorCode::BadRequest)?;
+                    if !self.gate.begin(received) {
+                        return Err(ErrorCode::PairingLimited);
+                    }
+                    self.holds_gate = true;
                     let mut hs = Handshake::pair_responder(&self.key, &hello.extension_origin)
                         .map_err(|_| ErrorCode::BadRequest)?;
                     let payload = hs
@@ -303,16 +390,17 @@ impl ServiceConnection {
                     let commitment: [u8; 32] =
                         <[u8; 32]>::try_from(&payload[..]).map_err(|_| ErrorCode::BadRequest)?;
                     let reply = hs.write(&[]).map_err(|_| ErrorCode::BadRequest)?;
-                    // 时限从收到第 1 条消息起算，覆盖握手与用户确认，不给离线搜索留时间（§4.2）
+                    let browser = hello.browser.clone();
                     self.state = State::Pairing {
                         hello,
                         hs: Box::new(hs),
                         commitment,
-                        deadline: Instant::now()
-                            .checked_add(self.pairing_timeout)
-                            .ok_or(ErrorCode::BadRequest)?,
+                        deadline,
                     };
-                    Ok(vec![send_noise(&reply)?])
+                    Ok(vec![
+                        Output::PairingStarted { browser },
+                        send_noise(&reply)?,
+                    ])
                 }
                 ControlFrame::Session { d } => {
                     let mut hs = Handshake::session_responder(&self.key, &hello.extension_origin)
@@ -355,25 +443,22 @@ impl ServiceConnection {
                 let payload = hs
                     .read(&unb64(&d).map_err(|_| ErrorCode::BadRequest)?)
                     .map_err(|_| ErrorCode::BadRequest)?;
-                let PairPayload { name, nonce } =
-                    serde_json::from_slice(&payload).map_err(|_| ErrorCode::BadRequest)?;
                 if !hs.is_finished() {
                     return Err(ErrorCode::BadRequest);
                 }
-                // 核对承诺：静态公钥、显示名、随机数都必须与第 1 条消息承诺的一致
-                let nonce: [u8; PAIR_NONCE_LEN] = unb64(&nonce)
-                    .map_err(|_| ErrorCode::BadRequest)?
-                    .try_into()
-                    .map_err(|_| ErrorCode::BadRequest)?;
+                // 第 3 条负载 = nonce(32) ‖ 显示名的 UTF-8 字节。承诺按收到的原始字节核对，
+                // 不存在第二种编码（§4.2，第二轮评审 G1）
                 let remote = hs.remote_static().ok_or(ErrorCode::BadRequest)?;
-                if pairing_commitment(&remote, &nonce, &name) != commitment {
+                if pairing_commitment(&remote, &payload) != commitment {
                     return Err(ErrorCode::BadRequest);
                 }
-                let name: String = name
-                    .chars()
-                    .filter(|c| !c.is_control())
-                    .take(MAX_NAME_CHARS)
-                    .collect();
+                let raw_name = payload
+                    .get(PAIR_NONCE_LEN..)
+                    .filter(|n| n.len() <= MAX_NAME_BYTES)
+                    .ok_or(ErrorCode::BadRequest)?;
+                let name = sanitize_display_name(
+                    core::str::from_utf8(raw_name).map_err(|_| ErrorCode::BadRequest)?,
+                );
                 let sas = hs.sas().map_err(|_| ErrorCode::BadRequest)?;
                 let transport = hs.into_transport().map_err(|_| ErrorCode::BadRequest)?;
                 let browser = hello.browser.clone();

@@ -224,7 +224,7 @@ fn history_is_pruned_but_graph_is_kept() {
     // 90 天内的修订一律保留
     assert_eq!(kept(&vault), 31);
     // 模拟 90 天之后：只保留最近 20 个
-    vault.store.prune(&id, HISTORY_KEEP, u64::MAX).unwrap();
+    vault.store.prune(&id, HISTORY_KEEP, 0, now_ms()).unwrap();
     assert_eq!(kept(&vault), HISTORY_KEEP);
     assert_eq!(vault.item(id).unwrap().doc.overview().title, "t30");
 }
@@ -285,6 +285,16 @@ fn review_f3_unusual_kdf_params_require_confirmation() {
         vault.unlock("pw", &sk).err(),
         Some(CoreError::KdfNeedsConfirmation)
     );
+    // 第二轮评审 G4：确认绑定到具体参数，确认的不是当前这一组时同样不执行派生
+    let shown = vault.kdf_params().unwrap();
+    let other = KdfParams::new(KdfParams::MAX_M_KIB, KdfParams::MAX_T, 8, [3u8; 16]).unwrap();
+    assert_ne!(shown, other);
+    assert_eq!(
+        vault
+            .unlock_confirmed_expensive_kdf("pw", &sk, &other)
+            .err(),
+        Some(CoreError::KdfNeedsConfirmation)
+    );
     assert!(
         start.elapsed() < std::time::Duration::from_secs(1),
         "不应执行任何派生"
@@ -331,7 +341,7 @@ fn review_f6_concurrent_loser_survives_pruning_until_resolved() {
             .update_item(id, vec![Edit::SetFavorite(i % 2 == 0)])
             .unwrap();
     }
-    vault.store.prune(&id, HISTORY_KEEP, u64::MAX).unwrap();
+    vault.store.prune(&id, HISTORY_KEEP, 0, now_ms()).unwrap();
     let written_in = vault.store.revision(&r1.rev_id).unwrap().unwrap();
     assert!(written_in.pruned, "落选版本最初所在的修订已被清理");
     let view = vault.item(id).unwrap();
@@ -351,4 +361,64 @@ fn review_f6_concurrent_loser_survives_pruning_until_resolved() {
     assert_eq!(view.doc.overview().title, "A");
     assert!(view.conflicts.is_empty());
     assert!(!vault.items().unwrap()[0].has_conflicts);
+}
+
+/// 第二轮评审 G5：合并后超过单个信封的条目仍可读取；普通保存返回 `ItemTooLarge`，不静默丢弃版本；
+/// 精简（一次写入中处理冲突）之后可以保存。
+#[test]
+fn review2_g5_oversized_merged_item_is_readable_and_can_be_compacted() {
+    let (mut vault, _) =
+        Vault::create_with_store(Store::open_in_memory().unwrap(), "pw", fast_params()).unwrap();
+    let vault_id = vault.vaults().unwrap()[0].id;
+    let id = vault
+        .create_item(vault_id, ItemType::SecureNote, "big", vec![])
+        .unwrap();
+    let r0 = vault.store.heads(&id).unwrap()[0].clone();
+    let doc0 = vault.item(id).unwrap().doc;
+    let note = RecordKey::attr("note");
+    // 70 台"设备"并发写入各自接近 256 KiB 的备注：每个修订都合法，合并后约 17.5 MiB
+    let ik = vault.item_key(vault.session().unwrap(), &r0).unwrap();
+    let mut revs = Vec::new();
+    for i in 0..70u8 {
+        let mut d = doc0.clone();
+        let hlc = vault.tick().unwrap();
+        let rev = Id128::random().unwrap();
+        let body = format!("{i:03}{}", "x".repeat(keevo_format::MAX_VALUE_LEN - 64));
+        d.set(
+            note.clone(),
+            RecordValue::Text(body.as_str().into()),
+            hlc,
+            rev,
+        )
+        .unwrap();
+        vault
+            .write_item_revision(vault_id, id, rev, vec![r0.rev_id], &ik, Some(&d))
+            .unwrap();
+        revs.push(rev);
+    }
+    let view = vault.item(id).unwrap();
+    assert_eq!(view.head_count, 70);
+    assert_eq!(view.conflicts.len(), 1);
+    assert_eq!(
+        vault.update_item(id, vec![Edit::SetFavorite(true)]).err(),
+        Some(CoreError::ItemTooLarge)
+    );
+    assert_eq!(
+        vault.item(id).unwrap().head_count,
+        70,
+        "保存失败时不写入任何东西"
+    );
+
+    vault
+        .compact_item(id, &[(note.clone(), revs[3])], &[])
+        .unwrap();
+    let view = vault.item(id).unwrap();
+    assert_eq!(view.head_count, 1);
+    assert!(view.conflicts.is_empty());
+    assert!(
+        matches!(view.doc.get(&note), Some(RecordValue::Text(t)) if t.expose().starts_with("003"))
+    );
+    vault
+        .update_item(id, vec![Edit::SetFavorite(true)])
+        .unwrap();
 }

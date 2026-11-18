@@ -16,8 +16,11 @@ pub enum CoreError {
     /// 主密码或账户密钥错误。为避免泄露信息，两者不作区分。
     WrongCredentials,
     /// KDF 参数超出本机自动执行预算（`spec/crypto.md` §5.3）。参数可能被篡改，用于耗尽资源；
-    /// 需要用户确认后改用 [`crate::Vault::unlock_confirmed_expensive_kdf`]。
+    /// 需要用户确认 [`crate::Vault::kdf_params`] 后，改用 [`crate::Vault::unlock_confirmed_expensive_kdf`]。
     KdfNeedsConfirmation,
+    /// 条目合并后超过单个信封的上限，无法保存（`spec/revisions.md` §7.1）。读取与导出不受影响；
+    /// 需要先用 [`crate::Vault::compact_item`] 精简。
+    ItemTooLarge,
     /// 数据库中还没有账户。
     NoAccount,
     /// 数据库中已经有账户。
@@ -40,6 +43,7 @@ impl fmt::Display for CoreError {
             Self::Locked => f.write_str("vault is locked"),
             Self::WrongCredentials => f.write_str("wrong master password or secret key"),
             Self::KdfNeedsConfirmation => f.write_str("kdf parameters exceed the automatic budget"),
+            Self::ItemTooLarge => f.write_str("item is too large to save"),
             Self::NoAccount => f.write_str("no account"),
             Self::AccountExists => f.write_str("account already exists"),
             Self::NotFound => f.write_str("not found"),
@@ -64,7 +68,10 @@ impl From<CryptoError> for CoreError {
 
 impl From<FormatError> for CoreError {
     fn from(e: FormatError) -> Self {
-        Self::Format(e)
+        match e {
+            FormatError::ItemTooLarge => Self::ItemTooLarge,
+            other => Self::Format(other),
+        }
     }
 }
 

@@ -20,7 +20,7 @@ const DEFAULT_VAULT_NAME: &str = "个人";
 const FIRST_EPOCH: u64 = 1;
 /// 每个对象保留完整内容的修订数（`spec/revisions.md` §7）。
 const HISTORY_KEEP: usize = 20;
-/// 历史保留的时间下限（`spec/revisions.md` §7）：90 天内写入或收到的修订一律保留。
+/// 历史保留的时间下限（`spec/revisions.md` §7.2）：按本机有效时间计，90 天内写入或收到的修订一律保留。
 const HISTORY_MIN_AGE_MS: u64 = 90 * 24 * 60 * 60 * 1000;
 
 /// 新字段。
@@ -224,30 +224,47 @@ impl Vault {
     /// 主密码或账户密钥错误时返回 [`CoreError::WrongCredentials`]；KDF 参数超出本机自动执行预算时返回
     /// [`CoreError::KdfNeedsConfirmation`]，此时不会执行任何派生。
     pub fn unlock(&mut self, password: &str, secret_key: &AccountSecretKey) -> Result<()> {
-        self.unlock_inner(password, secret_key, false)
+        self.unlock_inner(password, secret_key, None)
     }
 
-    /// 用户已确认后，以超出自动执行预算的 KDF 参数解锁（可能耗时很久、占用大量内存）。
+    /// 账户当前的 KDF 参数，供界面在 [`CoreError::KdfNeedsConfirmation`] 时向用户展示。
     ///
     /// # Errors
-    /// 同 [`Vault::unlock`]，但不再检查预算。
+    /// 没有账户或参数格式错误时返回错误。
+    pub fn kdf_params(&self) -> Result<KdfParams> {
+        let account = self.store.account()?.ok_or(CoreError::NoAccount)?;
+        Ok(KdfParams::decode(&account.kdf_params)?)
+    }
+
+    /// 用户确认了 `confirmed` 这组参数后，以超出自动执行预算的参数解锁（可能耗时很久、占用大量内存）。
+    ///
+    /// 确认绑定到具体参数：若数据库中的参数已不是用户看到的那一组（例如确认期间被替换为更昂贵的参数），
+    /// 返回 [`CoreError::KdfNeedsConfirmation`]，不执行派生。
+    ///
+    /// # Errors
+    /// 同 [`Vault::unlock`]。
     pub fn unlock_confirmed_expensive_kdf(
         &mut self,
         password: &str,
         secret_key: &AccountSecretKey,
+        confirmed: &KdfParams,
     ) -> Result<()> {
-        self.unlock_inner(password, secret_key, true)
+        self.unlock_inner(password, secret_key, Some(confirmed))
     }
 
     fn unlock_inner(
         &mut self,
         password: &str,
         secret_key: &AccountSecretKey,
-        allow_expensive: bool,
+        confirmed: Option<&KdfParams>,
     ) -> Result<()> {
         let account = self.store.account()?.ok_or(CoreError::NoAccount)?;
         let params = KdfParams::decode(&account.kdf_params)?;
-        if !allow_expensive && !params.within_auto_budget() {
+        let allowed = match confirmed {
+            Some(c) => *c == params,
+            None => params.within_auto_budget(),
+        };
+        if !allowed {
             return Err(CoreError::KdfNeedsConfirmation);
         }
         let auk = derive_account_unlock_key(password, secret_key, &account.id, &params)?;
@@ -516,6 +533,29 @@ impl Vault {
         })
     }
 
+    /// 精简条目（`spec/revisions.md` §7.1）：在**一次**写入中处理冲突（保留指定版本）并删除指定记录。
+    /// 条目合并后超过单个信封、普通保存返回 [`CoreError::ItemTooLarge`] 时，用它把状态缩小到可保存的大小。
+    ///
+    /// # Errors
+    /// 指定的版本不存在时返回 [`CoreError::Format`]；精简后仍然过大时返回 [`CoreError::ItemTooLarge`]；
+    /// 其余见 [`Vault::update_item`]。
+    pub fn compact_item(
+        &mut self,
+        item_id: Id128,
+        keep: &[(RecordKey, Id128)],
+        remove: &[RecordKey],
+    ) -> Result<()> {
+        self.revise(item_id, |doc, hlc, rev_id| {
+            for (key, version) in keep {
+                doc.resolve(key, *version, hlc, rev_id)?;
+            }
+            for key in remove {
+                doc.delete(key.clone(), hlc, rev_id);
+            }
+            Ok(())
+        })
+    }
+
     /// 写时收敛（§5.4）：以合并视图为基础、父修订为全部头，写入一个新修订。
     fn revise(
         &mut self,
@@ -540,11 +580,8 @@ impl Vault {
         };
         let parents = heads.iter().map(|h| h.rev_id).collect();
         self.write_item_revision(view.vault_id, item_id, rev_id, parents, &ik, Some(&doc))?;
-        self.store.prune(
-            &item_id,
-            HISTORY_KEEP,
-            now_ms().saturating_sub(HISTORY_MIN_AGE_MS),
-        )?;
+        self.store
+            .prune(&item_id, HISTORY_KEEP, HISTORY_MIN_AGE_MS, now_ms())?;
         Ok(())
     }
 
@@ -609,7 +646,7 @@ impl Vault {
     }
 
     fn tick(&mut self) -> Result<Hlc> {
-        let hlc = self.clock.next(now_ms());
+        let hlc = self.clock.next(now_ms())?;
         self.store.set_meta(META_HLC, &hlc.0.to_be_bytes())?;
         Ok(hlc)
     }
@@ -712,7 +749,7 @@ impl Vault {
                         item_id,
                         rev_id,
                     ),
-                    &doc.encode()?,
+                    &doc.encode_for_write()?,
                 )?),
             ),
             None => (None, None, None),

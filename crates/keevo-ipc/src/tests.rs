@@ -93,6 +93,7 @@ struct Delivered {
     to_client: Vec<Vec<u8>>,
     confirm: Option<[u8; 6]>,
     closed: bool,
+    started: bool,
 }
 
 fn deliver(svc: &Service, conn: &mut ServiceConnection, frame: &[u8]) -> Delivered {
@@ -105,6 +106,7 @@ fn collect(outputs: Vec<Output>) -> Delivered {
         match o {
             Output::Send(f) => d.to_client.push(f),
             Output::ConfirmPairing { sas, .. } => d.confirm = Some(sas),
+            Output::PairingStarted { .. } => d.started = true,
             Output::Close => d.closed = true,
         }
     }
@@ -446,7 +448,7 @@ fn review_f1_revoking_a_pairing_cuts_off_established_sessions() {
 fn manual_pairing(
     conn_timeout: Option<std::time::Duration>,
     msg1_payload: impl FnOnce(&StaticKeypair) -> Vec<u8>,
-    msg3_payload: &serde_json::Value,
+    msg3_payload: &[u8],
 ) -> Delivered {
     use crate::message::{b64, unb64};
     let svc = Service::new();
@@ -481,9 +483,7 @@ fn manual_pairing(
     };
     assert!(hs.read(&unb64(&m2).unwrap()).unwrap().is_empty());
     std::thread::sleep(std::time::Duration::from_millis(5));
-    let msg3 = hs
-        .write(&serde_json::to_vec(msg3_payload).unwrap())
-        .unwrap();
+    let msg3 = hs.write(msg3_payload).unwrap();
     deliver(
         &svc,
         &mut conn,
@@ -491,15 +491,18 @@ fn manual_pairing(
     )
 }
 
+/// 第 3 条消息的负载：nonce ‖ 显示名的 UTF-8 字节（§4.2）。
+fn msg3(nonce: [u8; 32], name: &str) -> Vec<u8> {
+    let mut p = nonce.to_vec();
+    p.extend_from_slice(name.as_bytes());
+    p
+}
+
 fn honest_commitment(
     nonce: [u8; 32],
     name: &'static str,
 ) -> impl FnOnce(&StaticKeypair) -> Vec<u8> {
-    move |ext| keevo_crypto::pairing_commitment(&ext.public_key(), &nonce, name).to_vec()
-}
-
-fn msg3(nonce: [u8; 32], name: &str) -> serde_json::Value {
-    serde_json::json!({ "name": name, "nonce": crate::message::b64(&nonce) })
+    move |ext| keevo_crypto::pairing_commitment(&ext.public_key(), &msg3(nonce, name)).to_vec()
 }
 
 #[test]
@@ -520,7 +523,7 @@ fn review_i1_third_message_must_match_commitment() {
         None,
         |_| {
             let k = StaticKeypair::generate().unwrap().public_key();
-            keevo_crypto::pairing_commitment(&k, &[1; 32], "x").to_vec()
+            keevo_crypto::pairing_commitment(&k, &msg3([1; 32], "x")).to_vec()
         },
         &msg3([1; 32], "x"),
     );
@@ -605,4 +608,92 @@ fn session_first_message_payload_must_be_empty() {
         &ControlFrame::Session { d: b64(&msg1) }.to_json().unwrap(),
     );
     assert!(d.closed);
+}
+
+// ---------------------------------------------------------------- 评审第二轮 G1
+
+/// 第二轮 G1：第 3 条消息只要与承诺的原始字节有一个字节不同就拒绝，不存在"同语义、不同编码"。
+#[test]
+fn review2_g1_any_byte_change_in_third_message_is_rejected() {
+    let trailing = manual_pairing(
+        None,
+        honest_commitment([1; 32], "Chrome"),
+        &msg3([1; 32], "Chrome "),
+    );
+    assert!(trailing.closed && trailing.confirm.is_none());
+    let mut bad_utf8 = msg3([1; 32], "");
+    bad_utf8.push(0xff);
+    let invalid = manual_pairing(
+        None,
+        {
+            let b = bad_utf8.clone();
+            move |ext| keevo_crypto::pairing_commitment(&ext.public_key(), &b).to_vec()
+        },
+        &bad_utf8,
+    );
+    assert!(
+        invalid.closed && invalid.confirm.is_none(),
+        "显示名必须是合法 UTF-8"
+    );
+    let honest = manual_pairing(
+        None,
+        honest_commitment([1; 32], "Chrome"),
+        &msg3([1; 32], "Chrome"),
+    );
+    assert!(honest.confirm.is_some());
+}
+
+/// 第二轮 G1：同一时刻最多一个配对；每小时最多开始 10 次。计数点是服务发出第 2 条消息，
+/// 中途放弃的尝试同样计数。
+#[test]
+fn review2_g1_pairing_attempts_are_limited() {
+    use crate::service::{MAX_PAIRING_STARTS_PER_HOUR, PairingGate};
+    let svc = Service::new();
+    let gate = Arc::new(PairingGate::default());
+    let start = |gate: &Arc<PairingGate>| {
+        let mut conn = ServiceConnection::new(svc.key.clone()).with_pairing_gate(gate.clone());
+        let hello = serde_json::to_vec(&HostHello {
+            v: 1,
+            client: "native-host".into(),
+            extension_origin: ORIGIN.into(),
+            browser: "com.google.Chrome".into(),
+        })
+        .unwrap();
+        assert!(conn.on_frame(&hello, &svc.store, &svc.backend).is_empty());
+        let mut client = ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "x");
+        let d = deliver(&svc, &mut conn, &client.start_pairing().unwrap());
+        (conn, client, d)
+    };
+    let (first, _, d) = start(&gate);
+    assert!(d.started && !d.closed);
+    // 第一个配对进行中，第二个被拒绝
+    let (_, mut client2, d2) = start(&gate);
+    assert!(d2.closed);
+    let (_, events) = client2.on_frame(&d2.to_client[0]).unwrap();
+    assert!(
+        matches!(events[0], ClientEvent::Error(ErrorCode::PairingLimited)),
+        "{events:?}"
+    );
+    // 放弃（断开）后释放；放弃的尝试仍然计数
+    drop(first);
+    for _ in 1..MAX_PAIRING_STARTS_PER_HOUR {
+        let (conn, _, d) = start(&gate);
+        assert!(!d.closed);
+        drop(conn);
+    }
+    let (_, _, d) = start(&gate);
+    assert!(d.closed, "超过每小时次数上限");
+}
+
+/// 第二轮 G1：显示名去掉控制字符与格式字符（双向文字控制符、零宽字符），按 Unicode 标量截断到 64 个。
+#[test]
+fn review2_g1_display_name_is_sanitized_consistently() {
+    use crate::message::sanitize_display_name;
+    assert_eq!(
+        sanitize_display_name("Chrome\u{202e}emorhC\u{200b}\n"),
+        "ChromeemorhC"
+    );
+    assert_eq!(sanitize_display_name(&"界".repeat(100)).chars().count(), 64);
+    let client = ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "A\u{2066}B");
+    assert_eq!(client.display_name(), "AB");
 }

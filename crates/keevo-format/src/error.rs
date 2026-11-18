@@ -21,6 +21,15 @@ pub enum FormatError {
     RevisionConflict,
     /// 记录键上没有指定的版本。
     NoSuchVersion,
+    /// 修订的父修订不在修订图中（父修订必须先于子修订加入，因此也排除了环）。
+    MissingParent,
+    /// 单个记录值编码后超过 256 KiB（`spec/vault-format.md` §2），或整数超出 ±(2⁵³−1)。
+    ValueTooLarge,
+    /// 条目详情编码后超过单个信封的明文上限（`spec/revisions.md` §7.1）。读取不受影响；
+    /// 需要先精简（处理冲突、删除字段）才能保存。
+    ItemTooLarge,
+    /// HLC 已达到上限，无法再生成更大的时间戳。
+    ClockExhausted,
 }
 
 impl fmt::Display for FormatError {
@@ -33,6 +42,10 @@ impl fmt::Display for FormatError {
             Self::NoHeads => f.write_str("no heads to merge"),
             Self::RevisionConflict => f.write_str("conflicting metadata for the same revision"),
             Self::NoSuchVersion => f.write_str("no such record version"),
+            Self::MissingParent => f.write_str("parent revision is not in the graph"),
+            Self::ValueTooLarge => f.write_str("record value is too large"),
+            Self::ItemTooLarge => f.write_str("item exceeds the envelope size limit"),
+            Self::ClockExhausted => f.write_str("hlc exhausted"),
         }
     }
 }
