@@ -4,6 +4,7 @@
 //! 条目密钥按需解开、用后即弃。所有写入都会生成新的修订（`spec/revisions.md`），从不原地改写。
 
 mod error;
+pub mod generator;
 pub mod local;
 pub mod otp;
 pub mod url_match;

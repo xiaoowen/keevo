@@ -58,6 +58,7 @@ pub use noise::{
     Handshake, MAX_NOISE_MESSAGE, PAIR_NONCE_LEN, StaticKeypair, Transport, pairing_commitment,
     pairing_nonce,
 };
+pub use random::random_below;
 pub use secret_key::AccountSecretKey;
 pub use totp::{MAX_OTP_SECRET_LEN, OTP_DIGITS, OtpAlgorithm, OtpKey};
 pub use two_skd::{MAX_PASSWORD_LEN, derive_account_unlock_key};

@@ -383,3 +383,33 @@ fn otp_fields() {
     f.vault.lock();
     assert!(code.code.is_empty(), "锁定后验证码句柄清零");
 }
+
+/// 生成器：三种方式都能生成；参数超出范围返回输入错误。
+#[test]
+fn generator() {
+    let g = generate_password(GeneratorRecipe::Password {
+        length: 20,
+        lowercase: true,
+        uppercase: true,
+        digits: true,
+        symbols: false,
+        avoid_ambiguous: true,
+    })
+    .unwrap();
+    assert_eq!(g.value.expose().chars().count(), 20);
+    assert!(g.entropy_bits > 100.0 && g.entropy_bits < 20.0 * 62f64.log2());
+    let p = generate_password(GeneratorRecipe::Passphrase {
+        words: 5,
+        separator: "-".into(),
+        capitalize: false,
+        include_number: false,
+    })
+    .unwrap();
+    assert!(p.value.expose().split('-').count() >= 5);
+    let pin = generate_password(GeneratorRecipe::Pin { length: 6 }).unwrap();
+    assert_eq!(pin.value.expose().len(), 6);
+    assert!(matches!(
+        generate_password(GeneratorRecipe::Pin { length: 2 }),
+        Err(KeevoError::InvalidInput { .. })
+    ));
+}

@@ -318,6 +318,11 @@ const fn reason_kind(r: PasswordReason) -> PasswordReasonKind {
 pub struct SecretValue(Mutex<Option<Zeroizing<String>>>);
 
 impl SecretValue {
+    /// 不登记到任何保险库的句柄（例如生成器的结果），锁定时不清零，随 Swift 释放而清零。
+    fn detached(value: Zeroizing<String>) -> Arc<Self> {
+        Arc::new(Self(Mutex::new(Some(value))))
+    }
+
     fn with<T>(&self, f: impl FnOnce(&str) -> T) -> T {
         let guard = self
             .0
@@ -428,6 +433,94 @@ pub fn parse_otp(text: String) -> Result<OtpInfo, KeevoError> {
         .to_owned(),
         digits: c.digits,
         period: c.period,
+    })
+}
+
+/// 密码生成方式（`keevo-core::generator`）。
+#[derive(uniffi::Enum)]
+pub enum GeneratorRecipe {
+    /// 随机字符，长度 8–128，每个选中的类别至少出现一次。
+    Password {
+        /// 长度。
+        length: u32,
+        /// 小写字母。
+        lowercase: bool,
+        /// 大写字母。
+        uppercase: bool,
+        /// 数字。
+        digits: bool,
+        /// 符号。
+        symbols: bool,
+        /// 排除容易看错的字符。
+        avoid_ambiguous: bool,
+    },
+    /// 口令短语，3–20 个单词（EFF 大词表）。
+    Passphrase {
+        /// 单词数。
+        words: u32,
+        /// 分隔符（最多 3 个字符）。
+        separator: String,
+        /// 首字母大写。
+        capitalize: bool,
+        /// 加一位随机数字。
+        include_number: bool,
+    },
+    /// 纯数字，4–32 位。
+    Pin {
+        /// 位数。
+        length: u32,
+    },
+}
+
+/// 生成结果。
+#[derive(uniffi::Record)]
+pub struct GeneratedPassword {
+    /// 生成的值。
+    pub value: Arc<SecretValue>,
+    /// 熵（比特），按实际的取值空间计算。
+    pub entropy_bits: f64,
+}
+
+/// 生成密码。
+///
+/// # Errors
+/// 参数超出范围或没有选中任何字符类别时返回 [`KeevoError::InvalidInput`]。
+#[uniffi::export]
+pub fn generate_password(recipe: GeneratorRecipe) -> Result<GeneratedPassword, KeevoError> {
+    use keevo_core::generator::{Recipe, generate};
+    let recipe = match recipe {
+        GeneratorRecipe::Password {
+            length,
+            lowercase,
+            uppercase,
+            digits,
+            symbols,
+            avoid_ambiguous,
+        } => Recipe::Password {
+            length,
+            lowercase,
+            uppercase,
+            digits,
+            symbols,
+            avoid_ambiguous,
+        },
+        GeneratorRecipe::Passphrase {
+            words,
+            separator,
+            capitalize,
+            include_number,
+        } => Recipe::Passphrase {
+            words,
+            separator,
+            capitalize,
+            include_number,
+        },
+        GeneratorRecipe::Pin { length } => Recipe::Pin { length },
+    };
+    let g = generate(&recipe)?;
+    Ok(GeneratedPassword {
+        value: SecretValue::detached(g.value),
+        entropy_bits: g.entropy_bits,
     })
 }
 
