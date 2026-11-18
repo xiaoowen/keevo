@@ -61,8 +61,8 @@ ADR-0002 决定不使用任何现有团队，但仍计划在正式发布前（�
 
 ### 仍需验证（M1.1）
 
-- 登记指纹后，`biometryCurrentSet` 密钥的创建与使用，包括取消、锁屏、指纹变更后的失效与恢复。
-- 完整的 SwiftUI 应用在临时签名 + Hardened Runtime 下能否正常运行，Rust 核心改为静态链接。
+- ~~登记指纹后，`biometryCurrentSet` 密钥的创建与使用、取消、指纹不匹配~~：已实测（技术验证记录的补充）。锁屏与指纹变更后的失效与恢复仍待实测。
+- ~~完整的 SwiftUI 应用在临时签名 + Hardened Runtime 下能否正常运行，Rust 核心改为静态链接~~：已实测。`scripts/package-macos.sh --verify` 组装并签名 `Keevo.app`，逐项检查：flags 为 adhoc + runtime、没有 Team ID 与 entitlement、只链接系统库；Hardened Runtime 下冒烟测试（含 Secure Enclave）通过；`DYLD_INSERT_LIBRARIES` 被忽略；Library Validation 拒绝临时签名的库（"mapping process and mapped file (non-platform) have different Team IDs"）、放行系统库；后两项都有不加 Hardened Runtime 的对照组，证明测试本身有效。`--launch` 确认应用能正常启动。CI 的 macOS 任务每次运行 `--verify`。
 - 构建流程：先签名辅助程序，把 cdhash 编译进主程序，再签名主程序。
 - macOS 的"App 管理"保护能否阻止其他应用修改拖拽安装的 Keevo.app。
 - 未公证应用下载后的首次打开流程（M3 写安装说明前）。

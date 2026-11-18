@@ -90,7 +90,7 @@ jobs:
         run: cargo vet --locked
 
   macos-shell:
-    name: macOS 空壳应用（Swift → UniFFI → Rust 冒烟测试）
+    name: macOS 应用（Swift → UniFFI → Rust 冒烟测试、打包与进程加固）
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,6 +100,8 @@ jobs:
         run: rustup toolchain install
       - name: 构建并运行冒烟测试
         run: scripts/build-macos.sh --smoke
+      - name: 打包 Keevo.app 并实测进程加固（临时签名、Hardened Runtime、Library Validation）
+        run: scripts/package-macos.sh --verify
 
   fuzz:
     name: 模糊测试（每个目标 30 秒）

@@ -261,7 +261,7 @@ keevo/
 │   └── keevo-cli/
 ├── tools/uniffi-bindgen/     # 构建工具：生成 Swift 绑定
 ├── apps/
-│   ├── macos/                 # SwiftUI 应用（M0 为 SwiftPM 空壳，M1.1 改为 Xcode 工程）
+│   ├── macos/                 # SwiftUI 应用（SwiftPM 构建，scripts/package-macos.sh 组装为 Keevo.app）
 │   └── browser-extension/     # MV3 扩展（TypeScript + Svelte）
 ├── spec/                      # 可审计规范：加密、保险库格式、IPC、同步协议 + 测试向量
 ├── design/                    # 设计令牌、图标

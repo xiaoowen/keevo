@@ -1,8 +1,9 @@
 // swift-tools-version: 6.0
 // SPDX-License-Identifier: GPL-3.0-or-later（附加 App Store 许可，见仓库根目录 LICENSE）
 //
-// M0 空壳应用。先运行 scripts/build-macos.sh：它会编译 Rust 静态库、生成 UniFFI 绑定，再调用 SwiftPM。
-// M1 会改为 Xcode 工程（签名、entitlements、钥匙串与 Touch ID 需要）。
+// 先运行 scripts/build-macos.sh：它会编译 Rust 静态库、生成 UniFFI 绑定，再调用 SwiftPM。
+// scripts/package-macos.sh 再把产物组装成临时签名的 Keevo.app（ADR-0003）。不绑定团队，也不需要 entitlement，
+// 因此不需要 Xcode 工程。
 
 import Foundation
 import PackageDescription

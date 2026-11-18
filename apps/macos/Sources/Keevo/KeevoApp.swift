@@ -4,7 +4,7 @@ import AppKit
 import SwiftUI
 
 /// 直接引用 `State` 属性包装器。新版 SDK 中 `@State` 会解析为宏，而 Command Line Tools 不带
-/// SwiftUIMacros 插件；用别名可以绕开宏，语义与 `@State` 相同。M1 改用 Xcode 工程后可换回 `@State`。
+/// SwiftUIMacros 插件；用别名可以绕开宏，语义与 `@State` 相同。只用 Command Line Tools 也能构建，是有意保留的。
 typealias ViewState<Value> = SwiftUI.State<Value>
 
 @main

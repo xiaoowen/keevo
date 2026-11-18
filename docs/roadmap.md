@@ -87,7 +87,7 @@
 | ◐ | Touch ID 解锁 | 已实现：启用（再输一次主密码）、解锁、取消、指纹不匹配计数、失效后用主密码恢复、关闭；锁定时回到前台自动弹出一次。**已实测**（`keevo-smoke --touch-id`，8 项通过）：解锁、取消（`-2`）、指纹不匹配（`-1`）、恢复。**待实测**：`--touch-id-locked`（锁屏时的错误码）、`--touch-id-change`（指纹变化后的错误码） |
 | ✅ | 自动锁定与必须输入主密码的情形 | 系统闲置 N 分钟（默认 10，可选 1–60）、睡眠、锁屏、屏幕保护程序、切换用户时锁定。重启后、超过 N 天（默认 14，可设 1–30）、连续 3 次未能识别、指纹变化时必须输入主密码，由核心层判定，解锁界面说明原因（`docs/security.md` §8） |
 | ✅ | 主界面框架 | 数据目录改为 `Application Support/Keevo/`。侧边栏（全部、收藏、分类、保险库、标签、最近删除，带数量）；列表（收藏与冲突标记、右键菜单）；详情（字段复制、显示 30 秒或窗口失焦后隐藏、大字显示，回收站与冲突提示）；编辑器（标题、收藏、字段增删改、标签，顶部冲突面板，需要时重建为新条目）；历史版本与恢复；冲突面板；KDF 参数确认；设置窗口（自动锁定、Touch ID、主密码间隔）。过滤语法与其余条目类型的模板在 M1.2 |
-| ☐ | 应用打包 | 用脚本组装 `Keevo.app`（Info.plist、Rust 核心静态链接、临时签名 + Hardened Runtime），验证 Library Validation 下能正常运行 |
+| ✅ | 应用打包 | `scripts/package-macos.sh` 组装 `Keevo.app`（Info.plist、包标识 `io.github.xiaoowen.keevo`、Rust 核心静态链接、去掉多余 rpath、临时签名 + Hardened Runtime、无 entitlement）。`--verify` 实测 Secure Enclave、DYLD 注入与 Library Validation（带对照组），CI 每次运行；`--launch` 确认能正常启动。应用图标待设计 |
 | ☐ | 测试向量 | 条目 JSON 的正向与负向解码、记录值规范编码、含删除状态与并发版本的合并向量 |
 
 把辅助程序 cdhash 编译进主程序，随 M1.3 把 Vault Service 并入应用时一起完成：那时才有需要校验的对端，也才能端到端测试。

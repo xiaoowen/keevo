@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# 组装并签名 Keevo.app（ADR-0003）：临时签名 + Hardened Runtime，不带任何 entitlement，
+# 保留默认的 Library Validation；Rust 核心静态链接进主程序。
+#
+# 用法：
+#   scripts/package-macos.sh             构建、组装、签名，并做静态检查
+#   scripts/package-macos.sh --verify    另外实测进程加固：Secure Enclave、DYLD 注入、Library Validation
+#   scripts/package-macos.sh --launch    另外启动一次应用，确认能正常运行（会短暂打开窗口）
+#
+# 产物：target/macos/Keevo.app
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+APP_SRC="$ROOT/apps/macos"
+OUT="$ROOT/target/macos"
+APP="$OUT/Keevo.app"
+BUNDLE_ID="io.github.xiaoowen.keevo"
+VERIFY=0
+LAUNCH=0
+for arg in "$@"; do
+  case "$arg" in
+    --verify) VERIFY=1 ;;
+    --launch) VERIFY=1; LAUNCH=1 ;;
+    *) echo "未知参数：$arg" >&2; exit 2 ;;
+  esac
+done
+
+fail() { echo "✗ $*" >&2; exit 1; }
+pass() { echo "  ✓ $*"; }
+
+"$ROOT/scripts/build-macos.sh" >/dev/null
+
+# 版本：短版本取自 Cargo 工作区，构建号为提交数（可复现，不含时间戳）
+VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
+BUILD="$(git -C "$ROOT" rev-list --count HEAD)"
+
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp "$APP_SRC/.build/release/Keevo" "$APP/Contents/MacOS/Keevo"
+# SwiftPM 会加上 @loader_path 与构建机上工具链的绝对路径作为 rpath。主程序不引用任何 @rpath 库，
+# 这些 rpath 用不到，却给"在旁边放一个同名库"留了入口，也让产物带上构建机的路径。只保留系统的 /usr/lib/swift。
+rpaths() { otool -l "$1" | awk '/cmd LC_RPATH/{getline; getline; print $2}'; }
+while read -r rp; do
+  [[ -n "$rp" && "$rp" != "/usr/lib/swift" ]] && install_name_tool -delete_rpath "$rp" "$APP/Contents/MacOS/Keevo"
+done < <(rpaths "$APP/Contents/MacOS/Keevo")
+cat > "$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key><string>zh-Hans</string>
+  <key>CFBundleDisplayName</key><string>Keevo</string>
+  <key>CFBundleExecutable</key><string>Keevo</string>
+  <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleName</key><string>Keevo</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$BUILD</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
+  <key>LSMinimumSystemVersion</key><string>15.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+PLIST
+plutil -lint -s "$APP/Contents/Info.plist" || fail "Info.plist 格式错误"
+
+# 临时签名（-s -）、Hardened Runtime（--options runtime）、不带 entitlement、不加时间戳
+codesign --force --sign - --options runtime --identifier "$BUNDLE_ID" --timestamp=none "$APP"
+
+echo "静态检查"
+codesign --verify --strict --verbose=1 "$APP" 2>/dev/null || fail "签名校验失败"
+pass "签名完整（codesign --verify --strict）"
+INFO="$(codesign -dvvv "$APP" 2>&1)"
+grep -q "flags=0x10002(adhoc,runtime)" <<<"$INFO" || fail "签名标志不是 adhoc + runtime：$(grep flags <<<"$INFO")"
+pass "临时签名 + Hardened Runtime（flags=0x10002）"
+grep -q "TeamIdentifier=not set" <<<"$INFO" || fail "签名带有 Team ID"
+pass "不绑定任何团队（TeamIdentifier=not set）"
+ENT="$(codesign -d --entitlements - --xml "$APP" 2>/dev/null || true)"
+[[ -z "$ENT" ]] || fail "签名带有 entitlement：$ENT"
+pass "没有任何 entitlement（不禁用 Library Validation，不允许 DYLD 环境变量）"
+DEPS="$(otool -L "$APP/Contents/MacOS/Keevo" | tail -n +2 | awk '{print $1}')"
+NON_SYSTEM="$(grep -vE '^(/usr/lib/|/System/Library/)' <<<"$DEPS" || true)"
+[[ -z "$NON_SYSTEM" ]] || fail "依赖了系统以外的动态库：$NON_SYSTEM"
+pass "只链接系统库，Rust 核心为静态链接（$(wc -l <<<"$DEPS" | tr -d ' ') 个系统库）"
+grep -q '@rpath' <<<"$DEPS" && fail "主程序引用了 @rpath 库"
+EXTRA_RPATH="$(rpaths "$APP/Contents/MacOS/Keevo" | grep -vx '/usr/lib/swift' || true)"
+[[ -z "$EXTRA_RPATH" ]] || fail "主程序带有系统以外的 rpath：$EXTRA_RPATH"
+pass "rpath 只有 /usr/lib/swift，不引用 @rpath 库"
+CDHASH="$(sed -n 's/^CDHash=//p' <<<"$INFO")"
+[[ -n "$CDHASH" ]] || fail "读不到 cdhash"
+echo "  · cdhash：$CDHASH"
+
+if [[ "$VERIFY" == 1 ]]; then
+  echo "进程加固实测"
+  WORK="$(mktemp -d)"
+  trap 'rm -rf "$WORK"' EXIT
+  SMOKE="$APP_SRC/.build/release/keevo-smoke"
+
+  # 与应用相同的签名方式签一份冒烟测试，另签一份不带 Hardened Runtime 的作对照
+  cp "$SMOKE" "$WORK/smoke-runtime"
+  cp "$SMOKE" "$WORK/smoke-plain"
+  codesign --force --sign - --options runtime --timestamp=none "$WORK/smoke-runtime"
+  codesign --force --sign - --timestamp=none "$WORK/smoke-plain"
+
+  # 1. Secure Enclave、Rust 核心在 Hardened Runtime 下正常工作
+  "$WORK/smoke-runtime" >"$WORK/smoke.log" 2>&1 || { cat "$WORK/smoke.log"; fail "Hardened Runtime 下冒烟测试失败"; }
+  grep -q "全部通过" "$WORK/smoke.log" || fail "冒烟测试没有通过"
+  pass "Hardened Runtime 下冒烟测试通过（$(grep -o '本机密钥包裹（[^）]*）' "$WORK/smoke.log" | head -1)）"
+
+  # 一个临时签名的动态库：加载时写下标记文件
+  cat > "$WORK/inject.c" <<'C'
+#include <stdio.h>
+#include <stdlib.h>
+__attribute__((constructor)) static void injected(void) {
+  const char *marker = getenv("KEEVO_INJECT_MARKER");
+  if (marker) { FILE *f = fopen(marker, "w"); if (f) { fputs("injected", f); fclose(f); } }
+}
+C
+  clang -dynamiclib -o "$WORK/inject.dylib" "$WORK/inject.c"
+  codesign --force --sign - --timestamp=none "$WORK/inject.dylib"
+
+  # 2. DYLD_INSERT_LIBRARIES：对照组被注入，Hardened Runtime 下被忽略
+  KEEVO_INJECT_MARKER="$WORK/plain.marker" DYLD_INSERT_LIBRARIES="$WORK/inject.dylib" \
+    "$WORK/smoke-plain" --dlopen /usr/lib/libz.dylib >/dev/null 2>&1 || true
+  [[ -f "$WORK/plain.marker" ]] || fail "对照组没有被注入，测试本身无效"
+  KEEVO_INJECT_MARKER="$WORK/runtime.marker" DYLD_INSERT_LIBRARIES="$WORK/inject.dylib" \
+    "$WORK/smoke-runtime" --dlopen /usr/lib/libz.dylib >/dev/null 2>&1 || true
+  [[ ! -f "$WORK/runtime.marker" ]] || fail "Hardened Runtime 下 DYLD_INSERT_LIBRARIES 仍然生效"
+  pass "DYLD_INSERT_LIBRARIES 被忽略（对照组被注入）"
+
+  # 3. Library Validation：系统库可以加载，临时签名的库被拒绝；对照组可以加载
+  "$WORK/smoke-runtime" --dlopen /usr/lib/libz.dylib >/dev/null || fail "Hardened Runtime 下无法加载系统库"
+  "$WORK/smoke-plain" --dlopen "$WORK/inject.dylib" >/dev/null || fail "对照组无法加载临时签名的库，测试本身无效"
+  set +e
+  REFUSED="$("$WORK/smoke-runtime" --dlopen "$WORK/inject.dylib")"
+  CODE=$?
+  set -e
+  [[ "$CODE" == 3 ]] || fail "Library Validation 没有拒绝临时签名的库：$REFUSED"
+  REASON="$(grep -oE 'not valid for use in process: [^,]*' <<<"$REFUSED" | head -1 | sed 's/)$//')"
+  pass "Library Validation 拒绝临时签名的库，放行系统库（${REASON:-$REFUSED}）"
+fi
+
+if [[ "$LAUNCH" == 1 ]]; then
+  echo "启动检查"
+  "$APP/Contents/MacOS/Keevo" >/dev/null 2>&1 &
+  PID=$!
+  sleep 4
+  kill -0 "$PID" 2>/dev/null || fail "应用启动后退出了"
+  kill "$PID"
+  wait "$PID" 2>/dev/null || true
+  pass "应用正常启动并运行 4 秒"
+fi
+
+echo "完成：$APP"
