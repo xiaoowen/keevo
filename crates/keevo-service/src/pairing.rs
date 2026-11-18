@@ -13,10 +13,14 @@ struct RecordJson {
     extension_origin: String,
     browser: String,
     name: String,
+    /// 配对时间（Unix 毫秒）。早期开发版文件没有此字段，读作 0。
+    #[serde(default)]
+    paired_at_ms: u64,
 }
 
-/// 以 JSON 文件保存配对记录（权限 0600）。记录只含公钥与来源，不是秘密，但被篡改可导致非法配对，
-/// 因此 M1 改为存入加密数据库，与保险库同等保护。
+/// 以 JSON 文件保存配对记录（权限 0600）。**仅供开发服务使用**：记录只含公钥与来源，不是秘密，
+/// 但文件未经认证，同用户进程可以写入伪造的配对。正式版本必须存入加密数据库，与保险库同等保护
+/// （`spec/ipc.md` §4.2；评审 2026-11-18 记为发布前必须解决的集成差距）。
 pub struct FilePairingStore {
     path: PathBuf,
     records: Vec<PairingRecord>,
@@ -44,16 +48,6 @@ impl FilePairingStore {
         })
     }
 
-    /// 撤销某个扩展的配对。
-    ///
-    /// # Errors
-    /// 写入失败时返回错误。
-    pub fn revoke(&mut self, extension_public: &[u8; 32]) -> std::io::Result<()> {
-        self.records
-            .retain(|r| &r.extension_public != extension_public);
-        self.persist()
-    }
-
     /// 全部配对记录。
     #[must_use]
     pub fn records(&self) -> &[PairingRecord] {
@@ -73,6 +67,7 @@ impl FilePairingStore {
                 extension_origin: r.extension_origin.clone(),
                 browser: r.browser.clone(),
                 name: r.name.clone(),
+                paired_at_ms: r.paired_at_ms,
             })
             .collect();
         let bytes = serde_json::to_vec_pretty(&json)
@@ -104,6 +99,7 @@ fn from_json(r: RecordJson) -> Option<PairingRecord> {
         extension_origin: r.extension_origin,
         browser: r.browser,
         name: r.name,
+        paired_at_ms: r.paired_at_ms,
     })
 }
 
@@ -119,7 +115,14 @@ impl PairingStore for FilePairingStore {
         self.records
             .retain(|r| r.extension_public != record.extension_public);
         self.records.push(record);
-        // 写入失败时记录仍在内存中，本次运行内可用；重启后需要重新配对
+        // 写入失败时记录仍在内存中，本次运行内可用；重启后需要重新配对（失败方向是安全的）
         let _ = self.persist();
+    }
+
+    fn revoke(&mut self, extension_public: &[u8; 32]) -> std::io::Result<()> {
+        // 先从内存删除：即使写盘失败，本次运行内撤销也立即生效
+        self.records
+            .retain(|r| &r.extension_public != extension_public);
+        self.persist()
     }
 }

@@ -12,7 +12,7 @@ use keevo_crypto::Id128;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 /// 当前 schema 版本。
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 const SCHEMA_V1: &str = r"
 CREATE TABLE meta (
@@ -67,6 +67,10 @@ CREATE TABLE device (
   high_hash       BLOB
 ) STRICT;
 ";
+
+/// v1 → v2：记录本机写入或收到每个修订的时间，用于"至少保留 90 天"的清理规则（`spec/revisions.md` §7）。
+/// 迁移前已有的修订记为 0，只按数量规则保留。
+const MIGRATE_V2: &str = "ALTER TABLE revision ADD COLUMN stored_ms INTEGER NOT NULL DEFAULT 0;";
 
 /// 存储层错误。不携带任何明文内容。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,19 +234,24 @@ impl Store {
         let version: u32 = self
             .conn
             .pragma_query_value(None, "user_version", |r| r.get(0))?;
-        match version {
-            0 => {
-                let tx = self
-                    .conn
-                    .transaction_with_behavior(TransactionBehavior::Exclusive)?;
-                tx.execute_batch(SCHEMA_V1)?;
-                tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-                tx.commit()?;
-                Ok(())
-            }
-            SCHEMA_VERSION => Ok(()),
-            newer => Err(StoreError::UnsupportedSchema(newer)),
+        if version > SCHEMA_VERSION {
+            return Err(StoreError::UnsupportedSchema(version));
         }
+        if version == SCHEMA_VERSION {
+            return Ok(());
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Exclusive)?;
+        if version < 1 {
+            tx.execute_batch(SCHEMA_V1)?;
+        }
+        if version < 2 {
+            tx.execute_batch(MIGRATE_V2)?;
+        }
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// 当前 schema 版本。
@@ -372,8 +381,9 @@ impl Store {
         }
         tx.execute(
             "INSERT INTO revision (rev_id, object_id, object_type, vault_id, parents, origin_device,
-                                   origin_seq, wrapped_key_ct, overview_ct, details_ct, deleted, pruned)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                                   origin_seq, wrapped_key_ct, overview_ct, details_ct, deleted, pruned,
+                                   stored_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 row.rev_id.as_bytes().as_slice(),
                 row.object_id.as_bytes().as_slice(),
@@ -387,6 +397,7 @@ impl Store {
                 row.details_ct,
                 row.deleted,
                 row.pruned,
+                now_ms(),
             ],
         )?;
         for parent in &row.parents {
@@ -493,18 +504,27 @@ impl Store {
             .collect()
     }
 
-    /// 清理对象的旧修订内容：保留头修订与最近 `keep` 个修订，其余只留元数据（§7）。返回清理数量。
+    /// 清理对象的旧修订内容（`spec/revisions.md` §7），其余只留元数据。返回清理数量。
+    ///
+    /// 只清理同时满足以下条件的修订：不是头修订；不在最近 `keep` 个修订之内；
+    /// 本机写入或收到它的时间早于 `stored_before_ms`（Unix 毫秒）。
     ///
     /// # Errors
     /// SQLite 错误。
-    pub fn prune(&mut self, object_id: &Id128, keep: usize) -> Result<usize> {
+    pub fn prune(
+        &mut self,
+        object_id: &Id128,
+        keep: usize,
+        stored_before_ms: u64,
+    ) -> Result<usize> {
         let keep = i64::try_from(keep).map_err(|_| StoreError::Corrupt("keep"))?;
+        let before = i64::try_from(stored_before_ms).unwrap_or(i64::MAX);
         let n = self.conn.execute(
             "UPDATE revision SET wrapped_key_ct = NULL, overview_ct = NULL, details_ct = NULL, pruned = 1
-             WHERE object_id = ?1 AND pruned = 0
+             WHERE object_id = ?1 AND pruned = 0 AND stored_ms < ?3
                AND rev_id NOT IN (SELECT rev_id FROM head WHERE object_id = ?1)
                AND seq NOT IN (SELECT seq FROM revision WHERE object_id = ?1 ORDER BY seq DESC LIMIT ?2)",
-            params![object_id.as_bytes().as_slice(), keep],
+            params![object_id.as_bytes().as_slice(), keep, before],
         )?;
         Ok(n)
     }
@@ -591,3 +611,12 @@ fn decode_ids(bytes: &[u8]) -> Result<Vec<Id128>> {
 
 #[cfg(test)]
 mod tests;
+
+/// 当前 Unix 毫秒。系统时钟早于 1970 年时记为 0（这些修订只按数量规则保留）。
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_millis()).ok())
+        .unwrap_or(0)
+}

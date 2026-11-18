@@ -25,6 +25,9 @@ pub const AAD_LEN: usize = 132;
 pub const MIN_ENVELOPE_LEN: usize = HEADER_LEN + 256 + TAG_LEN;
 /// 单个信封的明文上限：16 MiB。更大的数据使用附件分块加密。
 pub const MAX_PLAINTEXT_LEN: usize = 16 * 1024 * 1024;
+/// 最长的合法信封：头部 + padded_len(4 + MAX_PLAINTEXT_LEN) + tag。超过即为格式错误，
+/// 在复制与认证之前拒绝，防止未认证输入触发大块内存分配（评审 F3）。
+pub const MAX_ENVELOPE_LEN: usize = HEADER_LEN + 17_301_504 + TAG_LEN;
 
 /// 被加密对象的类型（`spec/crypto.md` §9.1）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -195,7 +198,7 @@ struct Header<'a> {
 
 impl<'a> Header<'a> {
     fn parse(envelope: &'a [u8]) -> Result<Self> {
-        if envelope.len() < MIN_ENVELOPE_LEN {
+        if envelope.len() < MIN_ENVELOPE_LEN || envelope.len() > MAX_ENVELOPE_LEN {
             return Err(CryptoError::Malformed);
         }
         let (&[version, alg], rest) = envelope
@@ -380,5 +383,35 @@ mod tests {
             parent.unwrap_key(&ctx(), &wrapped).err(),
             Some(CryptoError::InvalidContext)
         );
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+
+    #[test]
+    fn max_envelope_len_matches_padding_rule() {
+        let padded = crate::padding::padded_len(4 + MAX_PLAINTEXT_LEN).unwrap();
+        assert_eq!(MAX_ENVELOPE_LEN, HEADER_LEN + padded + TAG_LEN);
+    }
+
+    /// 评审 F3：超过最大合法长度的信封在复制与认证之前就被拒绝。
+    #[test]
+    fn review_f3_oversized_envelope_is_rejected_before_copying() {
+        let key = SymmetricKey::generate().unwrap();
+        let ctx = AadContext {
+            object_type: ObjectType::Item,
+            part: Part::Details,
+            part_index: 0,
+            account_id: Id128::ZERO,
+            vault_id: Id128::ZERO,
+            object_id: Id128::ZERO,
+            rev_id: Id128::ZERO,
+            binding: [0; 32],
+        };
+        let mut env = seal(&key, &ctx, b"x").unwrap();
+        env.resize(MAX_ENVELOPE_LEN + 1, 0);
+        assert_eq!(open(&key, &ctx, &env).err(), Some(CryptoError::Malformed));
     }
 }

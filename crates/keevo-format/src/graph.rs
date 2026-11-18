@@ -4,6 +4,8 @@ use std::collections::{HashMap, HashSet};
 
 use keevo_crypto::Id128;
 
+use crate::error::{FormatError, Result};
+
 #[derive(Debug, Clone)]
 struct Node {
     parents: Vec<Id128>,
@@ -25,12 +27,26 @@ impl RevisionGraph {
         Self::default()
     }
 
-    /// 加入一个修订。重复加入同一修订时以首次为准。
-    pub fn insert(&mut self, rev: Id128, parents: Vec<Id128>, origin_device: Id128) {
-        self.nodes.entry(rev).or_insert(Node {
-            parents,
-            origin: origin_device,
-        });
+    /// 加入一个修订。重复加入完全相同的元数据是幂等的。
+    ///
+    /// # Errors
+    /// 同一修订已存在、但父修订或来源设备不同时返回 [`FormatError::RevisionConflict`]，
+    /// 不做"首次为准"的静默处理（`spec/revisions.md` §5.1 步骤 0）。
+    pub fn insert(&mut self, rev: Id128, parents: Vec<Id128>, origin_device: Id128) -> Result<()> {
+        match self.nodes.get(&rev) {
+            Some(n) if n.parents == parents && n.origin == origin_device => Ok(()),
+            Some(_) => Err(FormatError::RevisionConflict),
+            None => {
+                self.nodes.insert(
+                    rev,
+                    Node {
+                        parents,
+                        origin: origin_device,
+                    },
+                );
+                Ok(())
+            }
+        }
     }
 
     /// 修订数量。
@@ -81,6 +97,21 @@ impl RevisionGraph {
         false
     }
 
+    /// `rev` 的全部祖先（含自身）。未知修订只返回自身。
+    #[must_use]
+    pub fn ancestors(&self, rev: &Id128) -> HashSet<Id128> {
+        let mut seen = HashSet::new();
+        let mut stack = vec![*rev];
+        while let Some(cur) = stack.pop() {
+            if seen.insert(cur)
+                && let Some(node) = self.nodes.get(&cur)
+            {
+                stack.extend(node.parents.iter().copied());
+            }
+        }
+        seen
+    }
+
     /// 头修订：不是任何其他修订父修订的修订，按 ID 排序。
     #[must_use]
     pub fn heads(&self) -> Vec<Id128> {
@@ -109,16 +140,26 @@ mod tests {
         // 1 ← 2 ← 3
         //   ↖ 4
         let mut g = RevisionGraph::new();
-        g.insert(id(1), vec![], id(100));
-        g.insert(id(2), vec![id(1)], id(100));
-        g.insert(id(3), vec![id(2)], id(100));
-        g.insert(id(4), vec![id(1)], id(101));
+        g.insert(id(1), vec![], id(100)).unwrap();
+        g.insert(id(2), vec![id(1)], id(100)).unwrap();
+        g.insert(id(3), vec![id(2)], id(100)).unwrap();
+        g.insert(id(4), vec![id(1)], id(101)).unwrap();
         assert!(g.is_ancestor(&id(1), &id(3)));
         assert!(g.is_ancestor(&id(3), &id(3)));
         assert!(!g.is_ancestor(&id(3), &id(1)));
         assert!(!g.is_ancestor(&id(2), &id(4)));
         assert_eq!(g.heads(), vec![id(3), id(4)]);
-        g.insert(id(5), vec![id(3), id(4)], id(100));
+        g.insert(id(5), vec![id(3), id(4)], id(100)).unwrap();
+        // 重复插入相同元数据是幂等的；元数据不同则拒绝，而不是"首次为准"
+        assert_eq!(g.insert(id(5), vec![id(3), id(4)], id(100)), Ok(()));
+        assert_eq!(
+            g.insert(id(5), vec![id(3)], id(100)),
+            Err(crate::FormatError::RevisionConflict)
+        );
+        assert_eq!(
+            g.insert(id(5), vec![id(3), id(4)], id(101)),
+            Err(crate::FormatError::RevisionConflict)
+        );
         assert_eq!(g.heads(), vec![id(5)]);
         assert_eq!(g.origin(&id(4)), id(101));
     }

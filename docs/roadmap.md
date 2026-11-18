@@ -20,12 +20,12 @@
 
 | 状态 | 交付物 | 说明 |
 |---|---|---|
-| ✅ | 加密规范 `spec/crypto.md` v0.1 草案 + 测试向量 | 由独立的 Python 参考实现生成向量，CI 自动比对 |
-| ✅ | 修订模型规范 `spec/revisions.md` v0.1 草案 | 修订图、记录级 HLC、因果优先合并、墓碑；M1 的数据模型直接基于它 |
-| ✅ | `spec/vault-format.md` v0.1 草案 | 条目详情、概要、保险库元数据的明文结构 |
-| ✅ | `spec/ipc.md` v0.1 草案 | 分帧、对端身份校验、Noise 配对（XX + SAS）与会话（IK）、会话内消息与最小披露 |
+| ✅ | 加密规范 `spec/crypto.md` v0.2 草案 + 测试向量 | 由独立的 Python 参考实现生成向量，CI 自动比对 |
+| ✅ | 修订模型规范 `spec/revisions.md` v0.2 草案 | 修订图、记录级 HLC、因果优先合并（并发版本保证分组合并结果一致）、墓碑；M1 的数据模型直接基于它 |
+| ✅ | `spec/vault-format.md` v0.2 草案 | 条目详情、概要、保险库元数据的明文结构 |
+| ✅ | `spec/ipc.md` v0.2 草案 | 分帧、对端身份校验、Noise 配对（XX + 配对承诺 + SAS）与会话（IK）、会话内消息、最小披露与按站点授权 |
 | ✅ | `keevo-crypto` | 2SKD、加密信封、密钥包裹、密钥集、账户密钥编码；含 RFC 已知答案测试与跨实现向量测试 |
-| ✅ | `keevo-format`、`keevo-store`、`keevo-core` | 记录映射与因果合并（含 300 组多设备随机模拟）、SQLite schema v1、账户创建 / 解锁 / 锁定与条目读写 |
+| ✅ | `keevo-format`、`keevo-store`、`keevo-core` | 记录映射与因果合并（含 300 组多设备随机模拟与分组合并检验）、SQLite schema v2、账户创建 / 解锁 / 锁定与条目读写、冲突处理 |
 | ✅ | iCloud 技术验证 | iCloud 云盘中的普通文件夹无需证书即可完成写入、上传状态、移除本地内容、按需下载、文件协调与变化监听，4 次运行全部通过（[报告](spikes/2026-11-18-icloud-folder.md)）；据此决定不绑定团队、采用普通文件夹（[ADR-0002](adr/0002-icloud-drive-folder-without-team.md)）。跨设备延迟与 Dropbox / OneDrive 移到 M2 的真实环境长测 |
 | ◐ | 打通 UniFFI → Swift | 已完成：`keevo-ffi`、SwiftUI 空壳应用、Swift 端冒烟测试（创建 → 锁定 → 解锁 → 读写条目）。待做：钥匙串保存账户密钥与 Touch ID，需要签名与 Xcode 工程，放到 M1.1 |
 | ✅ | 扩展骨架 + Native Messaging 全链路原型 | `keevo-native-host`（父进程代码签名校验）、`keevo-service`（socket 服务与对端 audit token 校验机制）、`keevo-wasm` + MV3 扩展骨架（最小权限：无网站权限，点击弹窗才填充）。两套端到端测试：Rust 侧与扩展 WASM 侧都经真实 native host 与 socket 跑通配对 → 填充。待你在真实 Chrome 中手动验证一次 |
@@ -33,8 +33,10 @@
 | ✅ | CI | 格式、clippy、测试（Linux + macOS）、密码学边界、测试向量比对、cargo-deny、cargo-vet、macOS 冒烟测试、6 个模糊测试目标 |
 | ✅ | 治理文件 | 多许可证落地（App Store 附加许可为草案，待法律审阅）、`CONTRIBUTING.md`（DCO）、`SECURITY.md`、`CODE_OF_CONDUCT.md`、ADR 模板、CODEOWNERS、PR 模板 |
 
+| ✅ | 规范的模型评审 | 2026-11-18 完成，6 项发现与 10 处规范与实现的不一致全部处理（[处理记录](reviews/2026-11-18-model-review-response.md)）。不能替代下面的外部人工评审 |
+
 **退出标准**：
-- 规范至少经过一位有密码学背景的外部人士评审（评审说明：[spec/REVIEW.md](../spec/REVIEW.md)）。
+- 规范至少经过一位有密码学背景的外部人士评审（评审说明：[spec/REVIEW.md](../spec/REVIEW.md)）。**尚未完成**。
 - "创建 → 锁定 → 解锁 → 读写条目"的完整流程，在 Rust 测试和 macOS 空壳应用中都能跑通。
 
 ## 3. M1 本地保险库 MVP（4–5 个月）

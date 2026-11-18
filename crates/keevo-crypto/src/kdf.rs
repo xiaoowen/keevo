@@ -38,6 +38,13 @@ impl KdfParams {
     pub const MIN_P: u32 = 1;
     /// 并行度上限。
     pub const MAX_P: u32 = 16;
+    /// 本机自动执行预算：内存（1 GiB）。格式上限（4 GiB）为将来的硬件留了余量，但超出本预算的参数
+    /// 不应在未经用户确认时自动运行（评审 F3，`spec/crypto.md` §5.3）。
+    pub const AUTO_MAX_M_KIB: u32 = 1_048_576;
+    /// 本机自动执行预算：迭代次数。
+    pub const AUTO_MAX_T: u32 = 10;
+    /// 本机自动执行预算：并行度。
+    pub const AUTO_MAX_P: u32 = 8;
 
     /// 构造并校验参数。
     ///
@@ -110,6 +117,14 @@ impl KdfParams {
         v.extend_from_slice(&self.salt);
         out.copy_from_slice(&v);
         out
+    }
+
+    /// 参数是否在本机自动执行预算之内。超出时，调用方必须先征得用户确认再派生。
+    #[must_use]
+    pub const fn within_auto_budget(&self) -> bool {
+        self.m_kib <= Self::AUTO_MAX_M_KIB
+            && self.t <= Self::AUTO_MAX_T
+            && self.p <= Self::AUTO_MAX_P
     }
 
     /// 内存（KiB）。
@@ -186,5 +201,26 @@ mod tests {
             Err(CryptoError::KdfAboveMaximum)
         );
         assert!(KdfParams::new(65_536, 3, 1, salt).is_ok());
+    }
+
+    #[test]
+    fn auto_budget_separates_default_from_unusual_params() {
+        let salt = [7u8; 16];
+        assert!(KdfParams::generate_default().unwrap().within_auto_budget());
+        assert!(
+            !KdfParams::new(KdfParams::MAX_M_KIB, 3, 4, salt)
+                .unwrap()
+                .within_auto_budget()
+        );
+        assert!(
+            !KdfParams::new(65_536, KdfParams::MAX_T, 4, salt)
+                .unwrap()
+                .within_auto_budget()
+        );
+        assert!(
+            !KdfParams::new(65_536, 3, KdfParams::MAX_P, salt)
+                .unwrap()
+                .within_auto_budget()
+        );
     }
 }

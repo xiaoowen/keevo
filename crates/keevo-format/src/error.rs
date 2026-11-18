@@ -17,6 +17,10 @@ pub enum FormatError {
     ItemTypeMismatch,
     /// 没有可合并的头修订。
     NoHeads,
+    /// 同一修订 ID 出现了不同的元数据（父修订或来源设备）。只可能来自损坏的数据或恶意设备。
+    RevisionConflict,
+    /// 记录键上没有指定的版本。
+    NoSuchVersion,
 }
 
 impl fmt::Display for FormatError {
@@ -27,6 +31,8 @@ impl fmt::Display for FormatError {
             Self::ValueKindMismatch => f.write_str("record value kind does not match key"),
             Self::ItemTypeMismatch => f.write_str("heads disagree on item type"),
             Self::NoHeads => f.write_str("no heads to merge"),
+            Self::RevisionConflict => f.write_str("conflicting metadata for the same revision"),
+            Self::NoSuchVersion => f.write_str("no such record version"),
         }
     }
 }

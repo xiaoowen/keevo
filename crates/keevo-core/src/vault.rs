@@ -20,6 +20,8 @@ const DEFAULT_VAULT_NAME: &str = "个人";
 const FIRST_EPOCH: u64 = 1;
 /// 每个对象保留完整内容的修订数（`spec/revisions.md` §7）。
 const HISTORY_KEEP: usize = 20;
+/// 历史保留的时间下限（`spec/revisions.md` §7）：90 天内写入或收到的修订一律保留。
+const HISTORY_MIN_AGE_MS: u64 = 90 * 24 * 60 * 60 * 1000;
 
 /// 新字段。
 #[derive(Debug, Clone)]
@@ -95,6 +97,8 @@ pub struct ItemView {
     pub resurrected: bool,
     /// 当前头修订数（大于 1 表示存在尚未收敛的并发修改）。
     pub head_count: usize,
+    /// 出处不一致的记录键（`spec/revisions.md` §5.1 步骤 0），应提示用户查看历史。
+    pub integrity_issues: Vec<RecordKey>,
 }
 
 struct Session {
@@ -217,10 +221,35 @@ impl Vault {
     /// 用主密码与账户密钥解锁。耗时约 0.5–1.5 秒（Argon2id），应在后台线程调用。
     ///
     /// # Errors
-    /// 主密码或账户密钥错误时返回 [`CoreError::WrongCredentials`]。
+    /// 主密码或账户密钥错误时返回 [`CoreError::WrongCredentials`]；KDF 参数超出本机自动执行预算时返回
+    /// [`CoreError::KdfNeedsConfirmation`]，此时不会执行任何派生。
     pub fn unlock(&mut self, password: &str, secret_key: &AccountSecretKey) -> Result<()> {
+        self.unlock_inner(password, secret_key, false)
+    }
+
+    /// 用户已确认后，以超出自动执行预算的 KDF 参数解锁（可能耗时很久、占用大量内存）。
+    ///
+    /// # Errors
+    /// 同 [`Vault::unlock`]，但不再检查预算。
+    pub fn unlock_confirmed_expensive_kdf(
+        &mut self,
+        password: &str,
+        secret_key: &AccountSecretKey,
+    ) -> Result<()> {
+        self.unlock_inner(password, secret_key, true)
+    }
+
+    fn unlock_inner(
+        &mut self,
+        password: &str,
+        secret_key: &AccountSecretKey,
+        allow_expensive: bool,
+    ) -> Result<()> {
         let account = self.store.account()?.ok_or(CoreError::NoAccount)?;
         let params = KdfParams::decode(&account.kdf_params)?;
+        if !allow_expensive && !params.within_auto_budget() {
+            return Err(CoreError::KdfNeedsConfirmation);
+        }
         let auk = derive_account_unlock_key(password, secret_key, &account.id, &params)?;
         let keyset = AccountKeyset::open(
             &auk,
@@ -404,6 +433,7 @@ impl Vault {
             conflicts: merged.conflicts,
             resurrected: merged.resurrected,
             head_count: heads.len(),
+            integrity_issues: merged.integrity_issues,
         })
     }
 
@@ -431,11 +461,12 @@ impl Vault {
                         item_id,
                         only.rev_id,
                     );
+                    let overview = ItemOverview::decode(&open(&ik, &ctx, ct)?)?;
                     out.push(ItemSummary {
                         id: item_id,
                         vault_id: only.vault_id,
-                        overview: ItemOverview::decode(&open(&ik, &ctx, ct)?)?,
-                        has_conflicts: false,
+                        has_conflicts: overview.conflicts,
+                        overview,
                     });
                 }
                 _ => match self.item(item_id) {
@@ -443,7 +474,9 @@ impl Vault {
                         id: item_id,
                         vault_id: view.vault_id,
                         overview: view.doc.overview(),
-                        has_conflicts: !view.conflicts.is_empty() || view.resurrected,
+                        has_conflicts: !view.conflicts.is_empty()
+                            || view.resurrected
+                            || !view.integrity_issues.is_empty(),
                     }),
                     Err(CoreError::NotFound) => {}
                     Err(e) => return Err(e),
@@ -464,14 +497,39 @@ impl Vault {
     /// # Errors
     /// 已锁定返回 [`CoreError::Locked`]；条目或字段不存在返回 [`CoreError::NotFound`]。
     pub fn update_item(&mut self, item_id: Id128, edits: Vec<Edit>) -> Result<()> {
+        self.revise(item_id, |doc, hlc, rev_id| {
+            for edit in edits {
+                apply(doc, edit, hlc, rev_id)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// 处理一个记录键上的冲突：保留写于 `keep` 的版本（`spec/revisions.md` §5.4）。
+    /// 选中版本的值作为新版本写入，该键的其他并发版本随之被因果覆盖。
+    ///
+    /// # Errors
+    /// 该键上没有写于 `keep` 的版本时返回 [`CoreError::Format`]；其余见 [`Vault::update_item`]。
+    pub fn resolve_conflict(&mut self, item_id: Id128, key: &RecordKey, keep: Id128) -> Result<()> {
+        self.revise(item_id, |doc, hlc, rev_id| {
+            Ok(doc.resolve(key, keep, hlc, rev_id)?)
+        })
+    }
+
+    /// 写时收敛（§5.4）：以合并视图为基础、父修订为全部头，写入一个新修订。
+    fn revise(
+        &mut self,
+        item_id: Id128,
+        change: impl FnOnce(&mut ItemDoc, Hlc, Id128) -> Result<()>,
+    ) -> Result<()> {
         let view = self.item(item_id)?;
         let heads = self.store.heads(&item_id)?;
         let mut doc = view.doc;
         let hlc = self.tick()?;
         let rev_id = Id128::random()?;
-        for edit in edits {
-            apply(&mut doc, edit, hlc, rev_id)?;
-        }
+        // 把"已撤销删除"写成墓碑，否则引发撤销的并发修改日后被覆盖时，删除会重新生效
+        doc.settle_for_write(hlc, rev_id);
+        change(&mut doc, hlc, rev_id)?;
         let ik = {
             let session = self.session()?;
             let live = heads
@@ -482,7 +540,11 @@ impl Vault {
         };
         let parents = heads.iter().map(|h| h.rev_id).collect();
         self.write_item_revision(view.vault_id, item_id, rev_id, parents, &ik, Some(&doc))?;
-        self.store.prune(&item_id, HISTORY_KEEP)?;
+        self.store.prune(
+            &item_id,
+            HISTORY_KEEP,
+            now_ms().saturating_sub(HISTORY_MIN_AGE_MS),
+        )?;
         Ok(())
     }
 
@@ -555,7 +617,7 @@ impl Vault {
     fn graph(&self, object_id: &Id128) -> Result<RevisionGraph> {
         let mut graph = RevisionGraph::new();
         for m in self.store.graph(object_id)? {
-            graph.insert(m.rev_id, m.parents, m.origin_device);
+            graph.insert(m.rev_id, m.parents, m.origin_device)?;
         }
         Ok(graph)
     }

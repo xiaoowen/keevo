@@ -8,7 +8,7 @@ use crate::FORMAT_VERSION;
 use crate::error::{FormatError, Result};
 use crate::hlc::Hlc;
 use crate::json::{from_json, to_json};
-use crate::record::{self, RecordKey, RecordMap, RecordValue, RecordVersion};
+use crate::record::{self, ConcurrentMap, RecordKey, RecordMap, RecordValue, RecordVersion};
 
 /// 条目类型。创建后不可更改。
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
@@ -98,8 +98,11 @@ pub enum Purpose {
 pub struct ItemDoc {
     /// 条目类型。
     pub item_type: ItemType,
-    /// 记录映射。
+    /// 记录映射：每个键的当前版本。
     pub records: RecordMap,
+    /// 并发版本（`spec/revisions.md` §4.3）：合并后仍互不覆盖、但不是当前值的版本，按 `rev` 升序。
+    /// 它们继续参与之后的合并，直到该键被重新写入或用户处理冲突，从而保证分组合并的结果一致。
+    pub concurrent: ConcurrentMap,
 }
 
 #[derive(Serialize)]
@@ -108,6 +111,8 @@ struct ItemDocJsonRef<'a> {
     #[serde(rename = "type")]
     item_type: ItemType,
     records: &'a RecordMap,
+    #[serde(skip_serializing_if = "ConcurrentMap::is_empty")]
+    concurrent: &'a ConcurrentMap,
 }
 
 #[derive(Deserialize)]
@@ -117,6 +122,8 @@ struct ItemDocJson {
     #[serde(rename = "type")]
     item_type: ItemType,
     records: RecordMap,
+    #[serde(default)]
+    concurrent: ConcurrentMap,
 }
 
 impl ItemDoc {
@@ -126,6 +133,7 @@ impl ItemDoc {
         Self {
             item_type,
             records: RecordMap::new(),
+            concurrent: ConcurrentMap::new(),
         }
     }
 
@@ -138,6 +146,7 @@ impl ItemDoc {
             v: FORMAT_VERSION,
             item_type: self.item_type,
             records: &self.records,
+            concurrent: &self.concurrent,
         })
     }
 
@@ -151,9 +160,11 @@ impl ItemDoc {
             return Err(FormatError::UnsupportedVersion(doc.v));
         }
         record::validate(&doc.records)?;
+        record::validate_concurrent(&doc.records, &doc.concurrent)?;
         Ok(Self {
             item_type: doc.item_type,
             records: doc.records,
+            concurrent: doc.concurrent,
         })
     }
 
@@ -171,6 +182,8 @@ impl ItemDoc {
         if !key.accepts(&value) {
             return Err(FormatError::ValueKindMismatch);
         }
+        // 新版本写于全部头之后，因果覆盖该键的所有并发版本（§4.2）
+        self.concurrent.remove(&key);
         self.records.insert(
             key,
             RecordVersion {
@@ -184,6 +197,7 @@ impl ItemDoc {
 
     /// 删除记录：写入墓碑，而不是移除（`spec/revisions.md` §4.2）。
     pub fn delete(&mut self, key: RecordKey, hlc: Hlc, rev: Id128) {
+        self.concurrent.remove(&key);
         self.records.insert(
             key,
             RecordVersion {
@@ -192,6 +206,52 @@ impl ItemDoc {
                 value: None,
             },
         );
+    }
+
+    /// 某个键上的全部版本：当前版本（若有）在前，其后是并发版本。
+    #[must_use]
+    pub fn versions(&self, key: &RecordKey) -> Vec<&RecordVersion> {
+        self.records
+            .get(key)
+            .into_iter()
+            .chain(self.concurrent.get(key).into_iter().flatten())
+            .collect()
+    }
+
+    /// 处理冲突（`spec/revisions.md` §5.4）：把用户选中的版本 `keep` 的值作为新版本写入，
+    /// 覆盖该键的全部并发版本。
+    ///
+    /// # Errors
+    /// 该键上没有写于 `keep` 的版本时返回 [`FormatError::NoSuchVersion`]。
+    pub fn resolve(&mut self, key: &RecordKey, keep: Id128, hlc: Hlc, rev: Id128) -> Result<()> {
+        let value = self
+            .versions(key)
+            .into_iter()
+            .find(|v| v.rev == keep)
+            .ok_or(FormatError::NoSuchVersion)?
+            .value
+            .clone();
+        match value {
+            Some(v) => self.set(key.clone(), v, hlc, rev),
+            None => {
+                self.delete(key.clone(), hlc, rev);
+                Ok(())
+            }
+        }
+    }
+
+    /// 写时收敛前的准备（`spec/revisions.md` §5.4）：只有并发版本、没有当前值的键（只会因撤销删除产生）
+    /// 写入墓碑，把"已撤销删除"确定下来。否则并发的修改日后被覆盖时，旧的删除会重新生效。
+    pub fn settle_for_write(&mut self, hlc: Hlc, rev: Id128) {
+        let suppressed: Vec<RecordKey> = self
+            .concurrent
+            .keys()
+            .filter(|k| !self.records.contains_key(*k))
+            .cloned()
+            .collect();
+        for key in suppressed {
+            self.delete(key, hlc, rev);
+        }
     }
 
     fn attr_text(&self, name: &str) -> Option<&str> {
@@ -267,7 +327,17 @@ impl ItemDoc {
                 .map(|v| v.hlc)
                 .max()
                 .unwrap_or_default(),
+            conflicts: self.has_unresolved_conflicts(),
         }
+    }
+
+    /// 是否存在待用户处理的冲突：某个键的并发版本中有值与当前值不同的版本（`spec/revisions.md` §5.5）。
+    #[must_use]
+    pub fn has_unresolved_conflicts(&self) -> bool {
+        self.concurrent.iter().any(|(key, versions)| {
+            let current = self.records.get(key).map(|v| &v.value);
+            versions.iter().any(|v| Some(&v.value) != current)
+        })
     }
 }
 
@@ -297,6 +367,9 @@ pub struct ItemOverview {
     pub trashed_at: Option<i64>,
     /// 最近修改时间（所有记录的最大 HLC）。
     pub updated: Hlc,
+    /// 是否存在待处理的冲突。列表据此标记条目，而不必解密详情。
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub conflicts: bool,
 }
 
 impl ItemOverview {
@@ -369,6 +442,67 @@ impl VaultMeta {
 mod tests {
     use super::*;
     use crate::record::{FieldData, FieldValue, KvEntry};
+
+    #[test]
+    fn concurrent_versions_roundtrip_and_are_validated() {
+        let mut d = ItemDoc::new(ItemType::Login);
+        let title = RecordKey::attr("title");
+        d.set(
+            title.clone(),
+            RecordValue::Text("B".into()),
+            Hlc(30),
+            Id128::from_bytes([3; 16]),
+        )
+        .unwrap();
+        d.concurrent.insert(
+            title.clone(),
+            vec![RecordVersion {
+                hlc: Hlc(20),
+                rev: Id128::from_bytes([2; 16]),
+                value: Some(RecordValue::Text("A".into())),
+            }],
+        );
+        let json = d.encode().unwrap();
+        assert!(
+            std::str::from_utf8(&json)
+                .unwrap()
+                .contains("\"concurrent\"")
+        );
+        assert_eq!(ItemDoc::decode(&json).unwrap(), d);
+        assert!(d.has_unresolved_conflicts());
+        assert!(d.overview().conflicts);
+        // 没有并发版本时省略该字段，旧文档照常解析
+        let plain = sample().encode().unwrap();
+        assert!(!std::str::from_utf8(&plain).unwrap().contains("concurrent"));
+
+        let bad = |mutate: &dyn Fn(&mut ItemDoc)| {
+            let mut x = d.clone();
+            mutate(&mut x);
+            ItemDoc::decode(&x.encode().unwrap()).is_err()
+        };
+        assert!(
+            bad(&|x| x.concurrent.get_mut(&title).unwrap().clear()),
+            "空列表"
+        );
+        assert!(
+            bad(&|x| {
+                let cur = x.records[&title].clone();
+                x.concurrent.get_mut(&title).unwrap().push(cur);
+            }),
+            "与当前版本重复"
+        );
+        assert!(
+            bad(&|x| {
+                let v = x.concurrent[&title][0].clone();
+                x.concurrent.get_mut(&title).unwrap().push(v);
+            }),
+            "未按 rev 严格升序"
+        );
+        assert!(
+            bad(&|x| x.concurrent.get_mut(&title).unwrap()[0].value = Some(RecordValue::Tag)),
+            "值与键不匹配"
+        );
+    }
 
     fn sample() -> ItemDoc {
         let rev = Id128::from_bytes([7; 16]);

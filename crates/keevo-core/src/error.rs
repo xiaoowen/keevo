@@ -15,6 +15,9 @@ pub enum CoreError {
     Locked,
     /// 主密码或账户密钥错误。为避免泄露信息，两者不作区分。
     WrongCredentials,
+    /// KDF 参数超出本机自动执行预算（`spec/crypto.md` §5.3）。参数可能被篡改，用于耗尽资源；
+    /// 需要用户确认后改用 [`crate::Vault::unlock_confirmed_expensive_kdf`]。
+    KdfNeedsConfirmation,
     /// 数据库中还没有账户。
     NoAccount,
     /// 数据库中已经有账户。
@@ -36,6 +39,7 @@ impl fmt::Display for CoreError {
         match self {
             Self::Locked => f.write_str("vault is locked"),
             Self::WrongCredentials => f.write_str("wrong master password or secret key"),
+            Self::KdfNeedsConfirmation => f.write_str("kdf parameters exceed the automatic budget"),
             Self::NoAccount => f.write_str("no account"),
             Self::AccountExists => f.write_str("account already exists"),
             Self::NotFound => f.write_str("not found"),

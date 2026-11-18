@@ -152,6 +152,8 @@ final class AppModel {
             return "数据似乎被篡改或损坏了，Keevo 已阻止打开它。"
         case .Locked:
             return "保险库已锁定。"
+        case .KdfNeedsConfirmation:
+            return "这个保险库的解锁参数异常地高，可能被篡改过。为安全起见，Keevo 没有自动解锁。"
         default:
             return "操作失败：\(error)"
         }

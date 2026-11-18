@@ -115,8 +115,10 @@ jobs:
       - name: 运行全部目标
         working-directory: fuzz
         run: |
+          # cargo-fuzz 的 run 不接受 --locked：先单独确认锁文件是最新的
+          cargo +nightly metadata --locked --format-version 1 > /dev/null
           for target in $(cargo +nightly fuzz list); do
-            cargo +nightly fuzz run "$target" --locked -- -max_total_time=30
+            cargo +nightly fuzz run "$target" -- -max_total_time=30
           done
 
   browser-extension:

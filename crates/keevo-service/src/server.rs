@@ -1,7 +1,10 @@
+use std::collections::HashMap;
 use std::fs;
+use std::net::Shutdown;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
@@ -27,6 +30,9 @@ pub trait PairingPrompt: Send + Sync {
     fn confirm(&self, sas: [u8; 6], name: &str, browser: &str) -> bool;
 }
 
+/// 已建立会话的登记表：连接编号 → (扩展公钥, 用于主动断开的 socket 句柄)。
+type Sessions = Arc<Mutex<HashMap<u64, ([u8; 32], UnixStream)>>>;
+
 /// 本地 IPC 服务。
 pub struct VaultService<S: PairingStore + Send + 'static> {
     vault: Arc<Mutex<Vault>>,
@@ -34,6 +40,8 @@ pub struct VaultService<S: PairingStore + Send + 'static> {
     pairings: Arc<Mutex<S>>,
     prompt: Arc<dyn PairingPrompt>,
     policy: PeerPolicy,
+    sessions: Sessions,
+    next_conn: Arc<AtomicU64>,
 }
 
 impl<S: PairingStore + Send + 'static> Clone for VaultService<S> {
@@ -44,6 +52,8 @@ impl<S: PairingStore + Send + 'static> Clone for VaultService<S> {
             pairings: Arc::clone(&self.pairings),
             prompt: Arc::clone(&self.prompt),
             policy: self.policy.clone(),
+            sessions: Arc::clone(&self.sessions),
+            next_conn: Arc::clone(&self.next_conn),
         }
     }
 }
@@ -75,7 +85,23 @@ impl<S: PairingStore + Send + 'static> VaultService<S> {
             pairings,
             prompt,
             policy,
+            sessions: Arc::default(),
+            next_conn: Arc::default(),
         })
+    }
+
+    /// 撤销配对（`spec/ipc.md` §4.4）：删除配对记录，并立即断开该扩展的全部已建立会话。
+    ///
+    /// # Errors
+    /// 配对记录持久化失败时返回错误；此时内存中的记录已删除、会话已断开，但重启后撤销可能失效。
+    pub fn revoke(&self, extension_public: &[u8; 32]) -> std::io::Result<()> {
+        let result = lock(&self.pairings).revoke(extension_public);
+        for (pk, stream) in lock(&self.sessions).values() {
+            if pk == extension_public {
+                let _ = stream.shutdown(Shutdown::Both);
+            }
+        }
+        result
     }
 
     /// 服务的静态公钥。
@@ -100,6 +126,7 @@ impl<S: PairingStore + Send + 'static> VaultService<S> {
         {
             return;
         }
+        let id = self.next_conn.fetch_add(1, Ordering::Relaxed);
         let mut conn = ServiceConnection::new(Arc::clone(&self.key));
         while let Ok(frame) = read_socket_frame(&mut stream) {
             let outputs = {
@@ -108,8 +135,27 @@ impl<S: PairingStore + Send + 'static> VaultService<S> {
                 conn.on_frame(&frame, &*pairings, &CoreBackend::new(&vault))
             };
             if !self.emit(&mut stream, &mut conn, outputs) {
-                return;
+                break;
             }
+            self.register(id, &conn, &stream);
+        }
+        lock(&self.sessions).remove(&id);
+    }
+
+    /// 会话建立后登记连接，供撤销时主动断开。
+    fn register(&self, id: u64, conn: &ServiceConnection, stream: &UnixStream) {
+        let Some(pk) = conn.peer_public() else { return };
+        let mut sessions = lock(&self.sessions);
+        if sessions.contains_key(&id) {
+            return;
+        }
+        // 登记前再核对一次：若握手与撤销同时发生，确保不会留下未被断开的会话
+        if lock(&self.pairings).find(&pk).is_none() {
+            let _ = stream.shutdown(Shutdown::Both);
+            return;
+        }
+        if let Ok(handle) = stream.try_clone() {
+            sessions.insert(id, (pk, handle));
         }
     }
 

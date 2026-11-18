@@ -212,14 +212,20 @@ fn history_is_pruned_but_graph_is_kept() {
             .unwrap();
     }
     assert_eq!(vault.revision_count(id).unwrap(), 31);
-    let kept = vault
-        .store
-        .history(&id)
-        .unwrap()
-        .iter()
-        .filter(|r| !r.pruned)
-        .count();
-    assert_eq!(kept, HISTORY_KEEP);
+    let kept = |vault: &Vault| {
+        vault
+            .store
+            .history(&id)
+            .unwrap()
+            .iter()
+            .filter(|r| !r.pruned)
+            .count()
+    };
+    // 90 天内的修订一律保留
+    assert_eq!(kept(&vault), 31);
+    // 模拟 90 天之后：只保留最近 20 个
+    vault.store.prune(&id, HISTORY_KEEP, u64::MAX).unwrap();
+    assert_eq!(kept(&vault), HISTORY_KEEP);
     assert_eq!(vault.item(id).unwrap().doc.overview().title, "t30");
 }
 
@@ -250,4 +256,99 @@ fn tampered_ciphertext_is_detected() {
     vault.unlock("pw", &sk).unwrap();
     assert_eq!(vault.item(a).err(), Some(CoreError::Tampered));
     assert!(vault.item(b).is_ok());
+}
+
+/// 评审 F3：被篡改为极端值的 KDF 参数不会在未经确认时自动运行。
+#[test]
+fn review_f3_unusual_kdf_params_require_confirmation() {
+    let tmp = TempDir::new();
+    let (vault, sk) = Vault::create(&tmp.db(), "pw", fast_params()).unwrap();
+    drop(vault);
+    {
+        let conn = rusqlite::Connection::open(tmp.db()).unwrap();
+        let hostile = KdfParams::new(
+            KdfParams::MAX_M_KIB,
+            KdfParams::MAX_T,
+            KdfParams::MAX_P,
+            [3u8; 16],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE account SET kdf_params = ?1",
+            [hostile.encode().to_vec()],
+        )
+        .unwrap();
+    }
+    let mut vault = Vault::open(&tmp.db()).unwrap();
+    let start = std::time::Instant::now();
+    assert_eq!(
+        vault.unlock("pw", &sk).err(),
+        Some(CoreError::KdfNeedsConfirmation)
+    );
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(1),
+        "不应执行任何派生"
+    );
+}
+
+/// 评审 F6：并发落选版本在用户处理前一直保留，不受"最近 20 个修订"清理影响；列表只解密概要也能看到冲突。
+#[test]
+fn review_f6_concurrent_loser_survives_pruning_until_resolved() {
+    let (mut vault, _) =
+        Vault::create_with_store(Store::open_in_memory().unwrap(), "pw", fast_params()).unwrap();
+    let vault_id = vault.vaults().unwrap()[0].id;
+    let id = vault
+        .create_item(vault_id, ItemType::Login, "t0", vec![])
+        .unwrap();
+    let r0 = vault.store.heads(&id).unwrap()[0].rev_id;
+    let doc0 = vault.item(id).unwrap().doc;
+    vault
+        .update_item(id, vec![Edit::SetTitle("A".into())])
+        .unwrap();
+    let r1 = vault.store.heads(&id).unwrap()[0].clone();
+
+    // 模拟另一台设备：基于 r0 并发地把标题改成 "B"
+    let mut doc_b = doc0;
+    let hlc = vault.tick().unwrap();
+    let rev_b = Id128::random().unwrap();
+    doc_b
+        .set(
+            RecordKey::attr("title"),
+            RecordValue::Text("B".into()),
+            hlc,
+            rev_b,
+        )
+        .unwrap();
+    let ik = vault.item_key(vault.session().unwrap(), &r1).unwrap();
+    vault
+        .write_item_revision(vault_id, id, rev_b, vec![r0], &ik, Some(&doc_b))
+        .unwrap();
+    assert_eq!(vault.item(id).unwrap().head_count, 2);
+
+    // 与标题无关的编辑远超保留数，再模拟 90 天之后的清理
+    for i in 0..(HISTORY_KEEP + 5) {
+        vault
+            .update_item(id, vec![Edit::SetFavorite(i % 2 == 0)])
+            .unwrap();
+    }
+    vault.store.prune(&id, HISTORY_KEEP, u64::MAX).unwrap();
+    let written_in = vault.store.revision(&r1.rev_id).unwrap().unwrap();
+    assert!(written_in.pruned, "落选版本最初所在的修订已被清理");
+    let view = vault.item(id).unwrap();
+    assert_eq!(view.head_count, 1);
+    assert_eq!(view.doc.overview().title, "B");
+    assert_eq!(view.conflicts.len(), 1);
+    assert_eq!(view.conflicts[0].losers[0].rev, r1.rev_id);
+    assert!(
+        vault.items().unwrap()[0].has_conflicts,
+        "单头条目也要在列表中标出冲突"
+    );
+
+    vault
+        .resolve_conflict(id, &RecordKey::attr("title"), r1.rev_id)
+        .unwrap();
+    let view = vault.item(id).unwrap();
+    assert_eq!(view.doc.overview().title, "A");
+    assert!(view.conflicts.is_empty());
+    assert!(!vault.items().unwrap()[0].has_conflicts);
 }

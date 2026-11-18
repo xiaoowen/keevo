@@ -142,7 +142,10 @@ impl AccountKeyset {
     }
 }
 
-/// 绑定值（§7.2）：把 `epoch` 与 KDF 参数纳入 AAD，防止参数被篡改或旧版本被回放。
+/// 绑定值（§7.2）：把 `epoch` 与 KDF 参数纳入 AAD，防止参数被单独篡改、或旧密文被改标为新 epoch。
+///
+/// 它**不提供新鲜度**：完整的旧账户文件（旧参数、旧 epoch、旧信封）仍能通过认证。拒绝回滚需要上层
+/// 保存可信的最大 epoch（同步高水位线，`docs/sync.md` §5），见评审 C2。
 pub(crate) fn binding(epoch: u64, params: &KdfParams) -> [u8; 32] {
     sha256(&[BINDING_LABEL, &epoch.to_be_bytes(), &params.encode()])
 }

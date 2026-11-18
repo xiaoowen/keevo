@@ -393,7 +393,7 @@ fn requests_before_confirmation_and_garbage_close_the_connection() {
 fn revoked_pairing_blocks_new_sessions() {
     let mut svc = Service::new();
     let (client, service_public, _) = pair(&mut svc, true);
-    svc.store.revoke(&client.public_key());
+    svc.store.revoke(&client.public_key()).unwrap();
     assert!(svc.store.find(&client.public_key()).is_none());
     let mut client = client_with_same_key(client);
     let mut conn = svc.connect(ORIGIN);
@@ -401,6 +401,208 @@ fn revoked_pairing_blocks_new_sessions() {
         &svc,
         &mut conn,
         &client.start_session(&service_public.unwrap()).unwrap(),
+    );
+    assert!(d.closed);
+}
+
+// ---------------------------------------------------------------- 评审 2026-11-18 F1
+
+#[test]
+fn review_f1_revoking_a_pairing_cuts_off_established_sessions() {
+    let mut svc = Service::new();
+    let (mut client, _, mut conn) = pair(&mut svc, true);
+    let before = call(
+        &svc,
+        &mut conn,
+        &mut client,
+        Call::Fill {
+            item_id: "gh".into(),
+            url: "https://github.com/login".into(),
+        },
+    );
+    assert!(matches!(before, ServerMessage::Ok { .. }));
+
+    svc.store.revoke(&client.public_key()).unwrap();
+
+    // 撤销之后，已建立的会话也不能再取得任何数据，且连接被关闭
+    let (_, frame) = client
+        .request(Call::Fill {
+            item_id: "gh".into(),
+            url: "https://github.com/login".into(),
+        })
+        .unwrap();
+    let d = deliver(&svc, &mut conn, &frame);
+    assert!(d.closed, "撤销后连接应被关闭");
+    let (_, events) = client.on_frame(&d.to_client[0]).unwrap();
+    assert!(
+        matches!(events[0], ClientEvent::Error(ErrorCode::NotPaired)),
+        "{events:?}"
+    );
+}
+
+// ---------------------------------------------------------------- 评审 2026-11-18 I1 与规范一致性
+
+/// 手工构造配对第 1–3 条消息，便于模拟不守规矩的发起方。返回第 3 条消息送达后的结果。
+fn manual_pairing(
+    conn_timeout: Option<std::time::Duration>,
+    msg1_payload: impl FnOnce(&StaticKeypair) -> Vec<u8>,
+    msg3_payload: &serde_json::Value,
+) -> Delivered {
+    use crate::message::{b64, unb64};
+    let svc = Service::new();
+    let ext = StaticKeypair::generate().unwrap();
+    let mut conn = match conn_timeout {
+        Some(t) => {
+            let mut c = ServiceConnection::new(svc.key.clone()).with_pairing_timeout(t);
+            let hello = serde_json::to_vec(&HostHello {
+                v: 1,
+                client: "native-host".into(),
+                extension_origin: ORIGIN.into(),
+                browser: "com.google.Chrome".into(),
+            })
+            .unwrap();
+            assert!(c.on_frame(&hello, &svc.store, &svc.backend).is_empty());
+            c
+        }
+        None => svc.connect(ORIGIN),
+    };
+    let mut hs = keevo_crypto::Handshake::pair_initiator(&ext, ORIGIN).unwrap();
+    let msg1 = hs.write(&msg1_payload(&ext)).unwrap();
+    let d = deliver(
+        &svc,
+        &mut conn,
+        &ControlFrame::Pair { d: b64(&msg1) }.to_json().unwrap(),
+    );
+    if d.closed {
+        return d;
+    }
+    let ControlFrame::Noise { d: m2 } = ControlFrame::from_json(&d.to_client[0]).unwrap() else {
+        panic!("应收到第 2 条消息")
+    };
+    assert!(hs.read(&unb64(&m2).unwrap()).unwrap().is_empty());
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let msg3 = hs
+        .write(&serde_json::to_vec(msg3_payload).unwrap())
+        .unwrap();
+    deliver(
+        &svc,
+        &mut conn,
+        &ControlFrame::Noise { d: b64(&msg3) }.to_json().unwrap(),
+    )
+}
+
+fn honest_commitment(
+    nonce: [u8; 32],
+    name: &'static str,
+) -> impl FnOnce(&StaticKeypair) -> Vec<u8> {
+    move |ext| keevo_crypto::pairing_commitment(&ext.public_key(), &nonce, name).to_vec()
+}
+
+fn msg3(nonce: [u8; 32], name: &str) -> serde_json::Value {
+    serde_json::json!({ "name": name, "nonce": crate::message::b64(&nonce) })
+}
+
+#[test]
+fn review_i1_honest_manual_pairing_reaches_confirmation() {
+    let d = manual_pairing(None, honest_commitment([1; 32], "x"), &msg3([1; 32], "x"));
+    assert!(d.confirm.is_some() && !d.closed);
+}
+
+/// 第 3 条消息与第 1 条消息的承诺不符（换了随机数、显示名或静态密钥）时拒绝，攻击者因此无法在看到
+/// 对方贡献后再调整自己的消息来搜索 SAS。
+#[test]
+fn review_i1_third_message_must_match_commitment() {
+    let other_nonce = manual_pairing(None, honest_commitment([1; 32], "x"), &msg3([2; 32], "x"));
+    assert!(other_nonce.closed && other_nonce.confirm.is_none());
+    let other_name = manual_pairing(None, honest_commitment([1; 32], "x"), &msg3([1; 32], "y"));
+    assert!(other_name.closed && other_name.confirm.is_none());
+    let other_key = manual_pairing(
+        None,
+        |_| {
+            let k = StaticKeypair::generate().unwrap().public_key();
+            keevo_crypto::pairing_commitment(&k, &[1; 32], "x").to_vec()
+        },
+        &msg3([1; 32], "x"),
+    );
+    assert!(other_key.closed && other_key.confirm.is_none());
+}
+
+/// 第 1 条消息的负载必须恰好是 32 字节的承诺。
+#[test]
+fn first_pairing_message_must_carry_exactly_a_commitment() {
+    for payload in [Vec::new(), vec![0u8; 31], vec![0u8; 33]] {
+        let d = manual_pairing(None, move |_| payload, &msg3([1; 32], "x"));
+        assert!(d.closed && d.confirm.is_none());
+    }
+}
+
+/// 60 秒时限从收到第 1 条消息起算：第 3 条消息超时到达即拒绝，不进入用户确认。
+#[test]
+fn pairing_deadline_starts_at_first_message() {
+    let d = manual_pairing(
+        Some(std::time::Duration::ZERO),
+        honest_commitment([1; 32], "x"),
+        &msg3([1; 32], "x"),
+    );
+    assert!(d.closed && d.confirm.is_none());
+}
+
+/// 用户确认超过时限时视为拒绝，不保存配对。
+#[test]
+fn late_confirmation_is_treated_as_rejection() {
+    let mut svc = Service::new();
+    let mut client =
+        ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "Chrome · 个人");
+    let mut conn = ServiceConnection::new(svc.key.clone())
+        .with_pairing_timeout(std::time::Duration::from_millis(200));
+    let hello = serde_json::to_vec(&HostHello {
+        v: 1,
+        client: "native-host".into(),
+        extension_origin: ORIGIN.into(),
+        browser: "com.google.Chrome".into(),
+    })
+    .unwrap();
+    assert!(conn.on_frame(&hello, &svc.store, &svc.backend).is_empty());
+    let d = deliver(&svc, &mut conn, &client.start_pairing().unwrap());
+    let (frames, _) = client.on_frame(&d.to_client[0]).unwrap();
+    let d = deliver(&svc, &mut conn, &frames[0]);
+    assert!(d.confirm.is_some());
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    let d = collect(conn.confirm_pairing(true, &mut svc.store));
+    assert!(d.closed);
+    assert!(
+        svc.store.find(&client.public_key()).is_none(),
+        "超时后不得保存配对"
+    );
+}
+
+/// IK 第 1 条消息的负载必须为空。
+#[test]
+fn session_first_message_payload_must_be_empty() {
+    use crate::message::b64;
+    let mut svc = Service::new();
+    let ext_private = StaticKeypair::generate().unwrap().export_private();
+    let mut client = ExtensionClient::new(
+        StaticKeypair::from_private(ext_private.clone()),
+        ORIGIN,
+        "Chrome · 个人",
+    );
+    let mut conn = svc.connect(ORIGIN);
+    let d = deliver(&svc, &mut conn, &client.start_pairing().unwrap());
+    let (frames, _) = client.on_frame(&d.to_client[0]).unwrap();
+    deliver(&svc, &mut conn, &frames[0]);
+    collect(conn.confirm_pairing(true, &mut svc.store));
+    assert!(svc.store.find(&client.public_key()).is_some());
+
+    let ext = StaticKeypair::from_private(ext_private);
+    let mut hs =
+        keevo_crypto::Handshake::session_initiator(&ext, &svc.key.public_key(), ORIGIN).unwrap();
+    let msg1 = hs.write(b"smuggled").unwrap();
+    let mut conn = svc.connect(ORIGIN);
+    let d = deliver(
+        &svc,
+        &mut conn,
+        &ControlFrame::Session { d: b64(&msg1) }.to_json().unwrap(),
     );
     assert!(d.closed);
 }

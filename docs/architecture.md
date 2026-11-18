@@ -172,7 +172,7 @@ sequenceDiagram
 
 ### 5.3 网址匹配
 
-- **默认按可注册域名（eTLD+1）匹配**，内置 Public Suffix List。
+- **默认按可注册域名（eTLD+1）匹配**，内置 Public Suffix List。这是主机与子域规则，**不是严格的同源隔离**：`github.com` 的条目也会匹配 `attacker.github.com` 与 `github.com:8443`。子域被委托给第三方或被接管时，凭据可能被该子域取得；对这类站点，用户应把网址改为主机名精确匹配。
 - 每个网址可改为：主机名精确匹配 / URL 前缀匹配 / 从不建议。
 - IP 地址与 `localhost` 按"主机 + 端口"精确匹配，方便本地开发多个服务时区分。
 - **协议降级不匹配**：HTTPS 条目不在 HTTP 页面填充。
@@ -193,6 +193,7 @@ sequenceDiagram
    - Socket 位于 App Group 容器内，目录权限 0700。
    - Vault Service 通过对端的 audit token 取得代码签名，要求对端由 Keevo 的 Team ID 签名，且是预期的二进制（`keevo-native-host` 或 `keevo` CLI）。
    - native host 启动时检查父进程是否为已知浏览器（按代码签名 Team ID 白名单），并检查 Chrome 传入的扩展来源。浏览器侧的清单 `allowed_origins` 只包含 Keevo 扩展 ID。
+   - 父进程检查**只是纵深防御**：同用户进程可以用 fork→exec 让 host 看到一个签名浏览器父进程（`spec/ipc.md` §3.2）。因此设计上假设扩展落盘的静态私钥可能被冒充使用，由第 3 层的按站点授权兜底。
 2. **应用层：端到端加密**
    - 扩展与 Vault Service 之间用 Noise 协议建立会话，套件为 `Noise_XX_25519_ChaChaPoly_SHA256`。
    - 首次配对时双方显示由握手哈希派生的短认证串（6 个词），由用户确认一致。
@@ -201,7 +202,8 @@ sequenceDiagram
 3. **最小披露**
    - 扩展只能拿到"与当前来源匹配的条目"的概要。
    - 秘密值只在用户做出选择后单次返回。
-   - 配对可以按浏览器撤销。
+   - 某个配对第一次为某个条目在某个站点取用凭据时，需要在 Keevo.app 的原生界面确认；另有频率限制（`spec/ipc.md` §5.2）。
+   - 配对可以按浏览器撤销，撤销立即断开已建立的会话。
 
 **CLI**：
 - 同样经 socket 连接并校验代码签名。从源码自行编译的 CLI 首次连接时，需要在 App 中显式信任该二进制（固定其 cdhash）。

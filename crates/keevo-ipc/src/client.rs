@@ -2,7 +2,9 @@
 //!
 //! 目前用于测试与开发工具；将来可编译为 WASM，供浏览器扩展复用同一套实现。
 
-use keevo_crypto::{Handshake, StaticKeypair, Transport};
+use keevo_crypto::{
+    Handshake, PAIR_NONCE_LEN, StaticKeypair, Transport, pairing_commitment, pairing_nonce,
+};
 
 use crate::error::IpcError;
 use crate::message::{
@@ -29,7 +31,7 @@ pub enum ClientEvent {
 
 enum State {
     Idle,
-    Pairing(Box<Handshake>),
+    Pairing(Box<Handshake>, [u8; PAIR_NONCE_LEN]),
     AwaitPaired(Box<Transport>),
     Session(Box<Handshake>),
     Established(Box<Transport>),
@@ -90,8 +92,11 @@ impl ExtensionClient {
             return Err(IpcError::InvalidState);
         }
         let mut hs = Handshake::pair_initiator(&self.key, &self.origin)?;
-        let msg = hs.write(&[])?;
-        self.state = State::Pairing(Box::new(hs));
+        // 第 1 条消息承诺第 3 条消息的全部内容（spec/ipc.md §4.2）
+        let nonce = pairing_nonce()?;
+        let commitment = pairing_commitment(&self.key.public_key(), &nonce, &self.name);
+        let msg = hs.write(&commitment)?;
+        self.state = State::Pairing(Box::new(hs), nonce);
         ControlFrame::Pair { d: b64(&msg) }.to_json()
     }
 
@@ -142,10 +147,15 @@ impl ExtensionClient {
         };
         let data = unb64(&d)?;
         match std::mem::replace(&mut self.state, State::Closed) {
-            State::Pairing(mut hs) => {
-                hs.read(&data)?;
-                let payload = serde_json::to_vec(&serde_json::json!({ "name": self.name }))
-                    .map_err(|_| IpcError::BadMessage)?;
+            State::Pairing(mut hs, nonce) => {
+                // XX 第二条消息的负载必须为空（spec/ipc.md §4.2）
+                if !hs.read(&data)?.is_empty() {
+                    return Err(IpcError::BadMessage);
+                }
+                let payload = serde_json::to_vec(
+                    &serde_json::json!({ "name": self.name, "nonce": b64(&nonce) }),
+                )
+                .map_err(|_| IpcError::BadMessage)?;
                 let msg3 = hs.write(&payload)?;
                 let sas = hs.sas()?;
                 let transport = hs.into_transport()?;
@@ -169,7 +179,10 @@ impl ExtensionClient {
                 Ok((Vec::new(), vec![ClientEvent::Paired { service_public }]))
             }
             State::Session(mut hs) => {
-                hs.read(&data)?;
+                // IK 第二条消息的负载必须为空（spec/ipc.md §4.3）
+                if !hs.read(&data)?.is_empty() {
+                    return Err(IpcError::BadMessage);
+                }
                 let transport = hs.into_transport()?;
                 self.state = State::Established(Box::new(transport));
                 Ok((Vec::new(), vec![ClientEvent::Established]))

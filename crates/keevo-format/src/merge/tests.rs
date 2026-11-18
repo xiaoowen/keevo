@@ -33,7 +33,7 @@ struct Repo {
 
 impl Repo {
     fn commit(&mut self, rev: Id128, parents: &[Id128], origin: Id128, doc: Option<ItemDoc>) {
-        self.graph.insert(rev, parents.to_vec(), origin);
+        self.graph.insert(rev, parents.to_vec(), origin).unwrap();
         self.docs.insert(rev, doc);
     }
 
@@ -299,7 +299,12 @@ fn random_simulation_converges_deterministically() {
                 let max_hlc = union
                     .iter()
                     .filter_map(|r| repo.docs[r].as_ref())
-                    .flat_map(|doc| doc.records.values().map(|v| v.hlc))
+                    .flat_map(|doc| {
+                        doc.records
+                            .values()
+                            .chain(doc.concurrent.values().flatten())
+                            .map(|v| v.hlc)
+                    })
                     .max()
                     .unwrap_or_default();
                 clocks[d].observe(max_hlc, 0);
@@ -314,6 +319,7 @@ fn random_simulation_converges_deterministically() {
             let hlc = clocks[d].next(step * 1_000 + skew[d]);
             let doc = match merged.doc {
                 Some(mut doc) if !rng.chance(3) => {
+                    doc.settle_for_write(hlc, rev);
                     random_mutation(&mut rng, &mut doc, hlc, rev);
                     Some(doc)
                 }
@@ -327,6 +333,10 @@ fn random_simulation_converges_deterministically() {
         let all: BTreeSet<Id128> = known.iter().flatten().copied().collect();
         let heads = repo.heads_of(&all);
         let reference = repo.merge(&heads);
+        assert!(
+            reference.integrity_issues.is_empty(),
+            "seed {seed}: 正常历史被误判为出处不一致"
+        );
 
         for _ in 0..5 {
             let mut shuffled = heads.clone();
@@ -352,5 +362,222 @@ fn random_simulation_converges_deterministically() {
             reference,
             "seed {seed}: 清理历史影响了结果"
         );
+
+        // 结合律（评审 F4）：随机挑一组头合并并写成合并修订，再与其余头合并，反复直到只剩一个头。
+        // 每一步的结果都必须与一次合并全部头相同。合并结果为"已删除"的组不写回（产品中删除视图不可编辑，
+        // 墓碑只由用户的永久删除写入），换一组再试。
+        let mut grouped = repo;
+        let mut current = heads;
+        let mut attempts = 0;
+        while current.len() > 1 && attempts < 50 {
+            attempts += 1;
+            let mut pool = current.clone();
+            rng.shuffle(&mut pool);
+            let take =
+                2 + usize::try_from(rng.below(u64::try_from(pool.len() - 1).unwrap())).unwrap();
+            let group: Vec<Id128> = pool[..take.min(pool.len())].to_vec();
+            let merged = grouped.merge(&group);
+            if merged.doc.is_none() {
+                continue;
+            }
+            let m = random_id(&mut rng);
+            grouped.commit(m, &group, devices[0], merged.doc);
+            current.retain(|h| !group.contains(h));
+            current.push(m);
+            let now = grouped.merge(&current);
+            // 比较条目状态。`resurrected` 是对本次合并的提示：对象墓碑头被并入合并修订后成为祖先，
+            // 提示随之消失，这是预期行为（产品中合并修订只在用户看过冲突面板后写入）
+            assert_eq!(now.doc, reference.doc, "seed {seed}: 分组合并改变了结果");
+            assert_eq!(
+                now.integrity_issues, reference.integrity_issues,
+                "seed {seed}"
+            );
+        }
     }
+}
+
+// ---------------------------------------------------------------- 评审 2026-11-18 F4、F5
+
+/// F4：合并结果是完整头集合的函数。A 被 B（删除）因果覆盖，C 与 B 并发：删除与修改并发时保留修改，结果为 C。
+#[test]
+fn review_f4_full_head_set_merge_keeps_concurrent_edit_over_delete() {
+    let mut repo = Repo::default();
+    repo.commit(id(1), &[], id(100), Some(ItemDoc::new(ItemType::Login)));
+    let mut a = ItemDoc::new(ItemType::Login);
+    a.set(title(), text("A"), Hlc(20), id(2)).unwrap();
+    repo.commit(id(2), &[id(1)], id(100), Some(a.clone()));
+    let mut a2 = a.clone();
+    a2.set(RecordKey::attr("note"), text("other"), Hlc(25), id(3))
+        .unwrap();
+    repo.commit(id(3), &[id(2)], id(100), Some(a2));
+    let mut b = a;
+    b.delete(title(), Hlc(30), id(4));
+    repo.commit(id(4), &[id(2)], id(101), Some(b));
+    let mut c = ItemDoc::new(ItemType::Login);
+    c.set(title(), text("C"), Hlc(15), id(5)).unwrap();
+    repo.commit(id(5), &[id(1)], id(102), Some(c));
+
+    let m = repo.merge(&[id(3), id(4), id(5)]);
+    assert_eq!(m.doc.unwrap().get(&title()), Some(&text("C")));
+}
+
+/// F5：两个头里出现"同一记录版本标识、不同值"。结果不得依赖输入顺序，且必须报告完整性问题。
+#[test]
+fn review_f5_forged_record_version_is_deterministic_and_reported() {
+    let mut repo = Repo::default();
+    repo.commit(id(1), &[], id(100), Some(base_doc(id(1))));
+    repo.commit(id(2), &[id(1)], id(100), Some(base_doc(id(1))));
+    let mut forged = ItemDoc::new(ItemType::Login);
+    forged.records.insert(
+        title(),
+        RecordVersion {
+            hlc: Hlc(10),
+            rev: id(1),
+            value: Some(text("forged")),
+        },
+    );
+    repo.commit(id(3), &[id(1)], id(101), Some(forged));
+
+    let x = repo.merge(&[id(2), id(3)]);
+    let y = repo.merge(&[id(3), id(2)]);
+    assert_eq!(x, y, "结果依赖输入顺序");
+    assert!(x.integrity_issues.contains(&title()), "应报告完整性问题");
+}
+
+/// F5 延伸：记录声称写于一个不是其所在修订祖先的修订，不得参与因果判断。
+#[test]
+fn review_f5_record_claiming_unrelated_revision_is_rejected() {
+    let mut repo = Repo::default();
+    repo.commit(id(1), &[], id(100), Some(base_doc(id(1))));
+    let mut honest = base_doc(id(1));
+    honest.set(title(), text("honest"), Hlc(50), id(2)).unwrap();
+    repo.commit(id(2), &[id(1)], id(100), Some(honest));
+    // 并发分支伪造：声称自己的标题写于 id(2) 的后代 id(9)（并不存在于其祖先中）
+    repo.graph.insert(id(9), vec![id(2)], id(100)).unwrap();
+    let mut liar = base_doc(id(1));
+    liar.records.insert(
+        title(),
+        RecordVersion {
+            hlc: Hlc(1),
+            rev: id(9),
+            value: Some(text("liar")),
+        },
+    );
+    repo.commit(id(3), &[id(1)], id(101), Some(liar));
+
+    let m = repo.merge(&[id(2), id(3)]);
+    assert_eq!(m.doc.unwrap().get(&title()), Some(&text("honest")));
+    assert!(m.integrity_issues.contains(&title()));
+}
+
+/// F4：先把 B、C 合并并写成合并修订 M，再与 A′ 合并，结果必须与一次合并 A′、B、C 相同。
+#[test]
+fn review_f4_grouped_merge_through_merge_revision_matches_full_merge() {
+    let mut repo = Repo::default();
+    repo.commit(id(1), &[], id(100), Some(ItemDoc::new(ItemType::Login)));
+    let mut a = ItemDoc::new(ItemType::Login);
+    a.set(title(), text("A"), Hlc(20), id(2)).unwrap();
+    repo.commit(id(2), &[id(1)], id(100), Some(a.clone()));
+    let mut a2 = a.clone();
+    a2.set(RecordKey::attr("note"), text("other"), Hlc(25), id(3))
+        .unwrap();
+    repo.commit(id(3), &[id(2)], id(100), Some(a2));
+    let mut b = a;
+    b.delete(title(), Hlc(30), id(4));
+    repo.commit(id(4), &[id(2)], id(101), Some(b));
+    let mut c = ItemDoc::new(ItemType::Login);
+    c.set(title(), text("C"), Hlc(15), id(5)).unwrap();
+    repo.commit(id(5), &[id(1)], id(102), Some(c));
+
+    let full = repo.merge(&[id(3), id(4), id(5)]);
+    let bc = repo.merge(&[id(4), id(5)]);
+    repo.commit(id(6), &[id(4), id(5)], id(101), bc.doc);
+    let grouped = repo.merge(&[id(3), id(6)]);
+    assert_eq!(full.doc.as_ref().unwrap().get(&title()), Some(&text("C")));
+    assert_eq!(grouped.doc, full.doc, "分组合并改变了结果");
+}
+
+/// 撤销删除并在其上编辑之后，即使引发撤销的并发修改后来被覆盖，条目也不会重新进入回收站（§5.2、§5.4）。
+#[test]
+fn restore_by_concurrent_edit_is_settled_when_written() {
+    let mut repo = Repo::default();
+    repo.commit(id(1), &[], id(100), Some(base_doc(id(1))));
+    let mut trashed = base_doc(id(1));
+    trashed
+        .set(
+            RecordKey::attr("trashed"),
+            RecordValue::Int(1),
+            Hlc(20),
+            id(2),
+        )
+        .unwrap();
+    repo.commit(id(2), &[id(1)], id(100), Some(trashed));
+    let mut edited = base_doc(id(1));
+    edited.set(title(), text("edited"), Hlc(15), id(3)).unwrap();
+    repo.commit(id(3), &[id(1)], id(101), Some(edited));
+
+    let m = repo.merge(&[id(2), id(3)]);
+    assert!(m.resurrected);
+    let mut base = m.doc.unwrap();
+    assert_eq!(base.trashed_at(), None);
+    // 设备 A 在撤销删除后的视图上把标题改回去（覆盖了引发撤销的那次修改）
+    base.settle_for_write(Hlc(30), id(4));
+    base.set(title(), text("final"), Hlc(30), id(4)).unwrap();
+    repo.commit(id(4), &[id(2), id(3)], id(100), Some(base));
+    // 设备 B 只看到删除，在回收站里改了别的字段
+    let mut in_trash = repo.docs[&id(2)].clone().unwrap();
+    in_trash
+        .set(RecordKey::attr("note"), text("n"), Hlc(25), id(5))
+        .unwrap();
+    repo.commit(id(5), &[id(2)], id(102), Some(in_trash));
+
+    let m = repo.merge(&[id(4), id(5)]);
+    assert_eq!(
+        m.doc.unwrap().trashed_at(),
+        None,
+        "已撤销的删除不应重新生效"
+    );
+}
+
+/// 并发落选版本保存在之后的修订中，直到用户处理；处理后冲突消失（§4.3、§5.4）。
+#[test]
+fn concurrent_versions_survive_unrelated_edits_until_resolved() {
+    let mut repo = Repo::default();
+    repo.commit(id(1), &[], id(100), Some(base_doc(id(1))));
+    let mut a = base_doc(id(1));
+    a.set(title(), text("A"), Hlc(20), id(2)).unwrap();
+    repo.commit(id(2), &[id(1)], id(100), Some(a));
+    let mut b = base_doc(id(1));
+    b.set(title(), text("B"), Hlc(30), id(3)).unwrap();
+    repo.commit(id(3), &[id(1)], id(101), Some(b));
+
+    // 30 次与标题无关的编辑（远超历史保留数），落选的 "A" 仍在头修订里
+    let mut head = id(4);
+    let mut doc = repo.merge(&[id(2), id(3)]).doc.unwrap();
+    let mut parents = vec![id(2), id(3)];
+    for i in 0..30u8 {
+        let rev = Id128::from_bytes([i.wrapping_add(50); 16]);
+        doc.set(
+            RecordKey::attr("note"),
+            text(&format!("n{i}")),
+            Hlc(40 + u64::from(i)),
+            rev,
+        )
+        .unwrap();
+        repo.commit(rev, &parents, id(100), Some(doc.clone()));
+        parents = vec![rev];
+        head = rev;
+    }
+    let m = repo.merge(&[head]);
+    assert_eq!(m.conflicts.len(), 1);
+    assert_eq!(m.conflicts[0].losers[0].value, Some(text("A")));
+
+    // 用户选择保留 "A"
+    let mut doc = m.doc.unwrap();
+    doc.resolve(&title(), id(2), Hlc(100), id(90)).unwrap();
+    repo.commit(id(90), &[head], id(100), Some(doc));
+    let m = repo.merge(&[id(90)]);
+    assert!(m.conflicts.is_empty());
+    assert!(m.doc.as_ref().unwrap().concurrent.is_empty());
+    assert_eq!(m.doc.unwrap().get(&title()), Some(&text("A")));
 }

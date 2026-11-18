@@ -25,8 +25,8 @@ pub use item::{FieldKind, ItemDoc, ItemOverview, ItemType, Purpose, VaultMeta};
 pub use json::{from_json, to_json};
 pub use merge::{Conflict, HeadState, Merged, merge_heads};
 pub use record::{
-    CodeEntry, FieldData, FieldValue, KvEntry, RecordKey, RecordMap, RecordValue, RecordVersion,
-    SectionValue,
+    CodeEntry, ConcurrentMap, FieldData, FieldValue, KvEntry, RecordKey, RecordMap, RecordValue,
+    RecordVersion, SectionValue,
 };
 pub use secret::SecretString;
 

@@ -10,7 +10,7 @@ use zeroize::Zeroizing;
 
 use crate::SecretBytes;
 use crate::error::{CryptoError, Result};
-use crate::hkdf::hkdf_sha256;
+use crate::hkdf::{hkdf_sha256, sha256};
 use crate::random;
 
 const PATTERN_XX: &str = "Noise_XX_25519_ChaChaPoly_SHA256";
@@ -19,6 +19,35 @@ const PATTERN_IK: &str = "Noise_IK_25519_ChaChaPoly_SHA256";
 pub const MAX_NOISE_MESSAGE: usize = 65_535;
 const TAG_LEN: usize = 16;
 const SAS_INFO: &[u8] = b"keevo/v1/ipc-sas";
+const PAIR_COMMIT_TAG: &[u8] = b"keevo/v1/ipc-pair-commit";
+/// 配对承诺随机数的长度。
+pub const PAIR_NONCE_LEN: usize = 32;
+
+/// 配对承诺（`spec/ipc.md` §4.2）：扩展在 XX 第 1 条消息中发送，承诺它将在第 3 条消息里发送的全部内容
+/// ——静态公钥、显示名、随机数。
+///
+/// 没有承诺时，最后发言的一方可以在看到对方的贡献之后反复调整自己的消息，离线搜索使两段握手 SAS 相同的
+/// 取值（评审 2026-11-18 I1）。有了承诺，扩展一侧的握手结果取决于它在第 3 条消息才公开的随机数；
+/// 服务一侧的握手结果取决于服务在攻击者作出承诺之后才发送的临时密钥。无论攻击者先完成哪一段，
+/// 另一段的 SAS 对它都是均匀随机的，每次配对只有 2⁻⁴⁸ 的机会。
+#[must_use]
+pub fn pairing_commitment(
+    static_public: &[u8; 32],
+    nonce: &[u8; PAIR_NONCE_LEN],
+    name: &str,
+) -> [u8; 32] {
+    sha256(&[PAIR_COMMIT_TAG, static_public, nonce, name.as_bytes()])
+}
+
+/// 生成配对承诺用的随机数。
+///
+/// # Errors
+/// 系统随机数不可用时返回 [`CryptoError::Random`]。
+pub fn pairing_nonce() -> Result<[u8; PAIR_NONCE_LEN]> {
+    let mut n = [0u8; PAIR_NONCE_LEN];
+    random::fill(&mut n)?;
+    Ok(n)
+}
 
 /// 握手用途，写入 prologue。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

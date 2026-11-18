@@ -1,13 +1,14 @@
 //! 因果优先的确定性合并（`spec/revisions.md` §5）。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use keevo_crypto::Id128;
 
 use crate::error::{FormatError, Result};
 use crate::graph::RevisionGraph;
 use crate::item::ItemDoc;
-use crate::record::{RecordKey, RecordMap, RecordVersion};
+use crate::json::to_json;
+use crate::record::{ConcurrentMap, RecordKey, RecordMap, RecordVersion};
 
 /// 一个头修订的状态。
 #[derive(Debug, Clone, Copy)]
@@ -33,7 +34,7 @@ pub struct Conflict {
     pub key: RecordKey,
     /// 胜出版本所在的修订。
     pub winner: Id128,
-    /// 落选的并发版本。它们仍保存在各自的修订中，可以恢复。
+    /// 落选的并发版本。它们保存在合并视图的并发版本中（§4.3），直到用户处理，不会被历史清理删除。
     pub losers: Vec<RecordVersion>,
 }
 
@@ -46,13 +47,16 @@ pub struct Merged {
     pub conflicts: Vec<Conflict>,
     /// 是否因为删除与修改并发而撤销了删除（§5.2）。
     pub resurrected: bool,
+    /// 出处不一致的记录键（§5.1 步骤 0）：记录声称写于一个不是其所在修订祖先的修订，或同一修订标识对应
+    /// 不同内容。这类版本不参与因果判断，只可能来自损坏的数据或恶意的已登记设备，应提示用户查看历史。
+    pub integrity_issues: Vec<RecordKey>,
 }
 
 impl Merged {
-    /// 是否需要用户查看冲突。
+    /// 是否需要用户查看冲突或完整性问题。
     #[must_use]
     pub fn has_conflicts(&self) -> bool {
-        self.resurrected || !self.conflicts.is_empty()
+        self.resurrected || !self.conflicts.is_empty() || !self.integrity_issues.is_empty()
     }
 }
 
@@ -87,6 +91,7 @@ pub fn merge_heads(heads: &[HeadState<'_>], graph: &RevisionGraph) -> Result<Mer
             doc: None,
             conflicts: Vec::new(),
             resurrected: false,
+            integrity_issues: Vec::new(),
         });
     };
     let item_type = first.item_type;
@@ -94,16 +99,32 @@ pub fn merge_heads(heads: &[HeadState<'_>], graph: &RevisionGraph) -> Result<Mer
         return Err(FormatError::ItemTypeMismatch);
     }
 
-    let keys: BTreeSet<&RecordKey> = live.iter().flat_map(|(_, d)| d.records.keys()).collect();
+    // 每个头的祖先集合（含自身），用于校验记录版本声称的写入修订（§5.1 步骤 0）
+    let ancestry: Vec<HashSet<Id128>> = live.iter().map(|(rev, _)| graph.ancestors(rev)).collect();
+    let keys: BTreeSet<&RecordKey> = live
+        .iter()
+        .flat_map(|(_, d)| d.records.keys().chain(d.concurrent.keys()))
+        .collect();
     let mut records = RecordMap::new();
+    let mut concurrent = ConcurrentMap::new();
     let mut conflicts = Vec::new();
+    let mut integrity_issues = Vec::new();
     for key in keys {
-        let candidates = candidates(&live, key);
-        let (winner, conflict) = pick(key, candidates, graph);
+        let (candidates, suspicious) = candidates(&live, &ancestry, key);
+        if suspicious {
+            integrity_issues.push(key.clone());
+        }
+        if candidates.is_empty() {
+            continue;
+        }
+        let (winner, others, conflict) = pick(key, candidates, graph);
         if let Some(c) = conflict {
             conflicts.push(c);
         }
         records.insert(key.clone(), winner);
+        if !others.is_empty() {
+            concurrent.insert(key.clone(), others);
+        }
     }
 
     let mut resurrected = false;
@@ -112,8 +133,14 @@ pub fn merge_heads(heads: &[HeadState<'_>], graph: &RevisionGraph) -> Result<Mer
     let trashed_key = RecordKey::attr("trashed");
     if let Some(trash) = records.get(&trashed_key).filter(|v| !v.is_tombstone()) {
         let d = trash.rev;
-        if has_concurrent_record(&records, Some(&trashed_key), &d, graph) {
-            records.remove(&trashed_key);
+        if has_concurrent_record(&records, Some(&trashed_key), &d, graph)
+            && let Some(current) = records.remove(&trashed_key)
+        {
+            // 不是删除这些版本，而是让它们不再作为当前值：它们仍是之后合并的候选，
+            // 否则分组合并时更早的回收站版本会失去"已被覆盖"的信息而重新生效（§5.2）
+            let all = concurrent.entry(trashed_key.clone()).or_default();
+            all.push(current);
+            all.sort_by_key(|v| v.rev);
             resurrected = true;
         }
     }
@@ -128,34 +155,77 @@ pub fn merge_heads(heads: &[HeadState<'_>], graph: &RevisionGraph) -> Result<Mer
                 doc: None,
                 conflicts: Vec::new(),
                 resurrected: false,
+                integrity_issues,
             });
         }
         resurrected = true;
     }
 
     Ok(Merged {
-        doc: Some(ItemDoc { item_type, records }),
+        doc: Some(ItemDoc {
+            item_type,
+            records,
+            concurrent,
+        }),
         conflicts,
         resurrected,
+        integrity_issues,
     })
 }
 
-/// 收集某个键在各头中的版本，按修订去重并排序，保证结果与输入顺序无关。
-fn candidates<'a>(live: &[(Id128, &'a ItemDoc)], key: &RecordKey) -> Vec<&'a RecordVersion> {
-    let mut out: Vec<&RecordVersion> = live
-        .iter()
-        .filter_map(|(_, d)| d.records.get(key))
-        .collect();
-    out.sort_by(|a, b| a.rev.cmp(&b.rev).then(a.hlc.cmp(&b.hlc)));
-    out.dedup_by(|a, b| a.rev == b.rev);
-    out
+/// 收集某个键在各头中的版本（§5.1 步骤 0–1），返回候选与"是否发现出处不一致"。
+///
+/// - 版本声称的写入修订必须是其所在头的祖先（含自身），否则丢弃。
+/// - 同一修订标识只保留一个版本；若出现内容不同的版本，按 (hlc, 值的规范 JSON) 取最大者，
+///   保证结果与输入顺序无关。
+fn candidates<'a>(
+    live: &[(Id128, &'a ItemDoc)],
+    ancestry: &[HashSet<Id128>],
+    key: &RecordKey,
+) -> (Vec<&'a RecordVersion>, bool) {
+    let mut suspicious = false;
+    let mut out: Vec<&RecordVersion> = Vec::new();
+    for ((_, doc), ancestors) in live.iter().zip(ancestry) {
+        for v in doc.versions(key) {
+            if ancestors.contains(&v.rev) {
+                out.push(v);
+            } else {
+                suspicious = true;
+            }
+        }
+    }
+    let canonical = |v: &RecordVersion| to_json(&v.value).map(|b| b.to_vec()).unwrap_or_default();
+    out.sort_by(|a, b| {
+        a.rev
+            .cmp(&b.rev)
+            .then(a.hlc.cmp(&b.hlc))
+            .then_with(|| canonical(a).cmp(&canonical(b)))
+    });
+    let mut deduped: Vec<&RecordVersion> = Vec::with_capacity(out.len());
+    for v in out {
+        match deduped.last_mut() {
+            Some(last) if last.rev == v.rev => {
+                if *last != v {
+                    suspicious = true;
+                }
+                // 排序后同一修订的最后一个即 (hlc, 规范 JSON) 最大者
+                *last = v;
+            }
+            _ => deduped.push(v),
+        }
+    }
+    (deduped, suspicious)
 }
 
+/// 在候选中去掉被因果覆盖的版本，选出胜者（§5.1 步骤 2–4）。
+///
+/// 返回 (胜者, 其余仍互不覆盖的版本（按 `rev` 升序）, 冲突)。其余版本必须随合并视图一起保存：
+/// 合并结果 = 全部候选的极大元集合，这一运算满足结合律，分组合并因此与一次合并结果相同。
 fn pick(
     key: &RecordKey,
     candidates: Vec<&RecordVersion>,
     graph: &RevisionGraph,
-) -> (RecordVersion, Option<Conflict>) {
+) -> (RecordVersion, Vec<RecordVersion>, Option<Conflict>) {
     // 去掉被因果覆盖的版本：v.rev 是另一个候选 w.rev 的真祖先
     let maximal: Vec<&RecordVersion> = candidates
         .iter()
@@ -189,22 +259,25 @@ fn pick(
                 .first()
                 .map(|v| (*v).clone())
                 .unwrap_or_else(tombstone),
+            Vec::new(),
             None,
         );
     };
 
-    let losers: Vec<RecordVersion> = maximal
+    let mut losers: Vec<RecordVersion> = maximal
         .iter()
         .filter(|v| v.rev != winner.rev)
         .map(|v| (*v).clone())
         .collect();
+    losers.sort_by_key(|v| v.rev);
+    // 版本并发但值相同不需要用户处理；仍保留这些版本，它们携带后续合并需要的因果信息（§5.5）
     let meaningful = losers.iter().any(|l| l.value != winner.value);
     let conflict = meaningful.then(|| Conflict {
         key: key.clone(),
         winner: winner.rev,
-        losers,
+        losers: losers.clone(),
     });
-    (winner, conflict)
+    (winner, losers, conflict)
 }
 
 fn tombstone() -> RecordVersion {

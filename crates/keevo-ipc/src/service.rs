@@ -4,8 +4,9 @@
 //! [`ServiceConnection::on_frame`]，再按返回的 [`Output`] 发帧、请求用户确认或断开连接。
 
 use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use keevo_crypto::{Handshake, StaticKeypair, Transport};
+use keevo_crypto::{Handshake, PAIR_NONCE_LEN, StaticKeypair, Transport, pairing_commitment};
 use serde::Deserialize;
 
 use crate::error::IpcError;
@@ -16,6 +17,8 @@ use crate::message::{
 
 /// 配对名称的最大长度（字符）。
 const MAX_NAME_CHARS: usize = 64;
+/// 配对确认的时限（`spec/ipc.md` §4.2）：从握手完成起计算，超时视为拒绝。
+pub const PAIRING_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// 配对记录（§4.2 第 4 步）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,8 +29,10 @@ pub struct PairingRecord {
     pub extension_origin: String,
     /// 浏览器标识。
     pub browser: String,
-    /// 显示名。
+    /// 显示名（已去除控制字符，最多 64 个字符）。
     pub name: String,
+    /// 配对时间（Unix 毫秒）。
+    pub paired_at_ms: u64,
 }
 
 /// 配对记录的存储。正式实现保存在加密数据库中；撤销配对即删除记录。
@@ -36,6 +41,11 @@ pub trait PairingStore {
     fn find(&self, extension_public: &[u8; 32]) -> Option<PairingRecord>;
     /// 保存配对记录。
     fn save(&mut self, record: PairingRecord);
+    /// 删除配对记录（撤销）。会话层在每个请求前重新核对记录，撤销对已建立的会话立即生效。
+    ///
+    /// # Errors
+    /// 持久化失败时返回错误：调用方必须告知用户撤销可能在重启后失效。
+    fn revoke(&mut self, extension_public: &[u8; 32]) -> std::io::Result<()>;
 }
 
 /// 内存中的配对存储，用于测试与开发服务。
@@ -45,12 +55,6 @@ pub struct MemoryPairingStore {
 }
 
 impl MemoryPairingStore {
-    /// 删除配对记录（撤销）。
-    pub fn revoke(&mut self, extension_public: &[u8; 32]) {
-        self.records
-            .retain(|r| &r.extension_public != extension_public);
-    }
-
     /// 记录数。
     #[must_use]
     pub fn len(&self) -> usize {
@@ -73,8 +77,15 @@ impl PairingStore for MemoryPairingStore {
     }
 
     fn save(&mut self, record: PairingRecord) {
-        self.revoke(&record.extension_public);
+        self.records
+            .retain(|r| r.extension_public != record.extension_public);
         self.records.push(record);
+    }
+
+    fn revoke(&mut self, extension_public: &[u8; 32]) -> std::io::Result<()> {
+        self.records
+            .retain(|r| &r.extension_public != extension_public);
+        Ok(())
     }
 }
 
@@ -117,14 +128,18 @@ enum State {
     Pairing {
         hello: HostHello,
         hs: Box<Handshake>,
+        commitment: [u8; 32],
+        deadline: Instant,
     },
     AwaitConfirm {
         hello: HostHello,
         transport: Box<Transport>,
         name: String,
+        deadline: Instant,
     },
     Established {
         transport: Box<Transport>,
+        origin: String,
     },
     Closed,
 }
@@ -133,12 +148,14 @@ enum State {
 pub struct ServiceConnection {
     key: Arc<StaticKeypair>,
     state: State,
+    pairing_timeout: Duration,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PairPayload {
     name: String,
+    nonce: String,
 }
 
 impl ServiceConnection {
@@ -148,6 +165,23 @@ impl ServiceConnection {
         Self {
             key,
             state: State::AwaitHostHello,
+            pairing_timeout: PAIRING_TIMEOUT,
+        }
+    }
+
+    /// 修改配对确认时限（测试用）。
+    #[must_use]
+    pub const fn with_pairing_timeout(mut self, timeout: Duration) -> Self {
+        self.pairing_timeout = timeout;
+        self
+    }
+
+    /// 会话已建立时，对方扩展的静态公钥。服务层据此登记连接，撤销配对时立即断开。
+    #[must_use]
+    pub fn peer_public(&self) -> Option<[u8; 32]> {
+        match &self.state {
+            State::Established { transport, .. } => Some(transport.remote_static()),
+            _ => None,
         }
     }
 
@@ -182,18 +216,25 @@ impl ServiceConnection {
             hello,
             mut transport,
             name,
+            deadline,
         } = std::mem::replace(&mut self.state, State::Closed)
         else {
             return Vec::new();
         };
-        if !accepted {
+        // 超时由状态机自己执行，不依赖调用方（评审：规范与实现不一致）
+        if !accepted || Instant::now() > deadline {
             return self.fail(ErrorCode::PairingRejected);
         }
+        let origin = hello.extension_origin.clone();
         store.save(PairingRecord {
             extension_public: transport.remote_static(),
             extension_origin: hello.extension_origin,
             browser: hello.browser,
             name,
+            paired_at_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+                .unwrap_or(0),
         });
         match encrypt(
             &mut transport,
@@ -202,7 +243,7 @@ impl ServiceConnection {
             },
         ) {
             Ok(frame) => {
-                self.state = State::Established { transport };
+                self.state = State::Established { transport, origin };
                 vec![Output::Send(frame)]
             }
             Err(_) => self.fail(ErrorCode::BadRequest),
@@ -211,7 +252,7 @@ impl ServiceConnection {
 
     /// 向扩展推送事件（如锁定）。会话未建立时忽略。
     pub fn push_event(&mut self, event: Event) -> Vec<Output> {
-        let State::Established { transport } = &mut self.state else {
+        let State::Established { transport, .. } = &mut self.state else {
             return Vec::new();
         };
         match encrypt(transport, &ServerMessage::Event { event }) {
@@ -255,22 +296,34 @@ impl ServiceConnection {
                 ControlFrame::Pair { d } => {
                     let mut hs = Handshake::pair_responder(&self.key, &hello.extension_origin)
                         .map_err(|_| ErrorCode::BadRequest)?;
-                    let _ = hs
+                    let payload = hs
                         .read(&unb64(&d).map_err(|_| ErrorCode::BadRequest)?)
                         .map_err(|_| ErrorCode::BadRequest)?;
+                    // XX 第一条消息的负载恰好是 32 字节的配对承诺（§4.2）
+                    let commitment: [u8; 32] =
+                        <[u8; 32]>::try_from(&payload[..]).map_err(|_| ErrorCode::BadRequest)?;
                     let reply = hs.write(&[]).map_err(|_| ErrorCode::BadRequest)?;
+                    // 时限从收到第 1 条消息起算，覆盖握手与用户确认，不给离线搜索留时间（§4.2）
                     self.state = State::Pairing {
                         hello,
                         hs: Box::new(hs),
+                        commitment,
+                        deadline: Instant::now()
+                            .checked_add(self.pairing_timeout)
+                            .ok_or(ErrorCode::BadRequest)?,
                     };
                     Ok(vec![send_noise(&reply)?])
                 }
                 ControlFrame::Session { d } => {
                     let mut hs = Handshake::session_responder(&self.key, &hello.extension_origin)
                         .map_err(|_| ErrorCode::BadRequest)?;
-                    let _ = hs
+                    let payload = hs
                         .read(&unb64(&d).map_err(|_| ErrorCode::BadRequest)?)
                         .map_err(|_| ErrorCode::NotPaired)?;
+                    // IK 第一条消息的负载必须为空（§4.3）
+                    if !payload.is_empty() {
+                        return Err(ErrorCode::BadRequest);
+                    }
                     let remote = hs.remote_static().ok_or(ErrorCode::BadRequest)?;
                     // 公钥必须已配对，且来源与配对时一致（§4.3 第 2 步）
                     match store.find(&remote) {
@@ -281,21 +334,39 @@ impl ServiceConnection {
                     let transport = hs.into_transport().map_err(|_| ErrorCode::BadRequest)?;
                     self.state = State::Established {
                         transport: Box::new(transport),
+                        origin: hello.extension_origin,
                     };
                     Ok(vec![send_noise(&reply)?])
                 }
                 _ => Err(ErrorCode::BadRequest),
             },
-            State::Pairing { hello, mut hs } => {
+            State::Pairing {
+                hello,
+                mut hs,
+                commitment,
+                deadline,
+            } => {
                 let ControlFrame::Noise { d } = parse(frame)? else {
                     return Err(ErrorCode::BadRequest);
                 };
+                if Instant::now() > deadline {
+                    return Err(ErrorCode::PairingRejected);
+                }
                 let payload = hs
                     .read(&unb64(&d).map_err(|_| ErrorCode::BadRequest)?)
                     .map_err(|_| ErrorCode::BadRequest)?;
-                let PairPayload { name } =
+                let PairPayload { name, nonce } =
                     serde_json::from_slice(&payload).map_err(|_| ErrorCode::BadRequest)?;
                 if !hs.is_finished() {
+                    return Err(ErrorCode::BadRequest);
+                }
+                // 核对承诺：静态公钥、显示名、随机数都必须与第 1 条消息承诺的一致
+                let nonce: [u8; PAIR_NONCE_LEN] = unb64(&nonce)
+                    .map_err(|_| ErrorCode::BadRequest)?
+                    .try_into()
+                    .map_err(|_| ErrorCode::BadRequest)?;
+                let remote = hs.remote_static().ok_or(ErrorCode::BadRequest)?;
+                if pairing_commitment(&remote, &nonce, &name) != commitment {
                     return Err(ErrorCode::BadRequest);
                 }
                 let name: String = name
@@ -310,12 +381,21 @@ impl ServiceConnection {
                     hello,
                     transport: Box::new(transport),
                     name: name.clone(),
+                    deadline,
                 };
                 Ok(vec![Output::ConfirmPairing { sas, name, browser }])
             }
             // 用户确认之前，扩展不得发送任何内容
             State::AwaitConfirm { .. } => Err(ErrorCode::BadRequest),
-            State::Established { mut transport } => {
+            State::Established {
+                mut transport,
+                origin,
+            } => {
+                // 每个请求都重新核对配对记录：撤销立即生效，不存在撤销与请求之间的竞态（评审 F1）
+                match store.find(&transport.remote_static()) {
+                    Some(r) if r.extension_origin == origin => {}
+                    _ => return Err(ErrorCode::NotPaired),
+                }
                 let ControlFrame::Noise { d } = parse(frame)? else {
                     return Err(ErrorCode::BadRequest);
                 };
@@ -326,7 +406,7 @@ impl ServiceConnection {
                     serde_json::from_slice(&plaintext).map_err(|_| ErrorCode::BadRequest)?;
                 let reply = handle(&request, backend);
                 let frame = encrypt(&mut transport, &reply).map_err(|_| ErrorCode::BadRequest)?;
-                self.state = State::Established { transport };
+                self.state = State::Established { transport, origin };
                 Ok(vec![Output::Send(frame)])
             }
         }

@@ -39,15 +39,18 @@ mod kat;
 mod vectors;
 
 pub use envelope::{
-    AAD_LEN, AadContext, HEADER_LEN, MAX_PLAINTEXT_LEN, MIN_ENVELOPE_LEN, ObjectType, Part,
-    envelope_key_id, open, seal,
+    AAD_LEN, AadContext, HEADER_LEN, MAX_ENVELOPE_LEN, MAX_PLAINTEXT_LEN, MIN_ENVELOPE_LEN,
+    ObjectType, Part, envelope_key_id, open, seal,
 };
 pub use error::{CryptoError, Result, SecretKeyError};
 pub use id::{Id128, KeyId};
 pub use kdf::KdfParams;
 pub use key::SymmetricKey;
 pub use keyset::AccountKeyset;
-pub use noise::{Handshake, MAX_NOISE_MESSAGE, StaticKeypair, Transport};
+pub use noise::{
+    Handshake, MAX_NOISE_MESSAGE, PAIR_NONCE_LEN, StaticKeypair, Transport, pairing_commitment,
+    pairing_nonce,
+};
 pub use secret_key::AccountSecretKey;
 pub use two_skd::{MAX_PASSWORD_LEN, derive_account_unlock_key};
 

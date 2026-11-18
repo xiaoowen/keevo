@@ -24,6 +24,8 @@ pub enum KeevoError {
     Locked,
     /// 主密码或账户密钥错误。
     WrongCredentials,
+    /// KDF 参数异常地高，需要用户确认后才会解锁。
+    KdfNeedsConfirmation,
     /// 账户密钥格式错误（附带原因码，如 `checksum_mismatch`）。
     InvalidSecretKey {
         /// 原因码。
@@ -54,6 +56,7 @@ impl fmt::Display for KeevoError {
         match self {
             Self::Locked => f.write_str("locked"),
             Self::WrongCredentials => f.write_str("wrong credentials"),
+            Self::KdfNeedsConfirmation => f.write_str("kdf needs confirmation"),
             Self::InvalidSecretKey { code } => write!(f, "invalid secret key: {code}"),
             Self::NoAccount => f.write_str("no account"),
             Self::AccountExists => f.write_str("account exists"),
@@ -72,6 +75,7 @@ impl From<CoreError> for KeevoError {
         match e {
             CoreError::Locked => Self::Locked,
             CoreError::WrongCredentials => Self::WrongCredentials,
+            CoreError::KdfNeedsConfirmation => Self::KdfNeedsConfirmation,
             CoreError::NoAccount => Self::NoAccount,
             CoreError::AccountExists => Self::AccountExists,
             CoreError::NotFound => Self::NotFound,

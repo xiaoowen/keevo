@@ -222,6 +222,41 @@ impl RecordVersion {
 /// 记录映射。按键有序，序列化结果确定。
 pub type RecordMap = BTreeMap<RecordKey, RecordVersion>;
 
+/// 并发版本映射（`spec/revisions.md` §4.3）。每个列表非空、按 `rev` 严格升序。
+pub type ConcurrentMap = BTreeMap<RecordKey, Vec<RecordVersion>>;
+
+/// 校验并发版本：列表非空，值与键匹配，按 `rev` 严格升序，且不与当前版本同 `rev`。
+pub(crate) fn validate_concurrent(records: &RecordMap, concurrent: &ConcurrentMap) -> Result<()> {
+    for (key, versions) in concurrent {
+        if versions.is_empty() {
+            return Err(FormatError::Malformed("concurrent: empty list".into()));
+        }
+        if versions
+            .windows(2)
+            .any(|w| matches!(w, [a, b] if a.rev >= b.rev))
+        {
+            return Err(FormatError::Malformed(
+                "concurrent: not sorted by rev".into(),
+            ));
+        }
+        if let Some(current) = records.get(key)
+            && versions.iter().any(|v| v.rev == current.rev)
+        {
+            return Err(FormatError::Malformed(
+                "concurrent: duplicates current".into(),
+            ));
+        }
+        for v in versions {
+            if let Some(value) = &v.value
+                && !key.accepts(value)
+            {
+                return Err(FormatError::ValueKindMismatch);
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn validate(records: &RecordMap) -> Result<()> {
     for (key, version) in records {
         if let Some(value) = &version.value

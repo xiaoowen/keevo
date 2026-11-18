@@ -44,6 +44,7 @@ struct World {
     socket: PathBuf,
     vault: Arc<Mutex<Vault>>,
     prompt: Arc<AutoConfirm>,
+    svc: VaultService<MemoryPairingStore>,
 }
 
 impl Drop for World {
@@ -102,13 +103,28 @@ fn start() -> World {
     .unwrap();
     let socket = dir.join("ipc").join("keevo.sock");
     let listener = bind(&socket).unwrap();
-    thread::spawn(move || svc.serve(&listener));
+    let server = svc.clone();
+    thread::spawn(move || server.serve(&listener));
     World {
         dir,
         socket,
         vault,
         prompt,
+        svc,
     }
+}
+
+/// 完成一次配对，返回服务公钥。
+fn pair(browser: &mut Browser, client: &mut ExtensionClient) -> [u8; 32] {
+    browser.send(&ExtensionClient::hello().unwrap());
+    browser.send(&client.start_pairing().unwrap());
+    let (frames, _) = client.on_frame(&browser.recv()).unwrap();
+    browser.send(&frames[0]);
+    let (_, events) = client.on_frame(&browser.recv()).unwrap();
+    let ClientEvent::Paired { service_public } = events[0] else {
+        panic!("{events:?}")
+    };
+    service_public
 }
 
 struct Browser {
@@ -336,6 +352,7 @@ fn host_reports_when_service_is_not_running() {
         socket: world.dir.join("nothing").join("keevo.sock"),
         vault: Arc::clone(&world.vault),
         prompt: Arc::clone(&world.prompt),
+        svc: world.svc.clone(),
     };
     let mut browser = Browser::launch(&missing, true);
     browser.send(&ExtensionClient::hello().unwrap());
@@ -358,6 +375,44 @@ fn unpaired_extension_is_rejected_end_to_end() {
     let fake_service = StaticKeypair::generate().unwrap().public_key();
     browser.send(&stranger.start_session(&fake_service).unwrap());
     let (_, events) = stranger.on_frame(&browser.recv()).unwrap();
+    assert!(
+        matches!(events[0], ClientEvent::Error(ErrorCode::NotPaired)),
+        "{events:?}"
+    );
+}
+
+/// 评审 2026-11-18 F1：撤销配对立即断开已建立的会话，之后也无法用原密钥重新建立会话。
+#[test]
+fn revoking_a_pairing_disconnects_live_sessions_end_to_end() {
+    let world = start();
+    let ext = StaticKeypair::generate().unwrap();
+    let ext_public = ext.public_key();
+    let ext_private = ext.export_private();
+
+    let mut browser = Browser::launch(&world, true);
+    let mut client = ExtensionClient::new(
+        StaticKeypair::from_private(ext_private.clone()),
+        ORIGIN,
+        "Chrome · 测试",
+    );
+    let service_public = pair(&mut browser, &mut client);
+    let status = browser.call(&mut client, Call::Status);
+    assert!(matches!(status, ServerMessage::Ok { .. }), "{status:?}");
+
+    world.svc.revoke(&ext_public).unwrap();
+    // 服务主动断开 socket，host 随之退出，浏览器端口收到 EOF
+    assert!(read_native_frame(&mut browser.stdout).is_err());
+    assert!(browser.child.wait().unwrap().success());
+
+    let mut browser = Browser::launch(&world, true);
+    let mut client = ExtensionClient::new(
+        StaticKeypair::from_private(ext_private),
+        ORIGIN,
+        "Chrome · 测试",
+    );
+    browser.send(&ExtensionClient::hello().unwrap());
+    browser.send(&client.start_session(&service_public).unwrap());
+    let (_, events) = client.on_frame(&browser.recv()).unwrap();
     assert!(
         matches!(events[0], ClientEvent::Error(ErrorCode::NotPaired)),
         "{events:?}"
