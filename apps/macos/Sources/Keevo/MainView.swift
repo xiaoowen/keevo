@@ -32,6 +32,10 @@ struct MainView: View {
     @ViewState private var selectedItem: String?
     @ViewState private var search = ""
     @ViewState private var showingNewLogin = false
+    @ViewState private var newItem: NewItemChoice?
+    @ViewState private var showingGenerator = false
+    /// 刚新建的条目：显示时直接打开编辑器。
+    @ViewState private var editRequest: String?
 
     private var selection: SidebarItem { sidebar ?? .all }
 
@@ -47,18 +51,16 @@ struct MainView: View {
         }
     }
 
+    /// 没有搜索词时按标题排序；有搜索词时由 Rust 按相关度排序（keevo-core::search，支持过滤语法）。
     private var visibleItems: [ItemEntry] {
         let query = search.trimmingCharacters(in: .whitespaces)
-        return model.items
-            .filter { matches($0, selection) }
-            .filter { item in
-                query.isEmpty
-                    || item.title.localizedCaseInsensitiveContains(query)
-                    || item.subtitle.localizedCaseInsensitiveContains(query)
-                    || item.urls.contains { $0.localizedCaseInsensitiveContains(query) }
-                    || item.tags.contains { $0.localizedCaseInsensitiveContains(query) }
-            }
-            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        guard !query.isEmpty else {
+            return model.items
+                .filter { matches($0, selection) }
+                .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        }
+        let byId = Dictionary(uniqueKeysWithValues: model.items.map { ($0.id, $0) })
+        return model.search(query).compactMap { byId[$0] }.filter { matches($0, selection) }
     }
 
     private func count(_ s: SidebarItem) -> Int {
@@ -74,16 +76,36 @@ struct MainView: View {
                 .navigationSplitViewColumnWidth(min: 250, ideal: 290)
         } detail: {
             if let id = selectedItem, model.items.contains(where: { $0.id == id }) {
-                ItemDetailView(itemId: id, selectedItem: $selectedItem).id(id)
+                ItemDetailView(itemId: id, selectedItem: $selectedItem, editOnAppear: editRequest == id)
+                    .id(id)
+                    .onAppear { if editRequest == id { editRequest = nil } }
             } else {
                 ContentUnavailableView("选择一个条目", systemImage: "sidebar.right")
             }
         }
         .toolbar {
             ToolbarItem {
-                Button { showingNewLogin = true } label: { Label("新建登录", systemImage: "plus") }
-                    .keyboardShortcut("n")
-                    .disabled(model.vaults.isEmpty)
+                Menu {
+                    ForEach(NewItemChoice.all) { choice in
+                        Button {
+                            if choice.itemType == "login" { showingNewLogin = true } else { newItem = choice }
+                        } label: {
+                            Label(choice.name, systemImage: choice.symbol)
+                        }
+                    }
+                } label: {
+                    Label("新建", systemImage: "plus")
+                } primaryAction: {
+                    showingNewLogin = true
+                }
+                .keyboardShortcut("n")
+                .help("新建登录（⌘N）；点箭头选择其他类型")
+                .disabled(model.vaults.isEmpty)
+            }
+            ToolbarItem {
+                Button { showingGenerator = true } label: { Label("生成密码", systemImage: "wand.and.stars") }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+                    .help("生成密码（⇧⌘G）")
             }
             ToolbarItem {
                 Button { model.lock() } label: { Label("锁定", systemImage: "lock") }
@@ -93,6 +115,15 @@ struct MainView: View {
         .sheet(isPresented: $showingNewLogin) {
             NewLoginSheet(defaultVault: defaultVault) { id in selectedItem = id }
         }
+        .sheet(item: $newItem) { choice in
+            NewItemSheet(choice: choice, defaultVault: defaultVault) { id in
+                editRequest = id
+                selectedItem = id
+            }
+        }
+        .sheet(isPresented: $showingGenerator) {
+            GeneratorView()
+        }
         .sheet(item: Binding(
             get: { model.pendingSecretKey.map(SecretKeyItem.init) },
             set: { if $0 == nil { model.pendingSecretKey = nil } }
@@ -101,6 +132,17 @@ struct MainView: View {
         }
         .onChange(of: sidebar) { selectedItem = nil }
     }
+
+    /// 过滤语法的提示（keevo-core::search）。
+    private static let searchHints: [(String, String)] = [
+        ("type:登录 ", "按类型：登录、ssh、api、db、env、2fa…"),
+        ("tag:", "带有某个标签"),
+        ("vault:", "保险库名称包含"),
+        ("url:", "网址包含"),
+        ("is:fav ", "已收藏"),
+        ("is:conflict ", "有待处理的冲突"),
+        ("-tag:", "排除：在任意过滤前加 -"),
+    ]
 
     private var defaultVault: String? {
         if case .vault(let v) = selection { return v }
@@ -162,7 +204,15 @@ struct MainView: View {
             ItemRow(item: item)
                 .contextMenu { rowMenu(item) }
         }
-        .searchable(text: $search, prompt: "搜索标题、用户名、网址、标签")
+        .searchable(text: $search, prompt: "搜索，或 type: tag: vault: url: is:fav")
+        .searchSuggestions {
+            if search.isEmpty {
+                ForEach(Self.searchHints, id: \.0) { token, description in
+                    Label("\(token)  \(description)", systemImage: "line.3.horizontal.decrease.circle")
+                        .searchCompletion(token)
+                }
+            }
+        }
         .navigationTitle(navigationTitle)
         .overlay {
             if visibleItems.isEmpty {
@@ -281,5 +331,48 @@ struct NewLoginSheet: View {
         }
         .padding(24)
         .frame(width: 460)
+    }
+}
+
+/// 按类型新建：先输入标题，新建后直接打开编辑器填写模板中的字段（docs/product.md §5.3）。
+struct NewItemSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let choice: NewItemChoice
+    let defaultVault: String?
+    let created: (String) -> Void
+    @ViewState private var title = ""
+    @ViewState private var vault: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("新建\(choice.name)", systemImage: choice.symbol).font(.title2.weight(.semibold))
+            Form {
+                TextField("标题", text: $title)
+                if model.vaults.count > 1 {
+                    Picker("保险库", selection: $vault) {
+                        ForEach(model.vaults, id: \.id) { Text($0.name).tag(String?.some($0.id)) }
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            HStack {
+                Spacer()
+                Button("取消", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("继续") {
+                    if let vault = vault ?? defaultVault,
+                       let id = model.createItem(vaultId: vault, itemType: choice.itemType, preset: choice.preset, title: title) {
+                        created(id)
+                    }
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 420)
+        .onAppear { vault = defaultVault }
     }
 }

@@ -147,6 +147,8 @@ fn invalid_edits_are_rejected() {
             label: "不存在的分区".into(),
             purpose: None,
             value: String::new(),
+            kv: vec![],
+            codes: vec![],
         },
         ItemEdit::AddField {
             kind: "text".into(),
@@ -569,6 +571,21 @@ fn templates_sections_and_structured_fields() {
                     label: "地址".into(),
                     purpose: None,
                     value: "https://test.example.com".into(),
+                    kv: vec![],
+                    codes: vec![],
+                },
+                ItemEdit::AddFieldToSection {
+                    section_id: Some(section.clone()),
+                    kind: "kv_list".into(),
+                    label: "额外变量".into(),
+                    purpose: None,
+                    value: String::new(),
+                    kv: vec![KvInput {
+                        key: "A".into(),
+                        value: "1".into(),
+                        concealed: false,
+                    }],
+                    codes: vec![],
                 },
                 ItemEdit::SetFieldLabel {
                     field_id: d.fields[0].id.clone(),
@@ -579,7 +596,13 @@ fn templates_sections_and_structured_fields() {
         .unwrap();
     let d = f.vault.item(id.clone()).unwrap();
     assert_eq!(d.sections.last().unwrap().label, "测试");
-    let url = d.fields.last().unwrap();
+    let extra = d.fields.last().unwrap();
+    assert_eq!(
+        (extra.label.as_str(), extra.kv.len()),
+        ("额外变量", 1),
+        "新建时带初始内容"
+    );
+    let url = &d.fields[d.fields.len() - 2];
     assert_eq!(
         (url.label.as_str(), url.section_id.as_deref()),
         ("地址", Some(section.as_str()))

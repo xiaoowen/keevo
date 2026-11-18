@@ -39,9 +39,32 @@ enum ItemTypeInfo {
     }
 }
 
+/// 新建菜单中的一项：类型与预设（docs/product.md §5.3："API 密钥"与"访问令牌"同属 api_credential）。
+struct NewItemChoice: Identifiable, Hashable {
+    let itemType: String
+    let preset: String?
+    let name: String
+    let symbol: String
+    var id: String { itemType + (preset ?? "") }
+
+    static let all: [NewItemChoice] = [
+        .init(itemType: "login", preset: nil, name: "登录", symbol: "key"),
+        .init(itemType: "email_account", preset: nil, name: "电子邮件账户", symbol: "envelope"),
+        .init(itemType: "secure_note", preset: nil, name: "安全笔记", symbol: "note.text"),
+        .init(itemType: "ssh_key", preset: nil, name: "SSH 密钥", symbol: "terminal"),
+        .init(itemType: "api_credential", preset: "api_key", name: "API 密钥", symbol: "curlybraces"),
+        .init(itemType: "api_credential", preset: "access_token", name: "访问令牌", symbol: "ticket"),
+        .init(itemType: "database", preset: nil, name: "数据库凭证", symbol: "cylinder"),
+        .init(itemType: "environment", preset: nil, name: "环境变量", symbol: "list.bullet.rectangle"),
+        .init(itemType: "two_factor", preset: nil, name: "双因素验证", symbol: "lock.rotation"),
+    ]
+}
+
 enum FieldKindInfo {
-    /// 编辑器中可以新增的字段类型。结构化字段（键值对、恢复码）在 M1.2 支持。
-    static let addable = ["text", "concealed", "url", "email", "phone", "multiline"]
+    /// 编辑器中可以新增的字段类型。
+    static let addable = [
+        "text", "concealed", "url", "email", "phone", "multiline", "date", "totp", "kv_list", "recovery_codes",
+    ]
 
     static func name(_ kind: String) -> String {
         switch kind {
@@ -63,10 +86,15 @@ enum FieldKindInfo {
         }
     }
 
-    /// 编辑器能否直接修改这个字段的值。结构化字段每项一行，M1.2 才有专门的编辑器。
-    static func editable(_ kind: String) -> Bool {
-        !["recovery_codes", "kv_list"].contains(kind)
+    /// 是否是结构化字段（键值对、恢复码），由专门的编辑器修改。
+    static func structured(_ kind: String) -> Bool {
+        ["recovery_codes", "kv_list"].contains(kind)
     }
+
+    /// 自动填充用途的显示名。
+    static let purposes: [(String?, String)] = [
+        (nil, "无"), ("username", "用户名"), ("password", "密码"), ("otp", "一次性密码"), ("notes", "备注"),
+    ]
 }
 
 extension ConflictEntry {

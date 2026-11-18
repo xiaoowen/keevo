@@ -6,6 +6,7 @@
 // 本机密钥包裹使用本机真实的 Secure Enclave（不要求用户在场的用途，不会弹出提示）；
 // 没有 Secure Enclave 的机器（CI 的虚拟机）改用只存在于本测试中的软件实现。
 
+import CoreImage
 import CryptoKit
 import Foundation
 import KeevoKit
@@ -165,6 +166,42 @@ expectError("永久删除后读不到", { _ = try reopened.item(itemId: itemId) 
 }
 check(try reopened.items().isEmpty, "列表中不再出现")
 check(try reopened.kdfParams().memoryKib > 0, "可读出 KDF 参数")
+
+// M1.2：类型模板、搜索、生成器、一次性密码、二维码
+print("M1.2：模板、搜索、生成器、一次性密码")
+let note = try reopened.createItem(vaultId: try reopened.vaults()[0].id, itemType: "secure_note", preset: nil, title: "服务器备忘")
+let twoFactor = try reopened.createItem(vaultId: try reopened.vaults()[0].id, itemType: "two_factor", preset: nil, title: "GitHub 两步验证")
+let env = try reopened.createItem(vaultId: try reopened.vaults()[0].id, itemType: "environment", preset: nil, title: "后端")
+check(try reopened.item(itemId: env).sections.map(\.label) == ["开发", "预发布", "生产"], "按模板新建：环境变量带三个分区")
+let otpField = try reopened.item(itemId: twoFactor).fields.first { $0.kind == "totp" }
+try reopened.updateItem(itemId: twoFactor, edits: [
+    .setFieldValue(fieldId: otpField?.id ?? "", value: "otpauth://totp/GitHub:octocat?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=GitHub"),
+    .addTag(tag: "安全"),
+])
+let otp = try reopened.otpCode(itemId: twoFactor, fieldId: otpField?.id ?? "")
+check(otp.code.expose().count == 6 && otp.period == 30 && otp.remainingMs <= 30_000, "一次性密码：6 位验证码与剩余时间")
+_ = try reopened.items()
+check(try reopened.search(query: "type:2fa") == [twoFactor], "搜索：按类型过滤")
+check(try reopened.search(query: "tag:安全 github") == [twoFactor], "搜索：标签过滤加普通词")
+check(try reopened.search(query: "服务器").first == note, "搜索：中文标题")
+let phrase = try generatePassword(recipe: .passphrase(words: 5, separator: "-", capitalize: false, includeNumber: false))
+check(phrase.value.expose().split(separator: "-").count >= 5 && abs(phrase.entropyBits - 5 * log2(7776)) < 0.001, "生成器：口令短语与熵")
+let info = try parseOtp(text: "otpauth://totp/ACME:alice?secret=GEZDGNBVGY3TQOJQ&digits=8&period=60")
+check(info.issuer == "ACME" && info.digits == 8 && info.period == 60, "解析 otpauth 链接（不含密钥）")
+
+// 二维码：用 CoreImage 生成一个一次性密码的二维码，再识别回来
+let uri = "otpauth://totp/Example:bob?secret=JBSWY3DPEHPK3PXP&issuer=Example"
+if let filter = CIFilter(name: "CIQRCodeGenerator") {
+    filter.setValue(Data(uri.utf8), forKey: "inputMessage")
+    filter.setValue("M", forKey: "inputCorrectionLevel")
+    let scaled = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
+    let image = scaled.flatMap { CIContext().createCGImage($0, from: $0.extent) }
+    check(image.map { QRCodeReader.otpURI(in: QRCodeReader.decode($0)) == uri } ?? false, "从图片识别一次性密码的二维码")
+} else {
+    check(false, "CoreImage 二维码生成器可用")
+}
+check(Ordering.longestIncreasing([0, 3, 1, 2]) == [0, 2, 3], "编辑器的移动计算：保持顺序的字段不动")
+check(Ordering.longestIncreasing([-1, 2, 0, 1]) == [2, 3], "来自其他分区的字段不参与")
 
 // M1.1：本机密钥包裹（spec/crypto.md §8.7），使用真实的 Secure Enclave
 print(useSecureEnclave ? "本机密钥包裹（Secure Enclave）" : "本机密钥包裹（软件实现：本机没有 Secure Enclave，或已指定）")

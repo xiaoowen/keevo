@@ -324,6 +324,36 @@ final class AppModel {
         return id
     }
 
+    /// 按类型模板新建条目，返回条目 ID（docs/product.md §5.3）。
+    func createItem(vaultId: String, itemType: String, preset: String?, title: String) -> String? {
+        guard let vault else { return nil }
+        var id: String?
+        perform {
+            id = try vault.createItem(vaultId: vaultId, itemType: itemType, preset: preset, title: title)
+            try self.reload()
+        }
+        return id
+    }
+
+    /// 搜索（过滤语法见 keevo-core::search），返回按相关度排序的条目 ID。出错时返回空列表。
+    func search(_ query: String) -> [String] {
+        guard let vault else { return [] }
+        return (try? vault.search(query: query)) ?? []
+    }
+
+    /// 一次性密码字段此刻的验证码。
+    func otpCode(itemId: String, fieldId: String) -> OtpCodeEntry? {
+        try? vault?.otpCode(itemId: itemId, fieldId: fieldId)
+    }
+
+    /// 把恢复码标记为已使用或未使用：重写整个恢复码列表（spec/vault-format.md §2.3）。
+    func setCodeUsed(itemId: String, field: FieldEntry, index: Int, used: Bool) {
+        let codes = field.codes.enumerated().map { i, c in
+            CodeInput(code: c.code.expose(), used: i == index ? used : c.used)
+        }
+        mutate { try $0.updateItem(itemId: itemId, edits: [.setFieldCodes(fieldId: field.id, codes: codes)]) }
+    }
+
     func detail(of itemId: String) -> ItemDetail? {
         guard let vault else { return nil }
         do {

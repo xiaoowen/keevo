@@ -740,7 +740,8 @@ pub enum ItemEdit {
         /// 值。
         value: String,
     },
-    /// 在某个分区的末尾新增字段（`section_id` 为 `None` 时同 `AddField`）。
+    /// 在某个分区的末尾新增字段（`section_id` 为 `None` 时为默认分区）。
+    /// 键值对字段取 `kv`、恢复码字段取 `codes` 作为初始内容，其他字段取 `value`。
     AddFieldToSection {
         /// 分区 ID；可以是同一批编辑中 `AddSection` 新建的分区。
         section_id: Option<String>,
@@ -750,8 +751,12 @@ pub enum ItemEdit {
         label: String,
         /// 自动填充用途。
         purpose: Option<String>,
-        /// 值。
+        /// 值（文本类字段）。
         value: String,
+        /// 初始键值对（`kv_list`）。
+        kv: Vec<KvInput>,
+        /// 初始恢复码（`recovery_codes`）。
+        codes: Vec<CodeInput>,
     },
     /// 修改字段的显示名。
     SetFieldLabel {
@@ -1471,6 +1476,27 @@ fn new_field(
     })
 }
 
+fn kv_entries(entries: Vec<KvInput>) -> Vec<KvEntry> {
+    entries
+        .into_iter()
+        .map(|e| KvEntry {
+            key: e.key,
+            value: Zeroizing::new(e.value).as_str().into(),
+            concealed: e.concealed,
+        })
+        .collect()
+}
+
+fn code_entries(codes: Vec<CodeInput>) -> Vec<CodeEntry> {
+    codes
+        .into_iter()
+        .map(|c| CodeEntry {
+            code: Zeroizing::new(c.code).as_str().into(),
+            used: c.used,
+        })
+        .collect()
+}
+
 fn core_edit(edit: ItemEdit) -> Result<Edit, KeevoError> {
     Ok(match edit {
         ItemEdit::SetTitle { title } => Edit::SetTitle(title),
@@ -1489,10 +1515,20 @@ fn core_edit(edit: ItemEdit) -> Result<Edit, KeevoError> {
             label,
             purpose,
             value,
-        } => Edit::AddFieldToSection {
-            section: section_id.as_deref().map(parse_id).transpose()?,
-            field: new_field(&kind, label, purpose, &Zeroizing::new(value))?,
-        },
+            kv,
+            codes,
+        } => {
+            let mut field = new_field(&kind, label, purpose, &Zeroizing::new(value))?;
+            match &mut field.data {
+                FieldData::Kv(entries) => *entries = kv_entries(kv),
+                FieldData::Codes(list) => *list = code_entries(codes),
+                FieldData::Text(_) => {}
+            }
+            Edit::AddFieldToSection {
+                section: section_id.as_deref().map(parse_id).transpose()?,
+                field,
+            }
+        }
         ItemEdit::SetFieldValue { field_id, value } => Edit::SetFieldData {
             field_id: parse_id(&field_id)?,
             data: FieldData::Text(Zeroizing::new(value).as_str().into()),
@@ -1509,28 +1545,11 @@ fn core_edit(edit: ItemEdit) -> Result<Edit, KeevoError> {
         },
         ItemEdit::SetFieldKv { field_id, entries } => Edit::SetFieldData {
             field_id: parse_id(&field_id)?,
-            data: FieldData::Kv(
-                entries
-                    .into_iter()
-                    .map(|e| KvEntry {
-                        key: e.key,
-                        value: Zeroizing::new(e.value).as_str().into(),
-                        concealed: e.concealed,
-                    })
-                    .collect(),
-            ),
+            data: FieldData::Kv(kv_entries(entries)),
         },
         ItemEdit::SetFieldCodes { field_id, codes } => Edit::SetFieldData {
             field_id: parse_id(&field_id)?,
-            data: FieldData::Codes(
-                codes
-                    .into_iter()
-                    .map(|c| CodeEntry {
-                        code: Zeroizing::new(c.code).as_str().into(),
-                        used: c.used,
-                    })
-                    .collect(),
-            ),
+            data: FieldData::Codes(code_entries(codes)),
         },
         ItemEdit::RemoveField { field_id } => Edit::RemoveField(parse_id(&field_id)?),
         ItemEdit::MoveField {

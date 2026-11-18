@@ -10,6 +10,8 @@ struct ItemDetailView: View {
     @Environment(AppModel.self) private var model
     let itemId: String
     @Binding var selectedItem: String?
+    /// 新建条目后直接打开编辑器。
+    var editOnAppear = false
 
     @ViewState private var detail: ItemDetail?
     @ViewState private var revealed: Set<String> = []
@@ -32,7 +34,10 @@ struct ItemDetailView: View {
                 ContentUnavailableView("这个条目已不存在", systemImage: "questionmark.square.dashed")
             }
         }
-        .onAppear(perform: load)
+        .onAppear {
+            load()
+            if editOnAppear, detail != nil { editing = true }
+        }
         .onChange(of: model.dataVersion) { load() }
         // 切换条目、离开视图或窗口失去焦点时丢弃已解密的内容，隐藏显示中的秘密
         .onDisappear { detail = nil; revealed = []; largeType = nil }
@@ -72,17 +77,24 @@ struct ItemDetailView: View {
             if hasNotice(d) {
                 Section { notice(d) }
             }
-            Section {
-                if d.fields.isEmpty {
-                    Text("没有字段").foregroundStyle(KV.Colors.fgSecondary)
-                }
-                ForEach(d.fields, id: \.id) { field in
-                    FieldRow(
-                        field: field,
-                        revealed: revealed.contains(field.id),
-                        toggle: { toggle(field.id) },
-                        largeType: { largeType = LargeTypeItem(value: field.value.expose()) }
-                    )
+            // 默认分区在前，然后是各个分区；不显示没有内容的字段
+            let groups = fieldGroups(d)
+            if groups.isEmpty {
+                Section { Text("还没有填写任何字段").foregroundStyle(KV.Colors.fgSecondary) }
+            }
+            ForEach(groups, id: \.id) { group in
+                Section {
+                    ForEach(group.fields, id: \.id) { field in
+                        FieldDisplay(
+                            itemId: d.id,
+                            field: field,
+                            revealed: revealed,
+                            toggle: toggle,
+                            largeType: { largeType = LargeTypeItem(value: $0) }
+                        )
+                    }
+                } header: {
+                    if let label = group.label { Text(label) }
                 }
             }
             if !d.tags.isEmpty {
@@ -145,6 +157,21 @@ struct ItemDetailView: View {
     }
 
     /// 需要用户注意的状态：回收站、冲突、撤销删除、完整性问题、并发头异常多（spec/revisions.md §5.4–§5.6、§7.1）。
+    private struct FieldGroup {
+        let id: String
+        let label: String?
+        let fields: [FieldEntry]
+    }
+
+    private func fieldGroups(_ d: ItemDetail) -> [FieldGroup] {
+        let visible = d.fields.filter(FieldDisplay.hasContent)
+        var groups = [FieldGroup(id: "", label: nil, fields: visible.filter { $0.sectionId == nil })]
+        groups += d.sections.map { s in
+            FieldGroup(id: s.id, label: s.label, fields: visible.filter { $0.sectionId == s.id })
+        }
+        return groups.filter { !$0.fields.isEmpty }
+    }
+
     private func hasNotice(_ d: ItemDetail) -> Bool {
         d.trashed || !d.conflicts.isEmpty || d.resurrected || d.integrityIssues > 0 || d.headCount > 64
     }
@@ -193,47 +220,6 @@ struct ItemDetailView: View {
 struct LargeTypeItem: Identifiable {
     let value: String
     var id: String { "large-type" }
-}
-
-/// 字段行：每行带复制按钮，秘密字段另有显示和大字显示按钮（docs/ux.md §2、§5）。
-struct FieldRow: View {
-    let field: FieldEntry
-    let revealed: Bool
-    let toggle: () -> Void
-    let largeType: () -> Void
-
-    var body: some View {
-        LabeledContent {
-            HStack(spacing: KV.Space.s2) {
-                if field.concealed {
-                    SecretText(secret: field.value, revealed: revealed)
-                    Spacer(minLength: 0)
-                    Button(revealed ? "隐藏" : "显示", action: toggle)
-                        .buttonStyle(.borderless)
-                    Button(action: largeType) { Image(systemName: "textformat.size") }
-                        .buttonStyle(.borderless)
-                        .help("大字显示")
-                        .accessibilityLabel("大字显示")
-                } else if field.kind == "url", let url = URL(string: field.value.expose()),
-                          url.scheme == "https" || url.scheme == "http" {
-                    Link(url.absoluteString, destination: url)
-                        .font(KV.Typography.body)
-                    Spacer(minLength: 0)
-                } else {
-                    Text(field.value.expose())
-                        .font(KV.Typography.body)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                }
-                Button { Clipboard.copy(field.value.expose()) } label: { Image(systemName: "doc.on.doc") }
-                    .buttonStyle(.borderless)
-                    .help("复制（\(Int(Clipboard.clearAfter)) 秒后自动清除）")
-                    .accessibilityLabel("复制\(field.label)")
-            }
-        } label: {
-            Text(field.label)
-        }
-    }
 }
 
 struct TagList: View {
