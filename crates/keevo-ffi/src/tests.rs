@@ -141,9 +141,10 @@ fn invalid_edits_are_rejected() {
             purpose: None,
             value: String::new(),
         },
-        ItemEdit::AddField {
-            kind: "kv_list".into(),
-            label: "环境变量".into(),
+        ItemEdit::AddFieldToSection {
+            section_id: Some("00".repeat(16)),
+            kind: "text".into(),
+            label: "不存在的分区".into(),
             purpose: None,
             value: String::new(),
         },
@@ -161,7 +162,7 @@ fn invalid_edits_are_rejected() {
     for edit in bad {
         assert!(matches!(
             f.vault.update_item(id.clone(), vec![edit]),
-            Err(KeevoError::InvalidInput { .. })
+            Err(KeevoError::InvalidInput { .. } | KeevoError::NotFound)
         ));
     }
     assert_eq!(
@@ -447,5 +448,167 @@ fn search_uses_index_and_requires_unlock() {
     assert!(matches!(
         f.vault.search("git".into()),
         Err(KeevoError::Locked)
+    ));
+}
+
+/// 按模板新建；分区与字段按顺序列出；键值对与恢复码的读写；移动字段、分区的增删改。
+#[test]
+fn templates_sections_and_structured_fields() {
+    let f = Fixture::new();
+    let id = f
+        .vault
+        .create_item(
+            f.vault_id.clone(),
+            "environment".into(),
+            None,
+            "后端".into(),
+        )
+        .unwrap();
+    let d = f.vault.item(id.clone()).unwrap();
+    assert_eq!(d.item_type, "environment");
+    let sections: Vec<&str> = d.sections.iter().map(|s| s.label.as_str()).collect();
+    assert_eq!(sections, ["开发", "预发布", "生产"]);
+    assert_eq!(d.fields[0].label, "项目", "默认分区在前");
+    assert_eq!(d.fields[0].section_id, None);
+    let dev_vars = &d.fields[1];
+    assert_eq!(
+        (dev_vars.kind.as_str(), dev_vars.section_id.as_deref()),
+        ("kv_list", Some(d.sections[0].id.as_str()))
+    );
+
+    f.vault
+        .update_item(
+            id.clone(),
+            vec![ItemEdit::SetFieldKv {
+                field_id: dev_vars.id.clone(),
+                entries: vec![
+                    KvInput {
+                        key: "DATABASE_URL".into(),
+                        value: "postgres://dev".into(),
+                        concealed: true,
+                    },
+                    KvInput {
+                        key: "DEBUG".into(),
+                        value: "1".into(),
+                        concealed: false,
+                    },
+                ],
+            }],
+        )
+        .unwrap();
+    let d = f.vault.item(id.clone()).unwrap();
+    let kv = &d.fields[1].kv;
+    assert_eq!(kv.len(), 2);
+    assert_eq!(
+        (
+            kv[0].key.as_str(),
+            kv[0].value.expose().as_str(),
+            kv[0].concealed
+        ),
+        ("DATABASE_URL", "postgres://dev", true)
+    );
+
+    // 双因素条目的恢复码：标记已使用
+    let tf = f
+        .vault
+        .create_item(
+            f.vault_id.clone(),
+            "two_factor".into(),
+            None,
+            "GitHub".into(),
+        )
+        .unwrap();
+    let codes_field = f
+        .vault
+        .item(tf.clone())
+        .unwrap()
+        .fields
+        .into_iter()
+        .find(|x| x.kind == "recovery_codes")
+        .unwrap();
+    let set = |used: bool| ItemEdit::SetFieldCodes {
+        field_id: codes_field.id.clone(),
+        codes: vec![
+            CodeInput {
+                code: "aaaa-bbbb".into(),
+                used,
+            },
+            CodeInput {
+                code: "cccc-dddd".into(),
+                used: false,
+            },
+        ],
+    };
+    f.vault.update_item(tf.clone(), vec![set(false)]).unwrap();
+    f.vault.update_item(tf.clone(), vec![set(true)]).unwrap();
+    let codes = f
+        .vault
+        .item(tf)
+        .unwrap()
+        .fields
+        .into_iter()
+        .find(|x| x.kind == "recovery_codes")
+        .unwrap()
+        .codes;
+    assert!(codes[0].used && !codes[1].used);
+    assert_eq!(codes[1].code.expose(), "cccc-dddd");
+
+    // 新增分区并放进字段、移动字段、删除分区
+    let section = new_id().unwrap();
+    f.vault
+        .update_item(
+            id.clone(),
+            vec![
+                ItemEdit::AddSection {
+                    section_id: section.clone(),
+                    label: "测试".into(),
+                },
+                ItemEdit::AddFieldToSection {
+                    section_id: Some(section.clone()),
+                    kind: "url".into(),
+                    label: "地址".into(),
+                    purpose: None,
+                    value: "https://test.example.com".into(),
+                },
+                ItemEdit::SetFieldLabel {
+                    field_id: d.fields[0].id.clone(),
+                    label: "项目名".into(),
+                },
+            ],
+        )
+        .unwrap();
+    let d = f.vault.item(id.clone()).unwrap();
+    assert_eq!(d.sections.last().unwrap().label, "测试");
+    let url = d.fields.last().unwrap();
+    assert_eq!(
+        (url.label.as_str(), url.section_id.as_deref()),
+        ("地址", Some(section.as_str()))
+    );
+    assert_eq!(d.fields[0].label, "项目名");
+    f.vault
+        .update_item(
+            id.clone(),
+            vec![ItemEdit::MoveField {
+                field_id: url.id.clone(),
+                section_id: None,
+                before_field_id: Some(d.fields[0].id.clone()),
+            }],
+        )
+        .unwrap();
+    let d = f.vault.item(id.clone()).unwrap();
+    assert_eq!(d.fields[0].label, "地址", "移到默认分区的最前面");
+    f.vault
+        .update_item(
+            id.clone(),
+            vec![ItemEdit::RemoveSection {
+                section_id: section,
+            }],
+        )
+        .unwrap();
+    assert_eq!(f.vault.item(id).unwrap().sections.len(), 3);
+    assert!(matches!(
+        f.vault
+            .create_item(f.vault_id.clone(), "passkey".into(), None, "x".into()),
+        Err(KeevoError::InvalidInput { .. })
     ));
 }

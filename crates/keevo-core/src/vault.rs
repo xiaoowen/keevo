@@ -9,7 +9,8 @@ use keevo_crypto::{
 };
 use keevo_format::{
     Conflict, FORMAT_VERSION, FieldData, FieldKind, FieldValue, HeadState, Hlc, HlcClock, ItemDoc,
-    ItemOverview, ItemType, Purpose, RecordKey, RecordValue, RevisionGraph, VaultMeta, merge_heads,
+    ItemOverview, ItemType, Purpose, RecordKey, RecordValue, RevisionGraph, SectionValue,
+    VaultMeta, merge_heads, order_between, order_sequence,
 };
 use keevo_store::{AccountRow, ObjectKind, RevisionRow, Store};
 
@@ -114,6 +115,53 @@ pub enum Edit {
     },
     /// 删除字段。
     RemoveField(Id128),
+    /// 修改字段的显示名。
+    SetFieldLabel {
+        /// 字段 ID。
+        field_id: Id128,
+        /// 新名称。
+        label: String,
+    },
+    /// 修改字段的自动填充用途。
+    SetFieldPurpose {
+        /// 字段 ID。
+        field_id: Id128,
+        /// 新用途；`None` 表示不参与识别。
+        purpose: Option<Purpose>,
+    },
+    /// 在某个分区的末尾新增字段（`None` 为默认分区）。
+    AddFieldToSection {
+        /// 分区。
+        section: Option<Id128>,
+        /// 字段。
+        field: NewField,
+    },
+    /// 移动字段：放进 `section`，排在 `before` 之前；`before` 为 `None` 时排在末尾。
+    /// 只改写这一个字段的排序键（`spec/revisions.md` §4.1），并发的移动也能确定性地合并。
+    MoveField {
+        /// 字段 ID。
+        field_id: Id128,
+        /// 目标分区；`None` 为默认分区。
+        section: Option<Id128>,
+        /// 排在这个字段之前；它必须在目标分区中。
+        before: Option<Id128>,
+    },
+    /// 在末尾新增分区。ID 由调用方生成，因此同一次写入中可以紧接着把字段放进去。
+    AddSection {
+        /// 分区 ID。
+        section_id: Id128,
+        /// 名称。
+        label: String,
+    },
+    /// 分区改名。
+    RenameSection {
+        /// 分区 ID。
+        section_id: Id128,
+        /// 新名称。
+        label: String,
+    },
+    /// 删除分区：其中的字段依次移到默认分区的末尾，不会被删除。
+    RemoveSection(Id128),
 }
 
 /// 保险库信息。
@@ -934,8 +982,69 @@ impl Vault {
             hlc,
             rev_id,
         )?;
-        for (i, field) in fields.into_iter().enumerate() {
-            add_field(&mut doc, field, order_key(i), hlc, rev_id)?;
+        let orders = order_sequence(fields.len());
+        for (field, order) in fields.into_iter().zip(orders) {
+            add_field(&mut doc, field, None, order, hlc, rev_id)?;
+        }
+        let ik = SymmetricKey::generate()?;
+        self.write_item_revision(vault_id, item_id, rev_id, Vec::new(), &ik, Some(&doc))?;
+        Ok(item_id)
+    }
+
+    /// 按模板新建条目（`crate::templates`）：先建分区，再把字段放进各自的分区。返回条目 ID。
+    ///
+    /// # Errors
+    /// 同 [`Vault::create_item`]。
+    pub fn create_item_from_template(
+        &mut self,
+        vault_id: Id128,
+        title: &str,
+        template: crate::templates::Template,
+    ) -> Result<Id128> {
+        let hlc = self.tick()?;
+        let item_id = Id128::random()?;
+        let rev_id = Id128::random()?;
+        let mut doc = ItemDoc::new(template.item_type);
+        doc.set(
+            RecordKey::attr("title"),
+            RecordValue::Text(title.into()),
+            hlc,
+            rev_id,
+        )?;
+        let section_ids: Vec<Id128> = template
+            .sections
+            .iter()
+            .map(|_| Id128::random())
+            .collect::<core::result::Result<_, _>>()?;
+        for ((id, label), order) in section_ids
+            .iter()
+            .zip(&template.sections)
+            .zip(order_sequence(template.sections.len()))
+        {
+            doc.set(
+                RecordKey::Section(*id),
+                RecordValue::Section(SectionValue {
+                    label: label.clone(),
+                    order,
+                }),
+                hlc,
+                rev_id,
+            )?;
+        }
+        // 每个分区内单独编号
+        let mut groups: Vec<(Option<Id128>, Vec<NewField>)> = Vec::new();
+        for (section, field) in template.fields {
+            let section = section.and_then(|i| section_ids.get(i).copied());
+            match groups.iter_mut().find(|(s, _)| *s == section) {
+                Some((_, list)) => list.push(field),
+                None => groups.push((section, vec![field])),
+            }
+        }
+        for (section, fields) in groups {
+            let orders = order_sequence(fields.len());
+            for (field, order) in fields.into_iter().zip(orders) {
+                add_field(&mut doc, field, section, order, hlc, rev_id)?;
+            }
         }
         let ik = SymmetricKey::generate()?;
         self.write_item_revision(vault_id, item_id, rev_id, Vec::new(), &ik, Some(&doc))?;
@@ -1531,21 +1640,17 @@ fn context(
     }
 }
 
-/// 字段排序键。M0 使用定宽十进制；M1.1 改为分数索引（`spec/revisions.md` §4.1）。
-fn order_key(index: usize) -> String {
-    format!("{:010}", index.saturating_mul(1024))
-}
-
 fn add_field(
     doc: &mut ItemDoc,
     field: NewField,
+    section: Option<Id128>,
     order: String,
     hlc: Hlc,
     rev: Id128,
 ) -> Result<Id128> {
     let field_id = Id128::random()?;
     let value = FieldValue {
-        section: None,
+        section,
         order,
         kind: field.kind,
         label: field.label,
@@ -1575,12 +1680,75 @@ fn apply(doc: &mut ItemDoc, edit: Edit, hlc: Hlc, rev: Id128) -> Result<()> {
         Edit::AddTag(t) => doc.set(RecordKey::Tag(t), RecordValue::Tag, hlc, rev)?,
         Edit::RemoveTag(t) => doc.delete(RecordKey::Tag(t), hlc, rev)?,
         Edit::AddField(field) => {
-            let next = doc
-                .records
-                .keys()
-                .filter(|k| matches!(k, RecordKey::Field(_)))
-                .count();
-            add_field(doc, field, order_key(next), hlc, rev)?;
+            let order = order_at(doc, None, None, hlc, rev)?;
+            add_field(doc, field, None, order, hlc, rev)?;
+        }
+        Edit::AddFieldToSection { section, field } => {
+            if let Some(s) = section {
+                live_section(doc, s)?;
+            }
+            let order = order_at(doc, section, None, hlc, rev)?;
+            add_field(doc, field, section, order, hlc, rev)?;
+        }
+        Edit::SetFieldLabel { field_id, label } => {
+            update_field(doc, field_id, hlc, rev, |f| f.label = label)?;
+        }
+        Edit::SetFieldPurpose { field_id, purpose } => {
+            update_field(doc, field_id, hlc, rev, |f| f.purpose = purpose)?;
+        }
+        Edit::MoveField {
+            field_id,
+            section,
+            before,
+        } => {
+            live_field(doc, field_id)?;
+            if let Some(s) = section {
+                live_section(doc, s)?;
+            }
+            if let Some(b) = before {
+                let target = live_field(doc, b)?;
+                if target.section != section || b == field_id {
+                    return Err(CoreError::NotFound);
+                }
+            }
+            let order = order_at(doc, section, before.map(|b| (b, field_id)), hlc, rev)?;
+            update_field(doc, field_id, hlc, rev, |f| {
+                f.section = section;
+                f.order = order;
+            })?;
+        }
+        Edit::AddSection { section_id, label } => {
+            if doc.get(&RecordKey::Section(section_id)).is_some() {
+                return Err(CoreError::AlreadyExists);
+            }
+            let last = sections_in_order(doc).last().map(|(o, _)| o.clone());
+            let order = order_between(last.as_deref(), None).ok_or(CoreError::OutOfRange)?;
+            doc.set(
+                RecordKey::Section(section_id),
+                RecordValue::Section(SectionValue { label, order }),
+                hlc,
+                rev,
+            )?;
+        }
+        Edit::RenameSection { section_id, label } => {
+            let current = live_section(doc, section_id)?;
+            doc.set(
+                RecordKey::Section(section_id),
+                RecordValue::Section(SectionValue { label, ..current }),
+                hlc,
+                rev,
+            )?;
+        }
+        Edit::RemoveSection(section_id) => {
+            live_section(doc, section_id)?;
+            for (_, field_id) in fields_in_order(doc, Some(section_id)) {
+                let order = order_at(doc, None, None, hlc, rev)?;
+                update_field(doc, field_id, hlc, rev, |f| {
+                    f.section = None;
+                    f.order = order;
+                })?;
+            }
+            doc.delete(RecordKey::Section(section_id), hlc, rev)?;
         }
         Edit::SetFieldData { field_id, data } => {
             let key = RecordKey::Field(field_id);
@@ -1603,6 +1771,107 @@ fn apply(doc: &mut ItemDoc, edit: Edit, hlc: Hlc, rev: Id128) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn live_field(doc: &ItemDoc, field_id: Id128) -> Result<FieldValue> {
+    match doc.get(&RecordKey::Field(field_id)) {
+        Some(RecordValue::Field(f)) => Ok(f.clone()),
+        _ => Err(CoreError::NotFound),
+    }
+}
+
+fn live_section(doc: &ItemDoc, section_id: Id128) -> Result<SectionValue> {
+    match doc.get(&RecordKey::Section(section_id)) {
+        Some(RecordValue::Section(s)) => Ok(s.clone()),
+        _ => Err(CoreError::NotFound),
+    }
+}
+
+fn update_field(
+    doc: &mut ItemDoc,
+    field_id: Id128,
+    hlc: Hlc,
+    rev: Id128,
+    change: impl FnOnce(&mut FieldValue),
+) -> Result<()> {
+    let mut f = live_field(doc, field_id)?;
+    change(&mut f);
+    doc.set(RecordKey::Field(field_id), RecordValue::Field(f), hlc, rev)?;
+    Ok(())
+}
+
+/// 分区中未删除的字段，按（排序键，ID）排列（`spec/vault-format.md` §2.4）。分区已不存在的字段视为默认分区。
+fn fields_in_order(doc: &ItemDoc, section: Option<Id128>) -> Vec<(String, Id128)> {
+    let live_sections: std::collections::BTreeSet<Id128> = sections_in_order(doc)
+        .into_iter()
+        .map(|(_, id)| id)
+        .collect();
+    let mut out: Vec<(String, Id128)> = doc
+        .records
+        .iter()
+        .filter_map(|(k, v)| match (k, &v.value) {
+            (RecordKey::Field(id), Some(RecordValue::Field(f))) => {
+                let effective = f.section.filter(|s| live_sections.contains(s));
+                (effective == section).then(|| (f.order.clone(), *id))
+            }
+            _ => None,
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+fn sections_in_order(doc: &ItemDoc) -> Vec<(String, Id128)> {
+    let mut out: Vec<(String, Id128)> = doc
+        .records
+        .iter()
+        .filter_map(|(k, v)| match (k, &v.value) {
+            (RecordKey::Section(id), Some(RecordValue::Section(s))) => Some((s.order.clone(), *id)),
+            _ => None,
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// 为分区中的一个位置生成排序键：`before` 为 `Some((b, moving))` 时排在字段 `b` 之前（`moving` 是正在移动的字段，
+/// 不参与计算），否则排在末尾。两个相邻的键之间放不下新键时，先把这个分区的字段重新编号（同一次写入）。
+fn order_at(
+    doc: &mut ItemDoc,
+    section: Option<Id128>,
+    before: Option<(Id128, Id128)>,
+    hlc: Hlc,
+    rev: Id128,
+) -> Result<String> {
+    for attempt in 0..2 {
+        let moving = before.map(|(_, m)| m);
+        let list: Vec<(String, Id128)> = fields_in_order(doc, section)
+            .into_iter()
+            .filter(|(_, id)| Some(*id) != moving)
+            .collect();
+        let (lower, upper) = match before {
+            Some((b, _)) => {
+                let i = list
+                    .iter()
+                    .position(|(_, id)| *id == b)
+                    .ok_or(CoreError::NotFound)?;
+                (i.checked_sub(1).and_then(|j| list.get(j)), list.get(i))
+            }
+            None => (list.last(), None),
+        };
+        if let Some(order) = order_between(
+            lower.map(|(o, _)| o.as_str()),
+            upper.map(|(o, _)| o.as_str()),
+        ) {
+            return Ok(order);
+        }
+        if attempt == 0 {
+            for ((_, id), order) in list.iter().zip(order_sequence(list.len())) {
+                update_field(doc, *id, hlc, rev, |f| f.order = order)?;
+            }
+        }
+    }
+    Err(CoreError::OutOfRange)
 }
 
 /// 测试专用：核心层使用的当前时间。

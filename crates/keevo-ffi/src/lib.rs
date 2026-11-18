@@ -23,8 +23,8 @@ use keevo_core::search::{Query, SearchIndex};
 use keevo_core::{LocalPurpose, PasswordReason, Store};
 
 use keevo_core::{
-    AccountSecretKey, CoreError, Edit, FieldData, FieldKind, Id128, ItemDoc, ItemType, KdfParams,
-    NewField, Purpose, RecordKey, RecordValue, RecordVersion, Vault,
+    AccountSecretKey, CodeEntry, CoreError, Edit, FieldData, FieldKind, Id128, ItemDoc, ItemType,
+    KdfParams, KvEntry, NewField, Purpose, RecordKey, RecordValue, RecordVersion, Vault,
 };
 
 uniffi::setup_scaffolding!();
@@ -525,6 +525,15 @@ pub fn generate_password(recipe: GeneratorRecipe) -> Result<GeneratedPassword, K
     })
 }
 
+/// 生成一个新的随机 ID（十六进制），用于在同一批编辑中新建分区并引用它。
+///
+/// # Errors
+/// 随机数不可用时返回 [`KeevoError::Internal`]。
+#[uniffi::export]
+pub fn new_id() -> Result<String, KeevoError> {
+    Ok(Id128::random().map_err(CoreError::from)?.to_hex())
+}
+
 /// 新建账户的结果。
 #[derive(uniffi::Record)]
 pub struct NewAccount {
@@ -583,6 +592,61 @@ pub struct FieldEntry {
     pub value: Arc<SecretValue>,
     /// 自动填充用途，如 `password`；没有时为 `None`。
     pub purpose: Option<String>,
+    /// 所在分区；`None` 为默认分区（包括分区已被删除的情形）。
+    pub section_id: Option<String>,
+    /// 键值对（`kv_list` 字段），其他字段为空。
+    pub kv: Vec<KvItem>,
+    /// 恢复码（`recovery_codes` 字段），其他字段为空。
+    pub codes: Vec<CodeItem>,
+}
+
+/// 键值对中的一项。
+#[derive(uniffi::Record)]
+pub struct KvItem {
+    /// 键（如环境变量名）。
+    pub key: String,
+    /// 值。
+    pub value: Arc<SecretValue>,
+    /// 值是否默认隐藏。
+    pub concealed: bool,
+}
+
+/// 一个恢复码。
+#[derive(uniffi::Record)]
+pub struct CodeItem {
+    /// 恢复码。
+    pub code: Arc<SecretValue>,
+    /// 是否已使用。
+    pub used: bool,
+}
+
+/// 键值对的输入。
+#[derive(uniffi::Record)]
+pub struct KvInput {
+    /// 键。
+    pub key: String,
+    /// 值。
+    pub value: String,
+    /// 值是否默认隐藏。
+    pub concealed: bool,
+}
+
+/// 恢复码的输入。
+#[derive(uniffi::Record)]
+pub struct CodeInput {
+    /// 恢复码。
+    pub code: String,
+    /// 是否已使用。
+    pub used: bool,
+}
+
+/// 分区。
+#[derive(uniffi::Record)]
+pub struct SectionEntry {
+    /// ID（十六进制）。
+    pub id: String,
+    /// 名称。
+    pub label: String,
 }
 
 /// 条目详情（合并全部头修订之后的视图）。
@@ -602,7 +666,9 @@ pub struct ItemDetail {
     pub tags: Vec<String>,
     /// 是否在回收站。
     pub trashed: bool,
-    /// 字段，按排序键排列。
+    /// 分区，按排序键排列（不含默认分区）。
+    pub sections: Vec<SectionEntry>,
+    /// 字段：默认分区在前，然后按分区的顺序，分区内按排序键排列。
     pub fields: Vec<FieldEntry>,
     /// 待处理的冲突。保存前必须先展示（`spec/revisions.md` §5.4）。
     pub conflicts: Vec<ConflictEntry>,
@@ -663,9 +729,9 @@ pub enum ItemEdit {
         /// 标签名。
         tag: String,
     },
-    /// 新增文本类字段（M1.2 再支持键值对、恢复码等结构化字段）。
+    /// 在默认分区的末尾新增字段。键值对与恢复码字段以空列表创建，`value` 被忽略。
     AddField {
-        /// 字段类型，如 `text`、`concealed`。
+        /// 字段类型，如 `text`、`concealed`、`kv_list`。
         kind: String,
         /// 显示名。
         label: String,
@@ -673,6 +739,75 @@ pub enum ItemEdit {
         purpose: Option<String>,
         /// 值。
         value: String,
+    },
+    /// 在某个分区的末尾新增字段（`section_id` 为 `None` 时同 `AddField`）。
+    AddFieldToSection {
+        /// 分区 ID；可以是同一批编辑中 `AddSection` 新建的分区。
+        section_id: Option<String>,
+        /// 字段类型。
+        kind: String,
+        /// 显示名。
+        label: String,
+        /// 自动填充用途。
+        purpose: Option<String>,
+        /// 值。
+        value: String,
+    },
+    /// 修改字段的显示名。
+    SetFieldLabel {
+        /// 字段 ID。
+        field_id: String,
+        /// 新名称。
+        label: String,
+    },
+    /// 修改字段的自动填充用途。
+    SetFieldPurpose {
+        /// 字段 ID。
+        field_id: String,
+        /// 新用途；`None` 表示不参与识别。
+        purpose: Option<String>,
+    },
+    /// 替换键值对字段的全部内容。
+    SetFieldKv {
+        /// 字段 ID。
+        field_id: String,
+        /// 新的键值对。
+        entries: Vec<KvInput>,
+    },
+    /// 替换恢复码字段的全部内容（也用于标记某个恢复码已使用）。
+    SetFieldCodes {
+        /// 字段 ID。
+        field_id: String,
+        /// 新的恢复码。
+        codes: Vec<CodeInput>,
+    },
+    /// 移动字段：放进 `section_id`，排在 `before_field_id` 之前；为 `None` 时排在末尾。
+    MoveField {
+        /// 字段 ID。
+        field_id: String,
+        /// 目标分区；`None` 为默认分区。
+        section_id: Option<String>,
+        /// 排在这个字段之前；它必须在目标分区中。
+        before_field_id: Option<String>,
+    },
+    /// 在末尾新增分区。ID 由调用方用 [`new_id`] 生成，同一批编辑中可以接着把字段放进去。
+    AddSection {
+        /// 分区 ID。
+        section_id: String,
+        /// 名称。
+        label: String,
+    },
+    /// 分区改名。
+    RenameSection {
+        /// 分区 ID。
+        section_id: String,
+        /// 新名称。
+        label: String,
+    },
+    /// 删除分区：其中的字段移到默认分区末尾。
+    RemoveSection {
+        /// 分区 ID。
+        section_id: String,
     },
     /// 修改文本类字段的值。
     SetFieldValue {
@@ -992,6 +1127,33 @@ impl KeevoVault {
             .unwrap_or_default())
     }
 
+    /// 按类型模板新建条目（默认分区与字段为空值），返回条目 ID。之后由编辑器填写。
+    /// `preset` 只对 `api_credential` 有意义：`api_key`（默认）或 `access_token`。
+    ///
+    /// # Errors
+    /// 类型或预设不认识时返回 [`KeevoError::InvalidInput`]。
+    pub fn create_item(
+        &self,
+        vault_id: String,
+        item_type: String,
+        preset: Option<String>,
+        title: String,
+    ) -> Result<String, KeevoError> {
+        use keevo_core::templates::{Preset, template};
+        let item_type = item_type_from(&item_type).ok_or_else(|| invalid("item type"))?;
+        let preset = match preset.as_deref() {
+            None | Some("api_key") => Preset::Default,
+            Some("access_token") => Preset::AccessToken,
+            Some(_) => return Err(invalid("preset")),
+        };
+        let id = self.vault().create_item_from_template(
+            parse_id(&vault_id)?,
+            &title,
+            template(item_type, preset),
+        )?;
+        Ok(id.to_hex())
+    }
+
     /// 新建登录条目，返回条目 ID。
     ///
     /// # Errors
@@ -1073,6 +1235,7 @@ impl KeevoVault {
             favorite: overview.favorite,
             tags: overview.tags,
             trashed: overview.trashed_at.is_some(),
+            sections: doc_sections(&view.doc),
             fields: doc_fields(&view.doc, &self.secrets),
             conflicts,
             resurrected: view.resurrected,
@@ -1285,6 +1448,29 @@ fn invalid(what: &str) -> KeevoError {
     }
 }
 
+fn new_field(
+    kind: &str,
+    label: String,
+    purpose: Option<String>,
+    value: &str,
+) -> Result<NewField, KeevoError> {
+    let kind = field_kind_from(kind).ok_or_else(|| invalid("field kind"))?;
+    let purpose = purpose
+        .map(|p| purpose_from(&p).ok_or_else(|| invalid("purpose")))
+        .transpose()?;
+    let data = match kind {
+        FieldKind::KvList => FieldData::Kv(Vec::new()),
+        FieldKind::RecoveryCodes => FieldData::Codes(Vec::new()),
+        _ => FieldData::Text(value.into()),
+    };
+    Ok(NewField {
+        kind,
+        label,
+        purpose,
+        data,
+    })
+}
+
 fn core_edit(edit: ItemEdit) -> Result<Edit, KeevoError> {
     Ok(match edit {
         ItemEdit::SetTitle { title } => Edit::SetTitle(title),
@@ -1296,50 +1482,162 @@ fn core_edit(edit: ItemEdit) -> Result<Edit, KeevoError> {
             label,
             purpose,
             value,
-        } => {
-            let kind = field_kind_from(&kind).ok_or_else(|| invalid("field kind"))?;
-            if matches!(kind, FieldKind::KvList | FieldKind::RecoveryCodes) {
-                return Err(invalid("structured fields are not supported yet"));
-            }
-            let purpose = purpose
-                .map(|p| purpose_from(&p).ok_or_else(|| invalid("purpose")))
-                .transpose()?;
-            Edit::AddField(NewField {
-                kind,
-                label,
-                purpose,
-                data: FieldData::Text(value.as_str().into()),
-            })
-        }
+        } => Edit::AddField(new_field(&kind, label, purpose, &Zeroizing::new(value))?),
+        ItemEdit::AddFieldToSection {
+            section_id,
+            kind,
+            label,
+            purpose,
+            value,
+        } => Edit::AddFieldToSection {
+            section: section_id.as_deref().map(parse_id).transpose()?,
+            field: new_field(&kind, label, purpose, &Zeroizing::new(value))?,
+        },
         ItemEdit::SetFieldValue { field_id, value } => Edit::SetFieldData {
             field_id: parse_id(&field_id)?,
-            data: FieldData::Text(value.as_str().into()),
+            data: FieldData::Text(Zeroizing::new(value).as_str().into()),
+        },
+        ItemEdit::SetFieldLabel { field_id, label } => Edit::SetFieldLabel {
+            field_id: parse_id(&field_id)?,
+            label,
+        },
+        ItemEdit::SetFieldPurpose { field_id, purpose } => Edit::SetFieldPurpose {
+            field_id: parse_id(&field_id)?,
+            purpose: purpose
+                .map(|p| purpose_from(&p).ok_or_else(|| invalid("purpose")))
+                .transpose()?,
+        },
+        ItemEdit::SetFieldKv { field_id, entries } => Edit::SetFieldData {
+            field_id: parse_id(&field_id)?,
+            data: FieldData::Kv(
+                entries
+                    .into_iter()
+                    .map(|e| KvEntry {
+                        key: e.key,
+                        value: Zeroizing::new(e.value).as_str().into(),
+                        concealed: e.concealed,
+                    })
+                    .collect(),
+            ),
+        },
+        ItemEdit::SetFieldCodes { field_id, codes } => Edit::SetFieldData {
+            field_id: parse_id(&field_id)?,
+            data: FieldData::Codes(
+                codes
+                    .into_iter()
+                    .map(|c| CodeEntry {
+                        code: Zeroizing::new(c.code).as_str().into(),
+                        used: c.used,
+                    })
+                    .collect(),
+            ),
         },
         ItemEdit::RemoveField { field_id } => Edit::RemoveField(parse_id(&field_id)?),
+        ItemEdit::MoveField {
+            field_id,
+            section_id,
+            before_field_id,
+        } => Edit::MoveField {
+            field_id: parse_id(&field_id)?,
+            section: section_id.as_deref().map(parse_id).transpose()?,
+            before: before_field_id.as_deref().map(parse_id).transpose()?,
+        },
+        ItemEdit::AddSection { section_id, label } => Edit::AddSection {
+            section_id: parse_id(&section_id)?,
+            label,
+        },
+        ItemEdit::RenameSection { section_id, label } => Edit::RenameSection {
+            section_id: parse_id(&section_id)?,
+            label,
+        },
+        ItemEdit::RemoveSection { section_id } => Edit::RemoveSection(parse_id(&section_id)?),
     })
 }
 
 /// 文档中的字段，按排序键排列。
-fn doc_fields(doc: &ItemDoc, secrets: &SecretRegistry) -> Vec<FieldEntry> {
-    let mut fields: Vec<(String, FieldEntry)> = doc
+/// 分区，按（排序键，ID）排列。
+fn ordered_sections(doc: &ItemDoc) -> Vec<(Id128, String)> {
+    let mut out: Vec<(String, Id128, String)> = doc
         .records
         .iter()
         .filter_map(|(k, v)| match (k, &v.value) {
-            (RecordKey::Field(id), Some(RecordValue::Field(f))) => Some((
-                f.order.clone(),
-                FieldEntry {
-                    id: id.to_hex(),
-                    label: f.label.clone(),
-                    kind: field_kind_name(f.kind).to_owned(),
-                    concealed: f.kind.is_concealed(),
-                    value: secrets.issue(field_text(&f.data)),
-                    purpose: f.purpose.map(|p| purpose_name(p).to_owned()),
-                },
-            )),
+            (RecordKey::Section(id), Some(RecordValue::Section(s))) => {
+                Some((s.order.clone(), *id, s.label.clone()))
+            }
             _ => None,
         })
         .collect();
-    fields.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.id.cmp(&b.1.id)));
+    out.sort();
+    out.into_iter().map(|(_, id, label)| (id, label)).collect()
+}
+
+fn doc_sections(doc: &ItemDoc) -> Vec<SectionEntry> {
+    ordered_sections(doc)
+        .into_iter()
+        .map(|(id, label)| SectionEntry {
+            id: id.to_hex(),
+            label,
+        })
+        .collect()
+}
+
+/// 文档中的字段：默认分区在前，然后按分区的顺序，分区内按（排序键，ID）排列。
+fn doc_fields(doc: &ItemDoc, secrets: &SecretRegistry) -> Vec<FieldEntry> {
+    let sections = ordered_sections(doc);
+    let rank = |s: Option<Id128>| -> (usize, Option<Id128>) {
+        match s.and_then(|s| sections.iter().position(|(id, _)| *id == s)) {
+            Some(i) => (i.saturating_add(1), s),
+            None => (0, None),
+        }
+    };
+    let mut fields: Vec<((usize, String, Id128), FieldEntry)> = doc
+        .records
+        .iter()
+        .filter_map(|(k, v)| match (k, &v.value) {
+            (RecordKey::Field(id), Some(RecordValue::Field(f))) => {
+                let (r, section) = rank(f.section);
+                let (kv, codes) = match &f.data {
+                    FieldData::Kv(entries) => (
+                        entries
+                            .iter()
+                            .map(|e| KvItem {
+                                key: e.key.clone(),
+                                value: secrets.issue(Zeroizing::new(e.value.expose().to_owned())),
+                                concealed: e.concealed,
+                            })
+                            .collect(),
+                        Vec::new(),
+                    ),
+                    FieldData::Codes(list) => (
+                        Vec::new(),
+                        list.iter()
+                            .map(|c| CodeItem {
+                                code: secrets.issue(Zeroizing::new(c.code.expose().to_owned())),
+                                used: c.used,
+                            })
+                            .collect(),
+                    ),
+                    FieldData::Text(_) => (Vec::new(), Vec::new()),
+                };
+                Some((
+                    (r, f.order.clone(), *id),
+                    FieldEntry {
+                        id: id.to_hex(),
+                        label: f.label.clone(),
+                        kind: field_kind_name(f.kind).to_owned(),
+                        concealed: f.kind.is_concealed(),
+                        value: secrets.issue(field_text(&f.data)),
+                        purpose: f.purpose.map(|p| purpose_name(p).to_owned()),
+                        section_id: section.map(|s| s.to_hex()),
+                        kv,
+                        codes,
+                    },
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    fields.sort_by(|a, b| a.0.cmp(&b.0));
     fields.into_iter().map(|(_, f)| f).collect()
 }
 
@@ -1520,3 +1818,20 @@ fn purpose_from(name: &str) -> Option<Purpose> {
 
 #[cfg(test)]
 mod tests;
+
+const ALL_ITEM_TYPES: [ItemType; 8] = [
+    ItemType::Login,
+    ItemType::EmailAccount,
+    ItemType::SecureNote,
+    ItemType::SshKey,
+    ItemType::ApiCredential,
+    ItemType::Database,
+    ItemType::Environment,
+    ItemType::TwoFactor,
+];
+
+fn item_type_from(name: &str) -> Option<ItemType> {
+    ALL_ITEM_TYPES
+        .into_iter()
+        .find(|t| item_type_name(*t) == name)
+}

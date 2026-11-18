@@ -662,3 +662,267 @@ fn otp_code_of_field() {
         Some(CoreError::NotFound)
     );
 }
+
+/// 字段系统：按模板新建（分区与字段）、改名与用途、放进分区、移动、删除分区；排序键放不下时自动重新编号。
+#[test]
+fn field_system() {
+    use crate::templates::{Preset, template};
+
+    let (mut vault, _) =
+        Vault::create_with_store(Store::open_in_memory().unwrap(), "pw", fast_params()).unwrap();
+    let vault_id = vault.vaults().unwrap()[0].id;
+    let id = vault
+        .create_item_from_template(
+            vault_id,
+            "工作邮箱",
+            template(ItemType::EmailAccount, Preset::Default),
+        )
+        .unwrap();
+
+    // 读出：(分区名, [字段名…])，分区与字段都按排序键排列
+    let layout = |vault: &Vault| -> Vec<(String, Vec<String>)> {
+        let doc = vault.item(id).unwrap().doc;
+        let mut sections: Vec<(String, Id128, String)> = doc
+            .records
+            .iter()
+            .filter_map(|(k, v)| match (k, &v.value) {
+                (RecordKey::Section(sid), Some(RecordValue::Section(s))) => {
+                    Some((s.order.clone(), *sid, s.label.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        sections.sort();
+        let mut fields: Vec<(String, Id128, Option<Id128>, String)> = doc
+            .records
+            .iter()
+            .filter_map(|(k, v)| match (k, &v.value) {
+                (RecordKey::Field(fid), Some(RecordValue::Field(f))) => {
+                    Some((f.order.clone(), *fid, f.section, f.label.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        fields.sort();
+        let names = |s: Option<Id128>| {
+            fields
+                .iter()
+                .filter(|f| f.2 == s)
+                .map(|f| f.3.clone())
+                .collect::<Vec<_>>()
+        };
+        let mut out = vec![(String::new(), names(None))];
+        out.extend(
+            sections
+                .iter()
+                .map(|(_, sid, label)| (label.clone(), names(Some(*sid)))),
+        );
+        out
+    };
+    let field_id = |vault: &Vault, label: &str| {
+        vault
+            .item(id)
+            .unwrap()
+            .doc
+            .records
+            .iter()
+            .find_map(|(k, v)| match (k, &v.value) {
+                (RecordKey::Field(fid), Some(RecordValue::Field(f))) if f.label == label => {
+                    Some(*fid)
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let section_id = |vault: &Vault, label: &str| {
+        vault
+            .item(id)
+            .unwrap()
+            .doc
+            .records
+            .iter()
+            .find_map(|(k, v)| match (k, &v.value) {
+                (RecordKey::Section(sid), Some(RecordValue::Section(s))) if s.label == label => {
+                    Some(*sid)
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let l = layout(&vault);
+    assert_eq!(l[0].1, ["邮箱地址", "密码", "提供商"]);
+    assert_eq!(l[1].0, "服务器");
+    assert_eq!(
+        l[1].1,
+        [
+            "IMAP 服务器",
+            "IMAP 端口",
+            "SMTP 服务器",
+            "SMTP 端口",
+            "加密方式"
+        ]
+    );
+    assert_eq!(
+        l[2],
+        (
+            "恢复".to_owned(),
+            vec![
+                "恢复邮箱".to_owned(),
+                "恢复手机".to_owned(),
+                "恢复码".to_owned()
+            ]
+        )
+    );
+
+    // 改名、用途、移动到同一分区的某个字段之前、移动到另一个分区的末尾
+    let server = section_id(&vault, "服务器");
+    let smtp = field_id(&vault, "SMTP 服务器");
+    let imap = field_id(&vault, "IMAP 服务器");
+    let provider = field_id(&vault, "提供商");
+    vault
+        .update_item(
+            id,
+            vec![
+                Edit::SetFieldLabel {
+                    field_id: smtp,
+                    label: "发信服务器".into(),
+                },
+                Edit::SetFieldPurpose {
+                    field_id: provider,
+                    purpose: Some(Purpose::Notes),
+                },
+                Edit::MoveField {
+                    field_id: smtp,
+                    section: Some(server),
+                    before: Some(imap),
+                },
+                Edit::MoveField {
+                    field_id: provider,
+                    section: Some(server),
+                    before: None,
+                },
+            ],
+        )
+        .unwrap();
+    let l = layout(&vault);
+    assert_eq!(l[0].1, ["邮箱地址", "密码"]);
+    assert_eq!(
+        l[1].1,
+        [
+            "发信服务器",
+            "IMAP 服务器",
+            "IMAP 端口",
+            "SMTP 端口",
+            "加密方式",
+            "提供商"
+        ]
+    );
+
+    // 新增分区并在同一次写入中放进字段；删除分区时字段移到默认分区末尾
+    let notes = Id128::random().unwrap();
+    vault
+        .update_item(
+            id,
+            vec![
+                Edit::AddSection {
+                    section_id: notes,
+                    label: "备注".into(),
+                },
+                Edit::AddFieldToSection {
+                    section: Some(notes),
+                    field: NewField {
+                        kind: FieldKind::Multiline,
+                        label: "说明".into(),
+                        purpose: None,
+                        data: FieldData::Text("x".into()),
+                    },
+                },
+                Edit::RenameSection {
+                    section_id: section_id(&vault, "恢复"),
+                    label: "账户恢复".into(),
+                },
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        layout(&vault).last().unwrap(),
+        &("备注".to_owned(), vec!["说明".to_owned()])
+    );
+    assert_eq!(layout(&vault)[2].0, "账户恢复");
+    vault
+        .update_item(id, vec![Edit::RemoveSection(server)])
+        .unwrap();
+    let l = layout(&vault);
+    assert_eq!(
+        l[0].1,
+        [
+            "邮箱地址",
+            "密码",
+            "发信服务器",
+            "IMAP 服务器",
+            "IMAP 端口",
+            "SMTP 端口",
+            "加密方式",
+            "提供商"
+        ]
+    );
+    assert_eq!(l.len(), 3, "分区已删除");
+
+    // 不合法的移动
+    let pass = field_id(&vault, "密码");
+    let explain = field_id(&vault, "说明");
+    for bad in [
+        Edit::MoveField {
+            field_id: pass,
+            section: None,
+            before: Some(pass),
+        },
+        Edit::MoveField {
+            field_id: pass,
+            section: None,
+            before: Some(explain),
+        },
+        Edit::MoveField {
+            field_id: pass,
+            section: Some(server),
+            before: None,
+        },
+        Edit::AddSection {
+            section_id: notes,
+            label: "重复".into(),
+        },
+    ] {
+        assert!(vault.update_item(id, vec![bad.clone()]).is_err(), "{bad:?}");
+    }
+
+    // 放不下新键时（第一个字段的键是 "0"），先重新编号这个分区
+    let first = field_id(&vault, "邮箱地址");
+    let (doc, head) = {
+        let view = vault.item(id).unwrap();
+        (view.doc, vault.store.heads(&id).unwrap()[0].clone())
+    };
+    let mut doc = doc;
+    let hlc = vault.tick().unwrap();
+    let rev = Id128::random().unwrap();
+    let Some(RecordValue::Field(mut f)) = doc.get(&RecordKey::Field(first)).cloned() else {
+        panic!()
+    };
+    f.order = "0".into();
+    doc.set(RecordKey::Field(first), RecordValue::Field(f), hlc, rev)
+        .unwrap();
+    let ik = vault.item_key(vault.session().unwrap(), &head).unwrap();
+    vault
+        .write_item_revision(vault_id, id, rev, vec![head.rev_id], &ik, Some(&doc))
+        .unwrap();
+    vault
+        .update_item(
+            id,
+            vec![Edit::MoveField {
+                field_id: pass,
+                section: None,
+                before: Some(first),
+            }],
+        )
+        .unwrap();
+    assert_eq!(&layout(&vault)[0].1[..2], ["密码", "邮箱地址"]);
+}

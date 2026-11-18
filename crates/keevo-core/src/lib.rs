@@ -8,6 +8,7 @@ pub mod generator;
 pub mod local;
 pub mod otp;
 pub mod search;
+pub mod templates;
 pub mod url_match;
 mod vault;
 
@@ -23,7 +24,7 @@ pub use vault::{
 
 pub use keevo_crypto::{AccountSecretKey, Id128, KdfParams, LocalPurpose, OtpAlgorithm};
 pub use keevo_format::{
-    Conflict, FieldData, FieldKind, FieldValue, ItemDoc, ItemOverview, ItemType, KvEntry, Purpose,
-    RecordKey, RecordValue, RecordVersion, SecretString,
+    CodeEntry, Conflict, FieldData, FieldKind, FieldValue, ItemDoc, ItemOverview, ItemType,
+    KvEntry, Purpose, RecordKey, RecordValue, RecordVersion, SecretString,
 };
 pub use keevo_store::Store;

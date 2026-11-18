@@ -44,6 +44,8 @@ pub enum CoreError {
     AuthenticationFailed,
     /// 设置值超出允许的范围。
     OutOfRange,
+    /// 要新建的对象已经存在（例如分区 ID 重复）。
+    AlreadyExists,
     /// 一次性密码的配置不合法（不是 `otpauth://totp/` URI 或 Base32 密钥，或参数超出范围）。
     InvalidOtp,
     /// 本机密钥文件读写失败。
@@ -75,6 +77,7 @@ impl fmt::Display for CoreError {
             Self::AuthenticationFailed => f.write_str("touch id authentication failed"),
             Self::OutOfRange => f.write_str("value out of range"),
             Self::InvalidOtp => f.write_str("invalid one-time password configuration"),
+            Self::AlreadyExists => f.write_str("already exists"),
             Self::Io(kind) => write!(f, "io: {kind}"),
             Self::Crypto(e) => write!(f, "crypto: {e}"),
             Self::Format(e) => write!(f, "format: {e}"),
