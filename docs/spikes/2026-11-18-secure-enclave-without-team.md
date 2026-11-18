@@ -48,11 +48,22 @@
 
 用真实的 Secure Enclave 跑冒烟测试（`scripts/build-macos.sh --smoke`）：账户密钥与设备标记的 blob 被改动后，Keevo 分别按"要求账户密钥"与"重新登记本机"处理，没有误判为暂时不可用。
 
-**仍需验证**（与 Touch ID 一起，在登记了指纹的 Mac 上进行）：
+**Touch ID 实测**（2026-11-18，同一台 Mac 登记指纹之后，用户在场，`keevo-smoke --touch-id`，8 项全部通过）：
+
+| 步骤 | 原始错误 | Keevo 的处理 |
+|---|---|---|
+| 已登记的手指 | — | 解锁成功 |
+| 点"取消" | LocalAuthentication `-2`（`userCancel`） | 取消：什么都不改变，Touch ID 仍可用 |
+| 未登记的手指按到提示消失 | LocalAuthentication `-1`（`authenticationFailed`） | 未通过：计入连续失败次数，Touch ID 不失效 |
+| 再用已登记的手指 | — | 解锁成功，失败次数清零 |
+
+启用 Touch ID 时不弹出提示（新一代中的 AUK 包裹在首次使用时验证），与 §8.7 一致。
+
+**仍需验证**：
 
 | 项目 | 风险 | 当前处理 |
 |---|---|---|
 | 锁屏期间使用 `WhenUnlockedThisDeviceOnly` 的密钥报什么错 | 如果也是 CryptoTokenKit `-3`，锁屏时打开数据库会被误判为设备标记失效，进而换掉设备 ID（可用应急包恢复） | 打开数据库发生在登录之后、应用启动时，锁屏期间通常不会发生。验证后按实际错误码细分 |
-| 指纹变化后使用 `biometryCurrentSet` 密钥报什么错 | 如果报 `authenticationFailed`，会被当作"取消"，Touch ID 一直提示却不会进入"失效后恢复" | 用途 0x01 中无法确定的错误按失效处理；`authenticationFailed` 目前按取消处理，验证后调整 |
-| Touch ID 提示中的原因文字 | — | 使用 `LAContext.localizedReason` |
+| 指纹变化后使用 `biometryCurrentSet` 密钥报什么错 | 如果也报 `authenticationFailed`（`-1`），会被当作"未通过"：连续 3 次后要求主密码，但不会进入"失效后恢复"，主密码解锁后 Touch ID 仍然用不了 | 用途 0x01 中无法确定的错误按失效处理。用 `keevo-smoke --touch-id-change` 验证 |
+| Touch ID 提示中的原因文字 | — | 已确认：`LAContext.localizedReason` 显示在系统提示中（实测的每一步说明都由它显示） |
 
