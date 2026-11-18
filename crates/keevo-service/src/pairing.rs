@@ -111,12 +111,17 @@ impl PairingStore for FilePairingStore {
             .cloned()
     }
 
-    fn save(&mut self, record: PairingRecord) {
-        self.records
-            .retain(|r| r.extension_public != record.extension_public);
-        self.records.push(record);
-        // 写入失败时记录仍在内存中，本次运行内可用；重启后需要重新配对（失败方向是安全的）
-        let _ = self.persist();
+    fn save(&mut self, record: PairingRecord) -> std::io::Result<()> {
+        let mut next = self.records.clone();
+        next.retain(|r| r.extension_public != record.extension_public);
+        next.push(record);
+        // 先写盘、成功后才更新内存：写盘失败时配对按拒绝处理，不会出现"扩展以为已配对、重启后却没有"
+        let previous = std::mem::replace(&mut self.records, next);
+        if let Err(e) = self.persist() {
+            self.records = previous;
+            return Err(e);
+        }
+        Ok(())
     }
 
     fn revoke(&mut self, extension_public: &[u8; 32]) -> std::io::Result<()> {

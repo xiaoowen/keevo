@@ -6,6 +6,10 @@ use keevo_crypto::Id128;
 
 use crate::error::{FormatError, Result};
 
+/// 修订图接受的父修订数上限。墓碑修订的父修订可能多于普通修订（`spec/revisions.md` §7.1），
+/// 这里取两者中较大的；存储层按修订种类执行更细的上限。
+pub const MAX_GRAPH_PARENTS: usize = 65_536;
+
 #[derive(Debug, Clone)]
 struct Node {
     parents: Vec<Id128>,
@@ -42,6 +46,9 @@ impl RevisionGraph {
     ) -> Result<()> {
         parents.sort_unstable();
         parents.dedup();
+        if parents.len() > MAX_GRAPH_PARENTS {
+            return Err(FormatError::TooManyParents);
+        }
         match self.nodes.get(&rev) {
             Some(n) if n.parents == parents && n.origin == origin_device => Ok(()),
             Some(_) => Err(FormatError::RevisionConflict),

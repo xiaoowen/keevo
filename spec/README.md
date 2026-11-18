@@ -6,10 +6,10 @@
 
 | 规范 | 版本 | 状态 | 测试向量 |
 |---|---|---|---|
-| [crypto.md](crypto.md)：账户密钥、KDF、2SKD、密钥集、加密信封 | 0.3 | 草案，已处理两轮模型评审 | [test-vectors/crypto-v1.json](test-vectors/crypto-v1.json) |
-| [revisions.md](revisions.md)：修订图、记录、HLC、合并 | 0.3 | 草案，已处理两轮模型评审 | JSON 向量计划中；参考实现带多设备随机模拟测试 |
-| [vault-format.md](vault-format.md)：条目与保险库的明文结构 | 0.3 | 草案，已处理两轮模型评审 | 计划中（M1.1） |
-| [ipc.md](ipc.md)：桌面应用与扩展、CLI 的本地通信 | 0.3 | 草案，已处理两轮模型评审 | 计划中（扩展侧实现落地后提供跨实现向量） |
+| [crypto.md](crypto.md)：账户密钥、KDF、2SKD、密钥集、加密信封 | 0.4 | 草案，已处理三轮模型评审 | [test-vectors/crypto-v1.json](test-vectors/crypto-v1.json) |
+| [revisions.md](revisions.md)：修订图、记录、HLC、合并 | 0.4 | 草案，已处理三轮模型评审 | JSON 向量计划中；参考实现带多设备随机模拟测试 |
+| [vault-format.md](vault-format.md)：条目与保险库的明文结构 | 0.4 | 草案，已处理三轮模型评审 | 计划中（M1.1） |
+| [ipc.md](ipc.md)：桌面应用与扩展、CLI 的本地通信 | 0.4 | 草案，已处理三轮模型评审 | 计划中（扩展侧实现落地后提供跨实现向量） |
 
 ## 规则
 

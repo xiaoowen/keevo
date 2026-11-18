@@ -29,6 +29,12 @@ pub enum RecordKey {
 }
 
 impl RecordKey {
+    /// 是否为保留键 `attr:purged`：只由合并（墓碑头）与确定恢复产生，客户端不得直接写入。
+    #[must_use]
+    pub fn is_reserved(&self) -> bool {
+        matches!(self, Self::Attr(n) if n == "purged")
+    }
+
     /// 是否为删除状态键：`attr:trashed`（回收站）或 `attr:purged`（永久删除，合并时由墓碑头产生）。
     #[must_use]
     pub fn is_deletion_state(&self) -> bool {
@@ -267,6 +273,10 @@ pub(crate) fn validate_concurrent(records: &RecordMap, concurrent: &ConcurrentMa
     Ok(())
 }
 
+/// 每个条目最多的记录键数（含墓碑与并发版本的键，`spec/revisions.md` §7.1）。
+/// 键名长度也有上限，因此"删除全部键"之后的墓碑总能放进一个信封。
+pub const MAX_KEYS: usize = 4096;
+
 /// 单个记录值编码后的上限：256 KiB。更大的内容应作为附件（`spec/vault-format.md` §2）。
 pub const MAX_VALUE_LEN: usize = 256 * 1024;
 /// 整数值的范围：±(2⁵³−1)，保证在 JavaScript 等环境中无损，规范编码也唯一。
@@ -324,4 +334,24 @@ where
         }
     }
     d.deserialize_map(Visitor(core::marker::PhantomData))
+}
+
+/// 校验保留键 `attr:purged` 的形态（`spec/vault-format.md` §2.1）：当前版本只能是墓碑（已确定的恢复）；
+/// 并发版本只能是墓碑，或墓碑头产生的删除版本（`hlc = 0`，值为 `true`）。
+pub(crate) fn validate_reserved(records: &RecordMap, concurrent: &ConcurrentMap) -> Result<()> {
+    let key = RecordKey::attr("purged");
+    if records.get(&key).is_some_and(|v| !v.is_tombstone()) {
+        return Err(FormatError::ReservedKey);
+    }
+    let purge_ok = |v: &RecordVersion| {
+        v.is_tombstone()
+            || (v.hlc == crate::hlc::Hlc(0) && v.value == Some(RecordValue::Bool(true)))
+    };
+    if concurrent
+        .get(&key)
+        .is_some_and(|vs| !vs.iter().all(purge_ok))
+    {
+        return Err(FormatError::ReservedKey);
+    }
+    Ok(())
 }

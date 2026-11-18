@@ -52,6 +52,7 @@ const ERRORS: Record<string, string> = {
   not_paired: "Keevo 不认识这个浏览器了，请重新配对。",
   pairing_rejected: "配对已被拒绝或超时。",
   pairing_limited: "Keevo 正在处理另一个配对，或配对尝试过于频繁，请稍后再试。",
+  locked: "Keevo 已锁定。请先在 Keevo 中解锁，再配对或填充。",
   bad_request: "通信出错，请重试。",
   protocol: "通信出错，请重试。",
 };

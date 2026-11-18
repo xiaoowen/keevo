@@ -21,6 +21,9 @@ pub enum CoreError {
     /// 条目合并后超过单个信封的上限，无法保存（`spec/revisions.md` §7.1）。读取与导出不受影响；
     /// 需要先用 [`crate::Vault::compact_item`] 精简。
     ItemTooLarge,
+    /// 条目超出了精简也无法回到的上限（头超过 4096 个，或记录键超过 4096 个，`spec/revisions.md` §7.1）。
+    /// 条目只读；可以导出，或用 [`crate::Vault::rebuild_item`] 重建为新条目。
+    ItemNeedsRebuild,
     /// 数据库中还没有账户。
     NoAccount,
     /// 数据库中已经有账户。
@@ -44,6 +47,7 @@ impl fmt::Display for CoreError {
             Self::WrongCredentials => f.write_str("wrong master password or secret key"),
             Self::KdfNeedsConfirmation => f.write_str("kdf parameters exceed the automatic budget"),
             Self::ItemTooLarge => f.write_str("item is too large to save"),
+            Self::ItemNeedsRebuild => f.write_str("item must be rebuilt"),
             Self::NoAccount => f.write_str("no account"),
             Self::AccountExists => f.write_str("account already exists"),
             Self::NotFound => f.write_str("not found"),

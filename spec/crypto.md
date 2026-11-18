@@ -1,7 +1,7 @@
 # Keevo 加密规范
 
-- **版本**：0.3（草案）
-- **状态**：已按 2026-11-18 两轮模型评审修订（[第一轮处理记录](../docs/reviews/2026-11-18-model-review-response.md)、[第二轮处理记录](../docs/reviews/2026-11-18-model-review-round2-response.md)）。评审通过前，格式可能有不兼容的变更。
+- **版本**：0.4（草案）
+- **状态**：已按 2026-11-18 三轮模型评审修订（[第一轮](../docs/reviews/2026-11-18-model-review-response.md)、[第二轮](../docs/reviews/2026-11-18-model-review-round2-response.md)、[第三轮](../docs/reviews/2026-11-18-model-review-round3-response.md)处理记录）。§8.6 本机密钥包裹单独保持草案，M1.1 定稿。评审通过前，格式可能有不兼容的变更。
 - **参考实现**：`crates/keevo-crypto`（Rust）
 - **独立实现**：`spec/reference/generate_vectors.py`（Python，基于 argon2-cffi 与 libsodium），用来生成测试向量。
 - **测试向量**：`spec/test-vectors/crypto-v1.json`
@@ -293,25 +293,29 @@ open(key, ctx, envelope):
 
 - `MAX_ENVELOPE_LEN = 42 + padded_len(4 + 16 MiB) + 16 = 17301562` 字节，即明文上限对应的最长合法信封。长度检查必须在复制或认证密文**之前**完成，防止未认证的输入触发大块内存分配（评审 2026-11-18 F3）。
 - 读取入口也要在读入内存**之前**检查长度（第二轮评审 G4）：
-  - **数据库**：按单列检查，信封列不超过 `MAX_ENVELOPE_LEN`，ID 恰好 16 字节，KDF 参数恰好 29 字节，父修订列表不超过 256 × 16 字节。检查必须用不读取内容的方式完成（SQLite 中在 WHERE 子句里计算 `length()`）：一旦把内容列放进 SELECT，取出这一行时整个 BLOB 就已读进内存。整个数据库当然可以超过一个信封。
+  - **数据库**：按单列检查，信封列不超过 `MAX_ENVELOPE_LEN`，ID 恰好 16 字节，KDF 参数恰好 29 字节，父修订列表不超过上限（`revisions.md` §7.1），元数据值不超过 4096 字节。整个数据库当然可以超过一个信封。
+  - **保证条件**：长度检查必须在读入内容之前、并且与读取**在同一个快照中**完成（第三轮评审 H3）。否则另一个连接可以在检查与读取之间换掉内容。参考实现把两条语句放在同一个读事务里；检查语句只在 WHERE 子句中计算 `length()`，不读取 BLOB 内容。
   - **同步文件夹**：按单个文件检查，上限由同步格式定义（M2）。
 - 错误信息中不得包含任何密钥或明文内容。
 - 上层应把 `key_id_mismatch` 与 `decryption_failed` 视为同一类安全事件：可能是密码错误，也可能是数据被篡改。
 
-### 8.6 本机密钥包裹（不参与同步）
+### 8.6 本机密钥包裹（不参与同步；单独保持草案，M1.1 定稿）
 
 Keevo 不绑定开发者团队，用不了数据保护钥匙串（ADR-0003）。只存在本机的密钥材料改由 Secure Enclave 密钥包裹后存成文件。这一格式只在本机使用，不进入同步数据，版本与迁移由本机负责。
 
+本节不随共享格式（信封、条目、修订）一起冻结，在 M1.1 实现与验证 Touch ID 时定稿（第三轮评审 §4.3）。
+
 **用途**：
 
-| `purpose` | 材料 | Secure Enclave 密钥的访问控制 |
-|---|---|---|
-| 0x01 | AUK（Touch ID 解锁） | `privateKeyUsage` + `biometryCurrentSet` |
-| 0x02 | 账户密钥（Secret Key） | `privateKeyUsage` |
-| 0x03 | Vault Service 的 Noise 静态私钥 | `privateKeyUsage` |
-| 0x04 | 设备标记（revisions.md §8） | `privateKeyUsage` |
+| `purpose` | 材料 | 明文布局 | Secure Enclave 密钥的访问控制 |
+|---|---|---|---|
+| 0x01 | AUK（Touch ID 解锁） | AUK 原始字节（32）；kid 可由 AUK 重新派生，不存 | `privateKeyUsage` + `biometryCurrentSet` |
+| 0x02 | 账户密钥（Secret Key） | 128 位原始值（16），不是显示编码 | `privateKeyUsage` |
+| 0x03 | Vault Service 的 Noise 静态私钥 | X25519 私钥（32） | `privateKeyUsage` |
+| 0x04 | 设备标记（revisions.md §8） | `device_id`（16） | `privateKeyUsage` |
 
-每个用途使用各自的 Secure Enclave P-256 密钥，blob 存在同一目录下。
+- 每个用途使用各自的 Secure Enclave P-256 密钥，blob 存在同一目录下；所有 Secure Enclave 密钥的可访问性均为 `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`，锁屏时不可用。
+- 明文长度按上表固定，长度不符即视为损坏。包裹文件总长度不超过 1 + 1 + 65 + 12 + 32 + 16 = 127 字节，读入前先检查。
 
 **格式**：
 
@@ -323,8 +327,20 @@ aad     = "keevo/v1/local-wrap" ‖ version ‖ purpose ‖ account_id (16) ‖ 
 ciphertext ‖ tag = AES-256-GCM(key, nonce, plaintext, aad)
 ```
 
-- 每次包裹都生成新的临时密钥与 `nonce`；明文长度按用途固定，长度不符即视为损坏。
-- 解包失败（blob 无法使用、认证失败、版本或用途不符）一律视为材料不存在，退回主密码与账户密钥，不尝试修复。
+- `shared` 是 P-256 ECDH 结果的 x 坐标，32 字节大端定长，保留前导零（CryptoKit `SharedSecret` 的原始表示），不再经过其他派生。
+- `eph_pub` 必须是曲线上的有效点，否则视为损坏。
+- 每次包裹都生成新的临时密钥与 `nonce`。
+- **失败与恢复**：解包失败（blob 无法使用、认证失败、版本或用途不符、长度不符）时停止使用这份材料，不尝试修复。各用途的恢复不同：
+
+  | 用途 | 恢复 |
+  |---|---|
+  | AUK | 用主密码与账户密钥解锁，再重新包裹 |
+  | 账户密钥 | 用户从应急包输入账户密钥 |
+  | Noise 静态私钥 | 生成新的服务身份；已配对的扩展需要重新配对，界面说明原因 |
+  | 设备标记 | 生成新的 `device_id`（revisions.md §8） |
+
+- **用户取消不是失败**：用户取消 Touch ID 或认证超时时，什么都不改变，下次照常尝试；不能因此判定材料失效、改变身份或覆盖文件。
+- **`device_id` 变化时**：其他包裹的 AAD 绑定旧 `device_id`，必须重新包裹。顺序是：解锁后取得全部材料的明文 → 用新 `device_id` 写出全部新包裹（写临时文件、`fsync`、改名替换） → 最后写设备标记。中途失败时旧文件保持原样，下次启动重新执行。
 
 **保护范围**（第二轮评审 §4.2，已实测）：
 - **提供**：Secure Enclave 私钥不以原始形式离开芯片；把 blob 与包裹文件复制到另一台 Mac 无法解开，因此不随备份迁移出可用的密钥。
@@ -384,3 +400,4 @@ ciphertext ‖ tag = AES-256-GCM(key, nonce, plaintext, aad)
 | 0.1 | 2026-11-17 | 首个草案 |
 | 0.2 | 2026-11-18 | 按模型评审修订：新增 §5.3 本机自动执行预算与 `kdf_needs_confirmation`（F3）；§8.5 增加信封长度上限，并要求在复制密文前检查（F3）；§7.2 说明绑定值不提供新鲜度（C2）；§10 记录 Noise 依赖未清零的缺口。字节格式与测试向量不变 |
 | 0.3 | 2026-11-18 | 按第二轮模型评审修订：§5.3 的确认绑定到具体参数、KDF 进程级串行、预算待按设备校准；§8.5 的读取入口改为在读入前按单列检查长度（G4）；新增 §8.6 本机密钥包裹格式及其保护范围。字节格式与测试向量不变 |
+| 0.4 | 2026-11-18 | 按第三轮模型评审修订：§8.5 写明长度检查须与读取在同一快照（H3）；§8.6 明确单独保持草案，补充各用途的明文布局、ECDH 输出与公钥检查、总长度上限、可访问性、失败与恢复、用户取消、`device_id` 变化时的重新包裹顺序。字节格式与测试向量不变 |

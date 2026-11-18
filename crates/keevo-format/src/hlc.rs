@@ -60,7 +60,8 @@ pub struct HlcClock {
 }
 
 impl HlcClock {
-    /// 从持久化的值恢复。调用方应传入 max(持久化的值, 本地所有记录的最大 hlc)。
+    /// 从持久化的值恢复。调用方应传入 max(持久化的值, 本地修订中物理时间不超过本机时钟 + 24 小时的最大 hlc)
+    /// （`spec/revisions.md` §3）：不得重新引入 [`HlcClock::observe`] 拒绝采纳的远端极值。
     #[must_use]
     pub const fn restore(last: Hlc) -> Self {
         Self { last }

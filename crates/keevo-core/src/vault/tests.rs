@@ -224,7 +224,7 @@ fn history_is_pruned_but_graph_is_kept() {
     // 90 天内的修订一律保留
     assert_eq!(kept(&vault), 31);
     // 模拟 90 天之后：只保留最近 20 个
-    vault.store.prune(&id, HISTORY_KEEP, 0, now_ms()).unwrap();
+    vault.store.prune(&id, HISTORY_KEEP, 0).unwrap();
     assert_eq!(kept(&vault), HISTORY_KEEP);
     assert_eq!(vault.item(id).unwrap().doc.overview().title, "t30");
 }
@@ -341,7 +341,7 @@ fn review_f6_concurrent_loser_survives_pruning_until_resolved() {
             .update_item(id, vec![Edit::SetFavorite(i % 2 == 0)])
             .unwrap();
     }
-    vault.store.prune(&id, HISTORY_KEEP, 0, now_ms()).unwrap();
+    vault.store.prune(&id, HISTORY_KEEP, 0).unwrap();
     let written_in = vault.store.revision(&r1.rev_id).unwrap().unwrap();
     assert!(written_in.pruned, "落选版本最初所在的修订已被清理");
     let view = vault.item(id).unwrap();
@@ -420,5 +420,66 @@ fn review2_g5_oversized_merged_item_is_readable_and_can_be_compacted() {
     );
     vault
         .update_item(id, vec![Edit::SetFavorite(true)])
+        .unwrap();
+}
+
+/// 第三轮评审 H2：并发分支各自合法、合并后键数超过上限的条目不能再保存，精简也无济于事；
+/// 重建为新条目后可以继续使用，旧条目被永久删除。
+#[test]
+fn review3_h2_item_beyond_key_limit_must_be_rebuilt() {
+    let (mut vault, _) =
+        Vault::create_with_store(Store::open_in_memory().unwrap(), "pw", fast_params()).unwrap();
+    let vault_id = vault.vaults().unwrap()[0].id;
+    let id = vault
+        .create_item(vault_id, ItemType::Login, "t", vec![])
+        .unwrap();
+    let r0 = vault.store.heads(&id).unwrap()[0].clone();
+    let doc0 = vault.item(id).unwrap().doc;
+    let ik = vault.item_key(vault.session().unwrap(), &r0).unwrap();
+    let per_branch = keevo_format::MAX_KEYS / 2 + 10;
+    for branch in 0..2 {
+        let mut d = doc0.clone();
+        let hlc = vault.tick().unwrap();
+        let rev = Id128::random().unwrap();
+        for i in 0..per_branch {
+            d.set(
+                RecordKey::Tag(format!("b{branch}-{i}")),
+                RecordValue::Tag,
+                hlc,
+                rev,
+            )
+            .unwrap();
+        }
+        vault
+            .write_item_revision(vault_id, id, rev, vec![r0.rev_id], &ik, Some(&d))
+            .unwrap();
+    }
+    let view = vault.item(id).unwrap();
+    assert!(view.doc.key_count() > keevo_format::MAX_KEYS);
+    assert_eq!(
+        vault.update_item(id, vec![Edit::SetFavorite(true)]).err(),
+        Some(CoreError::ItemNeedsRebuild)
+    );
+    assert_eq!(
+        vault
+            .compact_item(id, &[], &[RecordKey::Tag("b0-0".into())])
+            .err(),
+        Some(CoreError::ItemNeedsRebuild),
+        "删除只留下墓碑，键数不减，精简无济于事"
+    );
+    let drop: Vec<RecordKey> = (0..per_branch)
+        .map(|i| RecordKey::Tag(format!("b1-{i}")))
+        .collect();
+    let new_id = vault.rebuild_item(id, &drop).unwrap();
+    assert_eq!(
+        vault.item(id).err(),
+        Some(CoreError::NotFound),
+        "旧条目已永久删除"
+    );
+    let rebuilt = vault.item(new_id).unwrap();
+    assert_eq!(rebuilt.doc.overview().title, "t");
+    assert_eq!(rebuilt.doc.overview().tags.len(), per_branch);
+    vault
+        .update_item(new_id, vec![Edit::SetFavorite(true)])
         .unwrap();
 }

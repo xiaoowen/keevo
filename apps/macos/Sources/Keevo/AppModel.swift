@@ -156,6 +156,8 @@ final class AppModel {
             return "这个保险库的解锁参数异常地高，可能被篡改过。为安全起见，Keevo 没有自动解锁。"
         case .ItemTooLarge:
             return "这个条目合并其他设备的内容后过大，无法保存。请先处理冲突或删除部分字段。"
+        case .ItemNeedsRebuild:
+            return "这个条目合并其他设备的内容后超出了上限，只能查看和导出。可以把它重建为一个新条目后继续编辑。"
         default:
             return "操作失败：\(error)"
         }

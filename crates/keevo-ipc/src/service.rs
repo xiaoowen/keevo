@@ -81,8 +81,11 @@ pub struct PairingRecord {
 pub trait PairingStore {
     /// 按扩展的静态公钥查找。
     fn find(&self, extension_public: &[u8; 32]) -> Option<PairingRecord>;
-    /// 保存配对记录。
-    fn save(&mut self, record: PairingRecord);
+    /// 保存配对记录。只有保存成功，才会向扩展发送 `paired`（第三轮评审 §4.4）。
+    ///
+    /// # Errors
+    /// 持久化失败时返回错误，配对按拒绝处理。
+    fn save(&mut self, record: PairingRecord) -> std::io::Result<()>;
     /// 删除配对记录（撤销）。会话层在每个请求前重新核对记录，撤销对已建立的会话立即生效。
     ///
     /// # Errors
@@ -118,10 +121,11 @@ impl PairingStore for MemoryPairingStore {
             .cloned()
     }
 
-    fn save(&mut self, record: PairingRecord) {
+    fn save(&mut self, record: PairingRecord) -> std::io::Result<()> {
         self.records
             .retain(|r| r.extension_public != record.extension_public);
         self.records.push(record);
+        Ok(())
     }
 
     fn revoke(&mut self, extension_public: &[u8; 32]) -> std::io::Result<()> {
@@ -303,7 +307,7 @@ impl ServiceConnection {
         }
         self.release_gate();
         let origin = hello.extension_origin.clone();
-        store.save(PairingRecord {
+        let saved = store.save(PairingRecord {
             extension_public: transport.remote_static(),
             extension_origin: hello.extension_origin,
             browser: hello.browser,
@@ -313,6 +317,9 @@ impl ServiceConnection {
                 .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
                 .unwrap_or(0),
         });
+        if saved.is_err() {
+            return self.fail(ErrorCode::PairingRejected);
+        }
         match encrypt(
             &mut transport,
             &ServerMessage::Event {
@@ -372,6 +379,10 @@ impl ServiceConnection {
             }
             State::AwaitFirst { hello } => match parse(frame)? {
                 ControlFrame::Pair { d } => {
+                    // 配对只在解锁时进行：确认需要原生界面，记录要写入加密数据库（§4.2 第 6 步）
+                    if backend.is_locked() {
+                        return Err(ErrorCode::Locked);
+                    }
                     // 时限从收到第 1 条消息的时刻起算（§4.2）
                     let received = Instant::now();
                     let deadline = received

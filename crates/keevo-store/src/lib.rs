@@ -68,18 +68,20 @@ CREATE TABLE device (
 ) STRICT;
 ";
 
-/// v1 → v2：记录本机写入或收到每个修订时的有效时间，用于"至少保留 90 天"的清理规则
-/// （`spec/revisions.md` §7.2）。迁移前已有的修订年龄未知，按迁移时间记（第二轮评审 G3）。
+/// v1 → v2：记录写入或收到每个修订时的有效时间（Keevo 运行时间），用于"至少保留 90 天"的清理规则
+/// （`spec/revisions.md` §7.2）。迁移前已有的修订年龄未知，记为 0，即与迁移时的有效时间相同。
 const MIGRATE_V2: &str = "ALTER TABLE revision ADD COLUMN stored_ms INTEGER NOT NULL DEFAULT 0;";
 
-/// 每个修订最多的父修订数（`spec/revisions.md` §2）。
-pub const MAX_PARENTS: usize = 256;
+/// 普通修订最多的父修订数（`spec/revisions.md` §7.1）。写时收敛以全部头为父，头更多时条目只能重建。
+pub const MAX_PARENTS: usize = 4096;
+/// 墓碑修订最多的父修订数。墓碑没有内容，允许更多父修订，使"重建"之后旧条目总能被永久删除。
+pub const MAX_TOMBSTONE_PARENTS: usize = 65_536;
 
-/// 有效时间单次最多前进的量：1 天。墙上时钟被调快、长期未使用时，有效时间都只前进这么多，
-/// 因此只会让保留期变长，不会提前清理（`spec/revisions.md` §7.2）。
-pub const MAX_CLOCK_STEP_MS: u64 = 24 * 60 * 60 * 1000;
-const META_CLOCK_EFFECTIVE: &str = "clock.effective_ms";
-const META_CLOCK_WALL: &str = "clock.last_wall_ms";
+/// 单个元数据值的上限。元数据只存时钟、版本等小值。
+pub const MAX_META_LEN: usize = 4096;
+
+/// 有效时间的合理上限（2⁵³ 毫秒，约 28 万年的运行时间）。超出说明数据库被改写，清理暂停。
+pub const MAX_EFFECTIVE_MS: u64 = 1 << 53;
 
 /// 存储层错误。不携带任何明文内容。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,6 +212,8 @@ pub struct RevisionMeta {
 /// 本地数据库。
 pub struct Store {
     conn: Connection,
+    /// 有效时间的基准：(进程启动后首次使用时的有效时间, 当时的单调时钟读数)。
+    clock: Option<(u64, std::time::Instant)>,
 }
 
 impl Store {
@@ -237,7 +241,7 @@ impl Store {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         // 删除的内容用零覆盖（虽然都是密文，仍尽量不留痕迹）
         conn.pragma_update(None, "secure_delete", "ON")?;
-        let mut store = Self { conn };
+        let mut store = Self { conn, clock: None };
         store.migrate()?;
         Ok(store)
     }
@@ -260,15 +264,6 @@ impl Store {
         }
         if version < 2 {
             tx.execute_batch(MIGRATE_V2)?;
-            let now = now_ms();
-            tx.execute("UPDATE revision SET stored_ms = ?1", [now])?;
-            for key in [META_CLOCK_EFFECTIVE, META_CLOCK_WALL] {
-                tx.execute(
-                    "INSERT INTO meta (key, value) VALUES (?1, ?2)
-                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    params![key, now.to_be_bytes().to_vec()],
-                )?;
-            }
         }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
@@ -290,10 +285,21 @@ impl Store {
     /// # Errors
     /// SQLite 错误。
     pub fn meta(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        Ok(self
+        // 同一条语句里先比较长度：超长的值不会被取出（第三轮评审 H3）
+        let row: Option<(Option<Vec<u8>>, i64)> = self
             .conn
-            .query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
-            .optional()?)
+            .query_row(
+                "SELECT CASE WHEN length(value) <= ?2 THEN value END, length(value)
+                 FROM meta WHERE key = ?1",
+                params![key, i64::try_from(MAX_META_LEN).unwrap_or(i64::MAX)],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        match row {
+            None => Ok(None),
+            Some((Some(v), _)) => Ok(Some(v)),
+            Some((None, _)) => Err(StoreError::Corrupt("meta value exceeds its size limit")),
+        }
     }
 
     /// 写入元数据。
@@ -314,8 +320,9 @@ impl Store {
     /// # Errors
     /// SQLite 错误或数据损坏。
     pub fn account(&self) -> Result<Option<AccountRow>> {
+        let tx = self.snapshot()?;
         let env = keevo_crypto::MAX_ENVELOPE_LEN;
-        let oversized: bool = self.conn.query_row(
+        let oversized: bool = tx.query_row(
             &format!(
                 "SELECT EXISTS(SELECT 1 FROM account WHERE length(id) != 16
                    OR length(kdf_params) != {} OR length(keyset_ct) > {env})",
@@ -327,7 +334,7 @@ impl Store {
         if oversized {
             return Err(StoreError::Corrupt("account column exceeds its size limit"));
         }
-        self.conn
+        let row = tx
             .query_row(
                 "SELECT id, format_version, epoch, kdf_params, keyset_ct FROM account",
                 [],
@@ -352,7 +359,9 @@ impl Store {
                     keyset_ct,
                 })
             })
-            .transpose()
+            .transpose();
+        tx.commit()?;
+        row
     }
 
     /// 创建账户。一个数据库只有一个账户。
@@ -391,15 +400,20 @@ impl Store {
     pub fn insert_revision(&mut self, row: &RevisionRow) -> Result<()> {
         // 写入与读取（`check_sizes`）用同一套上限，写进去的东西一定读得出来
         let env = keevo_crypto::MAX_ENVELOPE_LEN;
-        if row.parents.len() > MAX_PARENTS
+        let max_parents = if row.deleted {
+            MAX_TOMBSTONE_PARENTS
+        } else {
+            MAX_PARENTS
+        };
+        if row.parents.len() > max_parents
             || [&row.wrapped_key_ct, &row.overview_ct, &row.details_ct]
                 .iter()
                 .any(|c| c.as_ref().is_some_and(|c| c.len() > env))
         {
             return Err(StoreError::TooLarge);
         }
-        let stored = i64::try_from(self.advance_clock(u64::try_from(now_ms()).unwrap_or(0))?)
-            .map_err(|_| StoreError::Corrupt("clock"))?;
+        let stored =
+            i64::try_from(self.effective_now()?).map_err(|_| StoreError::Corrupt("clock"))?;
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -470,8 +484,9 @@ impl Store {
     /// # Errors
     /// SQLite 错误或数据损坏。
     pub fn revision(&self, rev_id: &Id128) -> Result<Option<RevisionRow>> {
-        self.check_sizes("rev_id = ?1", rev_id)?;
-        self.conn
+        let tx = self.snapshot()?;
+        Self::check_sizes(&tx, "rev_id = ?1", rev_id)?;
+        let row = tx
             .query_row(
                 &format!("SELECT {REVISION_COLUMNS} FROM revision WHERE rev_id = ?1"),
                 [rev_id.as_bytes().as_slice()],
@@ -479,7 +494,9 @@ impl Store {
             )
             .optional()?
             .map(RawRevision::into_row)
-            .transpose()
+            .transpose();
+        tx.commit()?;
+        row
     }
 
     /// 对象的全部头修订，按 `rev_id` 排序。
@@ -487,18 +504,24 @@ impl Store {
     /// # Errors
     /// SQLite 错误或数据损坏。
     pub fn heads(&self, object_id: &Id128) -> Result<Vec<RevisionRow>> {
-        self.check_sizes(
+        let tx = self.snapshot()?;
+        Self::check_sizes(
+            &tx,
             "rev_id IN (SELECT rev_id FROM head WHERE object_id = ?1)",
             object_id,
         )?;
-        let mut stmt = self.conn.prepare(&format!(
-            "SELECT {REVISION_COLUMNS} FROM revision
-             WHERE rev_id IN (SELECT rev_id FROM head WHERE object_id = ?1)
-             ORDER BY rev_id"
-        ))?;
-        let rows = stmt.query_map([object_id.as_bytes().as_slice()], raw_revision)?;
-        rows.map(|r| r.map_err(StoreError::from).and_then(RawRevision::into_row))
-            .collect()
+        let rows = {
+            let mut stmt = tx.prepare(&format!(
+                "SELECT {REVISION_COLUMNS} FROM revision
+                 WHERE rev_id IN (SELECT rev_id FROM head WHERE object_id = ?1)
+                 ORDER BY rev_id"
+            ))?;
+            let rows = stmt.query_map([object_id.as_bytes().as_slice()], raw_revision)?;
+            rows.map(|r| r.map_err(StoreError::from).and_then(RawRevision::into_row))
+                .collect()
+        };
+        tx.commit()?;
+        rows
     }
 
     /// 某类型的全部对象 ID，按 ID 排序。
@@ -506,13 +529,26 @@ impl Store {
     /// # Errors
     /// SQLite 错误或数据损坏。
     pub fn objects(&self, kind: ObjectKind) -> Result<Vec<Id128>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT h.object_id FROM head h JOIN revision r ON r.rev_id = h.rev_id
-             WHERE r.object_type = ?1 ORDER BY h.object_id",
+        let tx = self.snapshot()?;
+        let oversized: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM head WHERE length(object_id) != 16 OR length(rev_id) != 16)",
+            [],
+            |r| r.get(0),
         )?;
-        let rows = stmt.query_map([kind.code()], |r| r.get::<_, Vec<u8>>(0))?;
-        rows.map(|r| r.map_err(StoreError::from).and_then(|b| id_from(&b)))
-            .collect()
+        if oversized {
+            return Err(StoreError::Corrupt("head column has the wrong length"));
+        }
+        let rows = {
+            let mut stmt = tx.prepare(
+                "SELECT DISTINCT h.object_id FROM head h JOIN revision r ON r.rev_id = h.rev_id
+                 WHERE r.object_type = ?1 ORDER BY h.object_id",
+            )?;
+            let rows = stmt.query_map([kind.code()], |r| r.get::<_, Vec<u8>>(0))?;
+            rows.map(|r| r.map_err(StoreError::from).and_then(|b| id_from(&b)))
+                .collect()
+        };
+        tx.commit()?;
+        rows
     }
 
     /// 对象的修订图元数据（含已清理内容的修订）。
@@ -520,26 +556,31 @@ impl Store {
     /// # Errors
     /// SQLite 错误或数据损坏。
     pub fn graph(&self, object_id: &Id128) -> Result<Vec<RevisionMeta>> {
-        self.check_sizes("object_id = ?1", object_id)?;
-        let mut stmt = self.conn.prepare(
-            "SELECT rev_id, parents, origin_device FROM revision WHERE object_id = ?1 ORDER BY seq",
-        )?;
-        let rows = stmt.query_map([object_id.as_bytes().as_slice()], |r| {
-            Ok((
-                r.get::<_, Vec<u8>>(0)?,
-                r.get::<_, Vec<u8>>(1)?,
-                r.get::<_, Vec<u8>>(2)?,
-            ))
-        })?;
-        rows.map(|r| {
-            let (rev, parents, origin) = r?;
-            Ok(RevisionMeta {
-                rev_id: id_from(&rev)?,
-                parents: decode_ids(&parents)?,
-                origin_device: id_from(&origin)?,
+        let tx = self.snapshot()?;
+        Self::check_sizes(&tx, "object_id = ?1", object_id)?;
+        let rows = {
+            let mut stmt = tx.prepare(
+                "SELECT rev_id, parents, origin_device FROM revision WHERE object_id = ?1 ORDER BY seq",
+            )?;
+            let rows = stmt.query_map([object_id.as_bytes().as_slice()], |r| {
+                Ok((
+                    r.get::<_, Vec<u8>>(0)?,
+                    r.get::<_, Vec<u8>>(1)?,
+                    r.get::<_, Vec<u8>>(2)?,
+                ))
+            })?;
+            rows.map(|r| {
+                let (rev, parents, origin) = r?;
+                Ok(RevisionMeta {
+                    rev_id: id_from(&rev)?,
+                    parents: decode_ids(&parents)?,
+                    origin_device: id_from(&origin)?,
+                })
             })
-        })
-        .collect()
+            .collect()
+        };
+        tx.commit()?;
+        rows
     }
 
     /// 对象的全部修订（含内容），按本地写入顺序从新到旧排列，用于历史视图。
@@ -547,25 +588,39 @@ impl Store {
     /// # Errors
     /// SQLite 错误或数据损坏。
     pub fn history(&self, object_id: &Id128) -> Result<Vec<RevisionRow>> {
-        self.check_sizes("object_id = ?1", object_id)?;
-        let mut stmt = self.conn.prepare(&format!(
-            "SELECT {REVISION_COLUMNS} FROM revision WHERE object_id = ?1 ORDER BY seq DESC"
-        ))?;
-        let rows = stmt.query_map([object_id.as_bytes().as_slice()], raw_revision)?;
-        rows.map(|r| r.map_err(StoreError::from).and_then(RawRevision::into_row))
-            .collect()
+        let tx = self.snapshot()?;
+        Self::check_sizes(&tx, "object_id = ?1", object_id)?;
+        let rows = {
+            let mut stmt = tx.prepare(&format!(
+                "SELECT {REVISION_COLUMNS} FROM revision WHERE object_id = ?1 ORDER BY seq DESC"
+            ))?;
+            let rows = stmt.query_map([object_id.as_bytes().as_slice()], raw_revision)?;
+            rows.map(|r| r.map_err(StoreError::from).and_then(RawRevision::into_row))
+                .collect()
+        };
+        tx.commit()?;
+        rows
+    }
+
+    /// 开启一个只读快照：长度预检与随后的读取必须看到同一份数据（第三轮评审 H3），
+    /// 否则另一个连接可以在两条语句之间换掉内容。
+    fn snapshot(&self) -> Result<rusqlite::Transaction<'_>> {
+        Ok(self.conn.unchecked_transaction()?)
     }
 
     /// 读取修订之前先检查各列长度（第二轮评审 G4）。只在 WHERE 中计算 `length()`，SQLite 不会因此读入
     /// BLOB 内容；若与内容列放在同一个 SELECT 中，取出这一行时整个 BLOB 就已经读进内存了。
-    fn check_sizes(&self, filter: &str, id: &Id128) -> Result<()> {
+    /// 必须与随后的读取在同一个快照（[`Store::snapshot`]）中执行。
+    fn check_sizes(conn: &Connection, filter: &str, id: &Id128) -> Result<()> {
         let env = keevo_crypto::MAX_ENVELOPE_LEN;
         let parents = MAX_PARENTS * 16;
-        let oversized: bool = self.conn.query_row(
+        let tomb_parents = MAX_TOMBSTONE_PARENTS * 16;
+        let oversized: bool = conn.query_row(
             &format!(
                 "SELECT EXISTS(SELECT 1 FROM revision WHERE ({filter}) AND (
                    length(rev_id) != 16 OR length(object_id) != 16 OR length(vault_id) != 16
-                   OR length(origin_device) != 16 OR length(parents) > {parents} OR length(parents) % 16 != 0
+                   OR length(origin_device) != 16 OR length(parents) % 16 != 0
+                   OR length(parents) > (CASE WHEN deleted THEN {tomb_parents} ELSE {parents} END)
                    OR coalesce(length(wrapped_key_ct), 0) > {env}
                    OR coalesce(length(overview_ct), 0) > {env}
                    OR coalesce(length(details_ct), 0) > {env}))"
@@ -579,53 +634,59 @@ impl Store {
         Ok(())
     }
 
-    /// 推进并返回本机的有效时间（`spec/revisions.md` §7.2）：前进量为墙上时间的增量，单次最多
-    /// [`MAX_CLOCK_STEP_MS`]；墙上时间倒退时有效时间不变。首次调用时有效时间取当前墙上时间。
+    /// 当前的有效时间（`spec/revisions.md` §7.2），即 Keevo 的累计运行时间（毫秒）。
+    ///
+    /// 进程首次使用时，以已有修订中最大的保存时间为起点，此后按单调时钟推进。因此：
+    /// - 关机、睡眠、Keevo 未运行的时间都不计入，墙上时钟的任何调整都没有影响；
+    /// - 只会少计、不会多计真实经过的时间，清理只会更晚、不会更早；
+    /// - 没有单独的时钟元数据，不存在"元数据缺失、损坏或只写了一半"的情形（第三轮评审 H1）。
     ///
     /// # Errors
-    /// SQLite 错误，或持久化的时钟值格式错误。
-    pub fn advance_clock(&mut self, wall_ms: u64) -> Result<u64> {
-        let read = |store: &Self, key: &str| -> Result<Option<u64>> {
-            store
-                .meta(key)?
-                .map(|v| {
-                    <[u8; 8]>::try_from(v.as_slice())
-                        .map(u64::from_be_bytes)
-                        .map_err(|_| StoreError::Corrupt("clock"))
-                })
-                .transpose()
-        };
-        let effective = match (
-            read(self, META_CLOCK_EFFECTIVE)?,
-            read(self, META_CLOCK_WALL)?,
-        ) {
-            (Some(eff), Some(last)) => {
-                eff.saturating_add(wall_ms.saturating_sub(last).min(MAX_CLOCK_STEP_MS))
+    /// SQLite 错误。
+    pub fn effective_now(&mut self) -> Result<u64> {
+        let (base, started) = match self.clock {
+            Some(c) => c,
+            None => {
+                let max: i64 = self.conn.query_row(
+                    "SELECT coalesce(max(stored_ms), 0) FROM revision",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let c = (u64::try_from(max).unwrap_or(0), std::time::Instant::now());
+                self.clock = Some(c);
+                c
             }
-            _ => wall_ms,
         };
-        self.set_meta(META_CLOCK_EFFECTIVE, &effective.to_be_bytes())?;
-        self.set_meta(META_CLOCK_WALL, &wall_ms.to_be_bytes())?;
-        Ok(effective)
+        let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        Ok(base.saturating_add(elapsed))
+    }
+
+    /// 测试用：让有效时间前进 `ms`，模拟 Keevo 运行了这么久。
+    #[cfg(test)]
+    pub(crate) fn pass_running_time(&mut self, ms: u64) -> Result<()> {
+        let now = self.effective_now()?;
+        self.clock = Some((now.saturating_add(ms), std::time::Instant::now()));
+        Ok(())
     }
 
     /// 清理对象的旧修订内容（`spec/revisions.md` §7），其余只留元数据。返回清理数量。
     ///
     /// 只清理同时满足以下条件的修订：不是头修订；不在最近 `keep` 个修订之内；按有效时间计已保存满
-    /// `min_age_ms`。`wall_now_ms` 是当前墙上时间，用来推进有效时间（[`Store::advance_clock`]）。
+    /// `min_age_ms`（[`Store::effective_now`]）。有效时间超出合理范围时不清理任何东西。
     ///
     /// # Errors
     /// SQLite 错误。
-    pub fn prune(
-        &mut self,
-        object_id: &Id128,
-        keep: usize,
-        min_age_ms: u64,
-        wall_now_ms: u64,
-    ) -> Result<usize> {
+    pub fn prune(&mut self, object_id: &Id128, keep: usize, min_age_ms: u64) -> Result<usize> {
         let keep = i64::try_from(keep).map_err(|_| StoreError::Corrupt("keep"))?;
-        let effective = self.advance_clock(wall_now_ms)?;
-        let cutoff = i64::try_from(effective.saturating_sub(min_age_ms)).unwrap_or(i64::MAX);
+        let effective = self.effective_now()?;
+        // 有效时间不合理（数据库被改写），或累计运行时间还不到保留期：一律不清理
+        let Some(cutoff) = effective
+            .checked_sub(min_age_ms)
+            .filter(|_| effective <= MAX_EFFECTIVE_MS)
+        else {
+            return Ok(0);
+        };
+        let cutoff = i64::try_from(cutoff).map_err(|_| StoreError::Corrupt("clock"))?;
         let n = self.conn.execute(
             "UPDATE revision SET wrapped_key_ct = NULL, overview_ct = NULL, details_ct = NULL, pruned = 1
              WHERE object_id = ?1 AND pruned = 0 AND stored_ms <= ?3
@@ -718,12 +779,3 @@ fn decode_ids(bytes: &[u8]) -> Result<Vec<Id128>> {
 
 #[cfg(test)]
 mod tests;
-
-/// 当前 Unix 毫秒。系统时钟早于 1970 年时记为 0（这些修订只按数量规则保留）。
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|d| i64::try_from(d.as_millis()).ok())
-        .unwrap_or(0)
-}

@@ -124,7 +124,7 @@ fn concurrent_delete_and_edit_keeps_the_edit() {
     let mut repo = Repo::default();
     repo.commit(id(1), &[], id(100), Some(base_doc(id(1))));
     let mut a = base_doc(id(1));
-    a.delete(title(), Hlc(90), id(2));
+    a.delete(title(), Hlc(90), id(2)).unwrap();
     repo.commit(id(2), &[id(1)], id(100), Some(a));
     let mut b = base_doc(id(1));
     b.set(title(), text("edited"), Hlc(20), id(3)).unwrap();
@@ -258,7 +258,7 @@ fn random_mutation(rng: &mut Rng, doc: &mut ItemDoc, hlc: Hlc, rev: Id128) {
         ))
         .unwrap();
         if rng.chance(25) {
-            doc.delete(key, hlc, rev);
+            doc.delete(key, hlc, rev).unwrap();
             continue;
         }
         let value = match &key {
@@ -411,7 +411,7 @@ fn review_f4_full_head_set_merge_keeps_concurrent_edit_over_delete() {
         .unwrap();
     repo.commit(id(3), &[id(2)], id(100), Some(a2));
     let mut b = a;
-    b.delete(title(), Hlc(30), id(4));
+    b.delete(title(), Hlc(30), id(4)).unwrap();
     repo.commit(id(4), &[id(2)], id(101), Some(b));
     let mut c = ItemDoc::new(ItemType::Login);
     c.set(title(), text("C"), Hlc(15), id(5)).unwrap();
@@ -483,7 +483,7 @@ fn review_f4_grouped_merge_through_merge_revision_matches_full_merge() {
         .unwrap();
     repo.commit(id(3), &[id(2)], id(100), Some(a2));
     let mut b = a;
-    b.delete(title(), Hlc(30), id(4));
+    b.delete(title(), Hlc(30), id(4)).unwrap();
     repo.commit(id(4), &[id(2)], id(101), Some(b));
     let mut c = ItemDoc::new(ItemType::Login);
     c.set(title(), text("C"), Hlc(15), id(5)).unwrap();
@@ -651,4 +651,29 @@ fn review2_equal_hlc_and_origin_break_ties_by_rev() {
         let m = repo.merge(&heads);
         assert_eq!(m.doc.unwrap().get(&title()), Some(&text("high")));
     }
+}
+
+/// 第三轮评审 §4.1：两个并发的回收站时间被撤销后，不再作为字段冲突报告（§5.5）。
+#[test]
+fn review3_suppressed_trash_is_not_a_field_conflict() {
+    let trashed = RecordKey::attr("trashed");
+    let mut repo = Repo::default();
+    repo.commit(id(1), &[], id(100), Some(base_doc(id(1))));
+    for (rev, t, origin) in [(id(2), 10, id(100)), (id(3), 20, id(101))] {
+        let mut d = base_doc(id(1));
+        d.set(trashed.clone(), RecordValue::Int(t), Hlc(30), rev)
+            .unwrap();
+        repo.commit(rev, &[id(1)], origin, Some(d));
+    }
+    let mut e = base_doc(id(1));
+    e.set(title(), text("edited"), Hlc(40), id(4)).unwrap();
+    repo.commit(id(4), &[id(1)], id(102), Some(e));
+    let m = repo.merge(&[id(2), id(3), id(4)]);
+    assert!(m.resurrected);
+    assert!(
+        m.conflicts.iter().all(|c| c.key != trashed),
+        "{:?}",
+        m.conflicts
+    );
+    assert_eq!(m.doc.unwrap().trashed_at(), None);
 }

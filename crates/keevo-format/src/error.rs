@@ -30,6 +30,12 @@ pub enum FormatError {
     ItemTooLarge,
     /// HLC 已达到上限，无法再生成更大的时间戳。
     ClockExhausted,
+    /// 保留键（`attr:purged`）不能由客户端直接写入，或以规范不允许的形态出现。
+    ReservedKey,
+    /// 条目的记录键超过 [`crate::MAX_KEYS`] 个。
+    TooManyKeys,
+    /// 修订的父修订超过 [`crate::MAX_GRAPH_PARENTS`] 个。
+    TooManyParents,
 }
 
 impl fmt::Display for FormatError {
@@ -46,6 +52,9 @@ impl fmt::Display for FormatError {
             Self::ValueTooLarge => f.write_str("record value is too large"),
             Self::ItemTooLarge => f.write_str("item exceeds the envelope size limit"),
             Self::ClockExhausted => f.write_str("hlc exhausted"),
+            Self::ReservedKey => f.write_str("reserved record key"),
+            Self::TooManyKeys => f.write_str("too many record keys"),
+            Self::TooManyParents => f.write_str("too many parent revisions"),
         }
     }
 }

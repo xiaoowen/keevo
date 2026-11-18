@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::net::Shutdown;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -138,14 +139,12 @@ impl<S: PairingStore + Send + 'static> VaultService<S> {
         let mut conn =
             ServiceConnection::new(Arc::clone(&self.key)).with_pairing_gate(Arc::clone(&self.gate));
         loop {
-            // 配对进行中时，读超时取配对截止时间：到期即断开，释放连接与配对闸门（§4.2）
-            let timeout = conn
-                .pairing_deadline()
-                .map(|d| d.saturating_duration_since(std::time::Instant::now()));
-            if timeout.is_some_and(|t| t.is_zero()) || stream.set_read_timeout(timeout).is_err() {
-                break;
-            }
-            let Ok(frame) = read_socket_frame(&mut stream) else {
+            // 配对进行中时，按绝对截止时间读取：到期即断开，释放连接与配对闸门（§4.2）
+            let mut reader = DeadlineReader {
+                stream: &stream,
+                deadline: conn.pairing_deadline(),
+            };
+            let Ok(frame) = read_socket_frame(&mut reader) else {
                 break;
             };
             let outputs = {
@@ -153,12 +152,10 @@ impl<S: PairingStore + Send + 'static> VaultService<S> {
                 let pairings = lock(&self.pairings);
                 conn.on_frame(&frame, &*pairings, &CoreBackend::new(&vault))
             };
-            // 会话一建立就登记，早于任何可能阻塞的发送（第二轮评审 G7）
-            if !self.register(id, &conn, &stream) || !self.emit(&mut stream, &mut conn, outputs) {
-                break;
-            }
-            // 配对确认发生在 emit 内，确认后会话才建立
-            if !self.register(id, &conn, &stream) {
+            // 会话一建立就登记，早于任何可能阻塞的发送（第二轮评审 G7）；
+            // 配对确认发生在 emit 内，那里同样先登记再发送（第三轮评审 H6）
+            if !self.register(id, &conn, &stream) || !self.emit(id, &mut stream, &mut conn, outputs)
+            {
                 break;
             }
         }
@@ -192,6 +189,7 @@ impl<S: PairingStore + Send + 'static> VaultService<S> {
     /// 发出状态机的输出。返回 `false` 表示连接应关闭。
     fn emit(
         &self,
+        id: u64,
         stream: &mut UnixStream,
         conn: &mut ServiceConnection,
         outputs: Vec<Output>,
@@ -208,7 +206,8 @@ impl<S: PairingStore + Send + 'static> VaultService<S> {
                     // 等待用户确认期间不持有任何锁
                     let accepted = self.prompt.confirm(sas, &name, &browser);
                     let more = conn.confirm_pairing(accepted, &mut *lock(&self.pairings));
-                    if !self.emit(stream, conn, more) {
+                    // 确认后会话才建立：先登记，再发送 `paired`（第三轮评审 H6）
+                    if !self.register(id, conn, stream) || !self.emit(id, stream, conn, more) {
                         return false;
                     }
                 }
@@ -216,6 +215,30 @@ impl<S: PairingStore + Send + 'static> VaultService<S> {
             }
         }
         true
+    }
+}
+
+/// 按绝对截止时间读取：每一次底层 `read` 之前都重新计算剩余时间（第三轮评审 H5）。
+/// 只在读完整帧之前设一次相对超时不够：对端每隔一会儿送一个字节，就能让每次 `read` 都重新等待。
+struct DeadlineReader<'a> {
+    stream: &'a UnixStream,
+    deadline: Option<std::time::Instant>,
+}
+
+impl Read for DeadlineReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let timeout = match self.deadline {
+            Some(d) => {
+                let left = d.saturating_duration_since(std::time::Instant::now());
+                if left.is_zero() {
+                    return Err(std::io::ErrorKind::TimedOut.into());
+                }
+                Some(left)
+            }
+            None => None,
+        };
+        self.stream.set_read_timeout(timeout)?;
+        (&*self.stream).read(buf)
     }
 }
 
@@ -238,4 +261,122 @@ pub fn bind(path: &Path) -> std::io::Result<UnixListener> {
         Err(e) => return Err(e),
     }
     UnixListener::bind(path)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use std::io::Write;
+    use std::time::{Duration, Instant};
+
+    use keevo_crypto::KdfParams;
+    use keevo_ipc::client::{ClientEvent, ExtensionClient};
+    use keevo_ipc::frame::read_socket_frame;
+    use keevo_ipc::message::HostHello;
+    use keevo_ipc::service::MemoryPairingStore;
+
+    use super::*;
+
+    struct Accept;
+    impl PairingPrompt for Accept {
+        fn confirm(&self, _: [u8; 6], _: &str, _: &str) -> bool {
+            true
+        }
+    }
+
+    fn service() -> (VaultService<MemoryPairingStore>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "keevo-svc-{}-{}",
+            std::process::id(),
+            Instant::now().elapsed().as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let params = KdfParams::new(KdfParams::MIN_M_KIB, KdfParams::MIN_T, 1, [5; 16]).unwrap();
+        let (vault, _) = Vault::create(&dir.join("v.sqlite"), "pw", params).unwrap();
+        let svc = VaultService::new(
+            Arc::new(Mutex::new(vault)),
+            StaticKeypair::generate().unwrap(),
+            Arc::new(Mutex::new(MemoryPairingStore::default())),
+            Arc::new(Accept),
+            PeerPolicy::DevSameUserOnly,
+        )
+        .unwrap();
+        (svc, dir)
+    }
+
+    /// 第三轮评审 H5：对端每隔一会儿送一个字节，也不能把读取拖过截止时间。
+    #[test]
+    fn review3_h5_deadline_is_absolute_across_partial_reads() {
+        let (a, mut b) = UnixStream::pair().unwrap();
+        let writer = std::thread::spawn(move || {
+            let _ = b.write_all(&8u32.to_be_bytes());
+            for _ in 0..8 {
+                std::thread::sleep(Duration::from_millis(30));
+                if b.write_all(&[0]).is_err() {
+                    break;
+                }
+            }
+        });
+        let start = Instant::now();
+        let mut reader = DeadlineReader {
+            stream: &a,
+            deadline: Some(start + Duration::from_millis(100)),
+        };
+        assert!(read_socket_frame(&mut reader).is_err());
+        assert!(
+            start.elapsed() < Duration::from_millis(180),
+            "{:?}",
+            start.elapsed()
+        );
+        drop(a);
+        writer.join().unwrap();
+    }
+
+    /// 第三轮评审 H6：XX 配对经用户确认建立会话后，先登记、再发送 `paired`。
+    #[test]
+    fn review3_h6_confirmed_pairing_registers_before_paired_is_sent() {
+        let (svc, dir) = service();
+        let (server_end, mut client_end) = UnixStream::pair().unwrap();
+        let mut conn = ServiceConnection::new(Arc::clone(&svc.key));
+        let origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
+        let hello = serde_json::to_vec(&HostHello {
+            v: 1,
+            client: "native-host".into(),
+            extension_origin: origin.into(),
+            browser: "dev".into(),
+        })
+        .unwrap();
+        let mut client = ExtensionClient::new(StaticKeypair::generate().unwrap(), origin, "x");
+        let step = |conn: &mut ServiceConnection, frame: &[u8]| {
+            let vault = lock(&svc.vault);
+            let pairings = lock(&svc.pairings);
+            conn.on_frame(frame, &*pairings, &CoreBackend::new(&vault))
+        };
+        assert!(step(&mut conn, &hello).is_empty());
+        let out = step(&mut conn, &client.start_pairing().unwrap());
+        let Some(Output::Send(msg2)) = out.into_iter().find(|o| matches!(o, Output::Send(_)))
+        else {
+            panic!("应收到第 2 条消息")
+        };
+        let (frames, _) = client.on_frame(&msg2).unwrap();
+        let out = step(&mut conn, &frames[0]);
+        assert!(
+            out.iter()
+                .any(|o| matches!(o, Output::ConfirmPairing { .. }))
+        );
+
+        let mut server_stream = server_end.try_clone().unwrap();
+        assert!(svc.emit(7, &mut server_stream, &mut conn, out));
+        assert!(
+            lock(&svc.sessions).contains_key(&7),
+            "发送 paired 时会话必须已登记"
+        );
+        let paired = read_socket_frame(&mut client_end).unwrap();
+        let (_, events) = client.on_frame(&paired).unwrap();
+        assert!(
+            matches!(events[0], ClientEvent::Paired { .. }),
+            "{events:?}"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }

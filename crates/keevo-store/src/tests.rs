@@ -98,9 +98,9 @@ fn prune_keeps_heads_and_recent_revisions_but_not_graph() {
         store.insert_revision(&rev(n, &[n - 1])).unwrap();
     }
     // 全部修订都是刚写入的：时间规则保护它们，一个也不清理
-    assert_eq!(store.prune(&id(50), 3, DAYS_90, wall_now()).unwrap(), 0);
+    assert_eq!(store.prune(&id(50), 3, DAYS_90).unwrap(), 0);
     // 不要求保存时长（相当于已过保留期）：只剩数量规则
-    assert_eq!(store.prune(&id(50), 3, 0, wall_now()).unwrap(), 7);
+    assert_eq!(store.prune(&id(50), 3, 0).unwrap(), 7);
     let history = store.history(&id(50)).unwrap();
     assert_eq!(history.iter().filter(|r| !r.pruned).count(), 3);
     let oldest = store.revision(&id(1)).unwrap().unwrap();
@@ -157,15 +157,17 @@ fn newer_schema_is_rejected() {
 fn prune_keeps_revisions_stored_after_the_cutoff() {
     let mut store = Store::open_in_memory().unwrap();
     store.insert_revision(&rev(1, &[])).unwrap();
-    for n in 2..=10u8 {
+    for n in 2..=5u8 {
         store.insert_revision(&rev(n, &[n - 1])).unwrap();
     }
-    // 1–5 是很久以前写入的，6–10 是最近写入的
+    // 1–5 写入后，Keevo 又运行了 91 天，再写入 6–10
     store
-        .conn
-        .execute("UPDATE revision SET stored_ms = 1000 WHERE seq <= 5", [])
+        .pass_running_time(DAYS_90 + 24 * 60 * 60 * 1000)
         .unwrap();
-    assert_eq!(store.prune(&id(50), 2, DAYS_90, wall_now()).unwrap(), 5);
+    for n in 6..=10u8 {
+        store.insert_revision(&rev(n, &[n - 1])).unwrap();
+    }
+    assert_eq!(store.prune(&id(50), 2, DAYS_90).unwrap(), 5);
     let kept: Vec<bool> = (1..=10u8)
         .map(|n| !store.revision(&id(n)).unwrap().unwrap().pruned)
         .collect();
@@ -190,39 +192,68 @@ fn migrates_schema_v1_to_v2() {
         .conn
         .query_row("SELECT stored_ms FROM revision", [], |r| r.get(0))
         .unwrap();
-    assert!(stored > 0);
+    // 有效时间是 Keevo 的累计运行时间：新数据库从 0 开始，迁移前的修订也记为 0
+    assert!((0..60_000).contains(&stored), "{stored}");
 }
 
 const DAYS_90: u64 = 90 * 24 * 60 * 60 * 1000;
 
-fn wall_now() -> u64 {
-    u64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis(),
-    )
-    .unwrap()
-}
-
-/// 第二轮评审 G3：墙上时钟突然前跳 91 天，不会立即清理近期写入的历史。
+/// 第三轮评审 H1：有效时间只按 Keevo 的运行时间推进，与墙上时钟无关；未满 90 天的运行时间不清理，
+/// 满了才清理。重新打开数据库时，以已有修订中最大的保存时间为起点继续计时，不会把关机期间算进去。
 #[test]
-fn review2_g3_clock_jump_does_not_expire_recent_history() {
+fn review3_h1_retention_follows_running_time_only() {
     let mut store = Store::open_in_memory().unwrap();
     store.insert_revision(&rev(1, &[])).unwrap();
     for n in 2..=25u8 {
         store.insert_revision(&rev(n, &[n - 1])).unwrap();
     }
-    let jumped = wall_now() + 91 * 24 * 60 * 60 * 1000;
-    assert_eq!(store.prune(&id(50), 20, DAYS_90, jumped).unwrap(), 0);
-    // 时钟倒退再校正，同样不会让新内容突然过期
+    assert_eq!(store.prune(&id(50), 20, DAYS_90).unwrap(), 0);
+    store.pass_running_time(DAYS_90 - 60_000).unwrap();
     assert_eq!(
-        store
-            .prune(&id(50), 20, DAYS_90, wall_now() - DAYS_90)
-            .unwrap(),
-        0
+        store.prune(&id(50), 20, DAYS_90).unwrap(),
+        0,
+        "运行时间还没满 90 天"
     );
-    assert_eq!(store.prune(&id(50), 20, DAYS_90, wall_now()).unwrap(), 0);
+    store.pass_running_time(120_000).unwrap();
+    assert_eq!(store.prune(&id(50), 20, DAYS_90).unwrap(), 5);
+}
+
+/// 第三轮评审 H1：重新打开时以已有修订的最大保存时间为起点，关机期间不计入。
+#[test]
+fn review3_h1_restart_does_not_count_downtime() {
+    let dir = std::env::temp_dir().join(format!("keevo-h1-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("v.sqlite");
+    {
+        let mut store = Store::open(&path).unwrap();
+        store.insert_revision(&rev(1, &[])).unwrap();
+        for n in 2..=25u8 {
+            store.insert_revision(&rev(n, &[n - 1])).unwrap();
+        }
+    }
+    // 无论关机多久（墙上时钟过了多少天），重新打开后有效时间都从最后一次写入处继续
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(store.prune(&id(50), 20, DAYS_90).unwrap(), 0);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// 第三轮评审 H1：被改写成不合理的保存时间时，暂停清理而不是把其余修订都当成"很旧"。
+#[test]
+fn review3_h1_unreasonable_stored_time_pauses_pruning() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.insert_revision(&rev(1, &[])).unwrap();
+    for n in 2..=25u8 {
+        store.insert_revision(&rev(n, &[n - 1])).unwrap();
+    }
+    store
+        .conn
+        .execute(
+            "UPDATE revision SET stored_ms = ?1 WHERE seq = 25",
+            [i64::MAX],
+        )
+        .unwrap();
+    store.clock = None;
+    assert_eq!(store.prune(&id(50), 20, DAYS_90).unwrap(), 0);
 }
 
 /// 第二轮评审 G3：v1 数据库中已有的修订年龄未知，迁移后按迁移时间计，不会立即被清理。
@@ -258,7 +289,7 @@ fn review2_g3_migration_keeps_existing_history() {
     )
     .unwrap();
     let mut store = Store::init(conn, false).unwrap();
-    assert_eq!(store.prune(&id(50), 20, DAYS_90, wall_now()).unwrap(), 0);
+    assert_eq!(store.prune(&id(50), 20, DAYS_90).unwrap(), 0);
 }
 
 /// 第二轮评审 G4：超长的列在读入内存之前就被拒绝。
@@ -291,4 +322,58 @@ fn review2_g4_oversized_columns_are_rejected_before_reading() {
         )
         .unwrap();
     assert!(store.revision(&id(1)).unwrap().is_some());
+}
+
+/// 第三轮评审 H2：普通修订最多 4096 个父修订；墓碑修订最多 65536 个，保证重建后旧条目总能被删除。
+#[test]
+fn review3_h2_parent_limits_depend_on_revision_kind() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut roots = Vec::new();
+    for i in 0..=MAX_PARENTS {
+        let mut r = rev(0, &[]);
+        let mut b = [0u8; 16];
+        b[..8].copy_from_slice(&u64::try_from(i).unwrap().to_be_bytes());
+        b[15] = 0xaa;
+        r.rev_id = Id128::from_bytes(b);
+        store.insert_revision(&r).unwrap();
+        roots.push(r.rev_id);
+    }
+    let mut live = rev(1, &[]);
+    live.parents = roots.clone();
+    assert_eq!(store.insert_revision(&live), Err(StoreError::TooLarge));
+    let mut tomb = rev(2, &[]);
+    tomb.parents = roots;
+    tomb.deleted = true;
+    tomb.wrapped_key_ct = None;
+    tomb.overview_ct = None;
+    tomb.details_ct = None;
+    store.insert_revision(&tomb).unwrap();
+    assert_eq!(store.heads(&id(50)).unwrap().len(), 1, "墓碑以全部头为父");
+}
+
+/// 第三轮评审 H3：元数据与头表的超长值同样在取出前被拒绝；读取在同一快照中完成。
+#[test]
+fn review3_h3_meta_and_head_ids_are_length_checked() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.set_meta("k", &[1u8; 8]).unwrap();
+    assert_eq!(store.meta("k").unwrap(), Some(vec![1u8; 8]));
+    store
+        .conn
+        .execute(
+            "UPDATE meta SET value = zeroblob(?1) WHERE key = 'k'",
+            [i64::try_from(MAX_META_LEN + 1).unwrap()],
+        )
+        .unwrap();
+    assert!(matches!(store.meta("k"), Err(StoreError::Corrupt(_))));
+
+    store.insert_revision(&rev(1, &[])).unwrap();
+    assert_eq!(store.objects(ObjectKind::Item).unwrap(), vec![id(50)]);
+    store
+        .conn
+        .execute("UPDATE head SET object_id = zeroblob(17)", [])
+        .unwrap();
+    assert!(matches!(
+        store.objects(ObjectKind::Item),
+        Err(StoreError::Corrupt(_))
+    ));
 }

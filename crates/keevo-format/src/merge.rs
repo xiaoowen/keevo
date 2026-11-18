@@ -147,8 +147,8 @@ pub fn merge_heads(heads: &[HeadState<'_>], graph: &RevisionGraph) -> Result<Mer
             continue;
         }
         let (winner, others, conflict) = pick(key, candidates, graph);
-        // 删除状态的冲突由 `resurrected` 表示，不作为字段冲突
-        if let Some(c) = conflict.filter(|_| *key != purged_key) {
+        // 删除状态（回收站、永久删除）的冲突由 `resurrected` 表示，不作为字段冲突（§5.5）
+        if let Some(c) = conflict.filter(|_| !key.is_deletion_state()) {
             conflicts.push(c);
         }
         records.insert(key.clone(), winner);
@@ -176,7 +176,7 @@ pub fn merge_heads(heads: &[HeadState<'_>], graph: &RevisionGraph) -> Result<Mer
         .get(&purged_key)
         .into_iter()
         .chain(concurrent.get(&purged_key).into_iter().flatten())
-        .filter(|v| !v.is_tombstone())
+        .filter(|v| v.value == Some(RecordValue::Bool(true)))
         .map(|v| v.rev)
         .collect();
     if !purges.is_empty() {

@@ -20,7 +20,7 @@ const DEFAULT_VAULT_NAME: &str = "个人";
 const FIRST_EPOCH: u64 = 1;
 /// 每个对象保留完整内容的修订数（`spec/revisions.md` §7）。
 const HISTORY_KEEP: usize = 20;
-/// 历史保留的时间下限（`spec/revisions.md` §7.2）：按本机有效时间计，90 天内写入或收到的修订一律保留。
+/// 历史保留的时间下限（`spec/revisions.md` §7.2）：按 Keevo 的运行时间计，90 天内写入或收到的修订一律保留。
 const HISTORY_MIN_AGE_MS: u64 = 90 * 24 * 60 * 60 * 1000;
 
 /// 新字段。
@@ -550,7 +550,7 @@ impl Vault {
                 doc.resolve(key, *version, hlc, rev_id)?;
             }
             for key in remove {
-                doc.delete(key.clone(), hlc, rev_id);
+                doc.delete(key.clone(), hlc, rev_id)?;
             }
             Ok(())
         })
@@ -564,6 +564,10 @@ impl Vault {
     ) -> Result<()> {
         let view = self.item(item_id)?;
         let heads = self.store.heads(&item_id)?;
+        // 精简也回不到的状态：头太多（新修订必须以全部头为父），或键太多（删除只会留下墓碑，键数不减）
+        if heads.len() > keevo_store::MAX_PARENTS || view.doc.key_count() > keevo_format::MAX_KEYS {
+            return Err(CoreError::ItemNeedsRebuild);
+        }
         let mut doc = view.doc;
         let hlc = self.tick()?;
         let rev_id = Id128::random()?;
@@ -581,7 +585,7 @@ impl Vault {
         let parents = heads.iter().map(|h| h.rev_id).collect();
         self.write_item_revision(view.vault_id, item_id, rev_id, parents, &ik, Some(&doc))?;
         self.store
-            .prune(&item_id, HISTORY_KEEP, HISTORY_MIN_AGE_MS, now_ms())?;
+            .prune(&item_id, HISTORY_KEEP, HISTORY_MIN_AGE_MS)?;
         Ok(())
     }
 
@@ -625,6 +629,32 @@ impl Vault {
             pruned: false,
         })?;
         Ok(())
+    }
+
+    /// 重建条目（`spec/revisions.md` §7.1）：把当前视图中的值（不含墓碑、并发版本与 `drop` 中的键）
+    /// 复制为一个新条目，再永久删除旧条目。用于超出上限、只能重建的条目（[`CoreError::ItemNeedsRebuild`]）。
+    /// 新条目有新的 ID；旧条目的历史随永久删除进入正常清理。
+    ///
+    /// # Errors
+    /// 复制后仍超过键数或大小上限时返回错误，调用方应让用户在 `drop` 中选出更多不保留的键。
+    pub fn rebuild_item(&mut self, item_id: Id128, drop: &[RecordKey]) -> Result<Id128> {
+        let view = self.item(item_id)?;
+        let hlc = self.tick()?;
+        let new_id = Id128::random()?;
+        let rev_id = Id128::random()?;
+        let mut doc = ItemDoc::new(view.doc.item_type);
+        for (key, version) in &view.doc.records {
+            if key.is_deletion_state() || drop.contains(key) {
+                continue;
+            }
+            if let Some(value) = &version.value {
+                doc.set(key.clone(), value.clone(), hlc, rev_id)?;
+            }
+        }
+        let ik = SymmetricKey::generate()?;
+        self.write_item_revision(view.vault_id, new_id, rev_id, Vec::new(), &ik, Some(&doc))?;
+        self.purge_item(item_id)?;
+        Ok(new_id)
     }
 
     /// 条目的历史修订数（含已清理内容的修订）。
@@ -771,26 +801,16 @@ impl Vault {
         Ok(())
     }
 
+    /// 修改单个属性（回收站状态等）。与其他编辑一样经由写时收敛（[`Vault::revise`]），
+    /// 包括确定"撤销删除"与历史清理。
     fn edit_attr(&mut self, item_id: Id128, name: &str, value: Option<RecordValue>) -> Result<()> {
-        let view = self.item(item_id)?;
-        let heads = self.store.heads(&item_id)?;
-        let mut doc = view.doc;
-        let hlc = self.tick()?;
-        let rev_id = Id128::random()?;
-        match value {
-            Some(v) => doc.set(RecordKey::attr(name), v, hlc, rev_id)?,
-            None => doc.delete(RecordKey::attr(name), hlc, rev_id),
-        }
-        let ik = {
-            let session = self.session()?;
-            let live = heads
-                .iter()
-                .find(|h| !h.deleted)
-                .ok_or(CoreError::NotFound)?;
-            self.item_key(session, live)?
-        };
-        let parents = heads.iter().map(|h| h.rev_id).collect();
-        self.write_item_revision(view.vault_id, item_id, rev_id, parents, &ik, Some(&doc))
+        self.revise(item_id, |doc, hlc, rev_id| {
+            match value {
+                Some(v) => doc.set(RecordKey::attr(name), v, hlc, rev_id)?,
+                None => doc.delete(RecordKey::attr(name), hlc, rev_id)?,
+            }
+            Ok(())
+        })
     }
 }
 
@@ -856,7 +876,7 @@ fn apply(doc: &mut ItemDoc, edit: Edit, hlc: Hlc, rev: Id128) -> Result<()> {
             doc.set(RecordKey::attr("favorite"), RecordValue::Bool(f), hlc, rev)?
         }
         Edit::AddTag(t) => doc.set(RecordKey::Tag(t), RecordValue::Tag, hlc, rev)?,
-        Edit::RemoveTag(t) => doc.delete(RecordKey::Tag(t), hlc, rev),
+        Edit::RemoveTag(t) => doc.delete(RecordKey::Tag(t), hlc, rev)?,
         Edit::AddField(field) => {
             let next = doc
                 .records
@@ -882,7 +902,7 @@ fn apply(doc: &mut ItemDoc, edit: Edit, hlc: Hlc, rev: Id128) -> Result<()> {
             if doc.get(&key).is_none() {
                 return Err(CoreError::NotFound);
             }
-            doc.delete(key, hlc, rev);
+            doc.delete(key, hlc, rev)?;
         }
     }
     Ok(())

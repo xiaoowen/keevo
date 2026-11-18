@@ -28,6 +28,8 @@ pub enum KeevoError {
     KdfNeedsConfirmation,
     /// 条目合并后过大，需要先精简才能保存。
     ItemTooLarge,
+    /// 条目超出上限，只能导出或重建为新条目。
+    ItemNeedsRebuild,
     /// 账户密钥格式错误（附带原因码，如 `checksum_mismatch`）。
     InvalidSecretKey {
         /// 原因码。
@@ -60,6 +62,7 @@ impl fmt::Display for KeevoError {
             Self::WrongCredentials => f.write_str("wrong credentials"),
             Self::KdfNeedsConfirmation => f.write_str("kdf needs confirmation"),
             Self::ItemTooLarge => f.write_str("item too large"),
+            Self::ItemNeedsRebuild => f.write_str("item needs rebuild"),
             Self::InvalidSecretKey { code } => write!(f, "invalid secret key: {code}"),
             Self::NoAccount => f.write_str("no account"),
             Self::AccountExists => f.write_str("account exists"),
@@ -80,6 +83,7 @@ impl From<CoreError> for KeevoError {
             CoreError::WrongCredentials => Self::WrongCredentials,
             CoreError::KdfNeedsConfirmation => Self::KdfNeedsConfirmation,
             CoreError::ItemTooLarge => Self::ItemTooLarge,
+            CoreError::ItemNeedsRebuild => Self::ItemNeedsRebuild,
             CoreError::NoAccount => Self::NoAccount,
             CoreError::AccountExists => Self::AccountExists,
             CoreError::NotFound => Self::NotFound,

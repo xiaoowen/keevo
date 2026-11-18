@@ -8,7 +8,9 @@ use crate::FORMAT_VERSION;
 use crate::error::{FormatError, Result};
 use crate::hlc::Hlc;
 use crate::json::{from_json, to_json};
-use crate::record::{self, ConcurrentMap, RecordKey, RecordMap, RecordValue, RecordVersion};
+use crate::record::{
+    self, ConcurrentMap, MAX_KEYS, MAX_SAFE_INT, RecordKey, RecordMap, RecordValue, RecordVersion,
+};
 
 /// 条目类型。创建后不可更改。
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
@@ -158,6 +160,8 @@ impl ItemDoc {
     /// 超过 [`keevo_crypto::MAX_PLAINTEXT_LEN`] 时返回 [`FormatError::ItemTooLarge`]：合并后的状态可能
     /// 超过上限，此时读取照常，但需要先精简才能保存，绝不静默丢弃版本。
     pub fn encode_for_write(&self) -> Result<Zeroizing<Vec<u8>>> {
+        // 写入边界保证不变量：公开字段可以被直接构造，这里重新校验一遍（第三轮评审 H7）
+        self.validate()?;
         let bytes = self.encode()?;
         if bytes.len() > keevo_crypto::MAX_PLAINTEXT_LEN {
             return Err(FormatError::ItemTooLarge);
@@ -174,13 +178,38 @@ impl ItemDoc {
         if doc.v != FORMAT_VERSION {
             return Err(FormatError::UnsupportedVersion(doc.v));
         }
-        record::validate(&doc.records)?;
-        record::validate_concurrent(&doc.records, &doc.concurrent)?;
-        Ok(Self {
+        let doc = Self {
             item_type: doc.item_type,
             records: doc.records,
             concurrent: doc.concurrent,
-        })
+        };
+        doc.validate()?;
+        Ok(doc)
+    }
+
+    /// 记录键的总数（当前版本与并发版本的键取并集）。
+    #[must_use]
+    pub fn key_count(&self) -> usize {
+        self.records.len().saturating_add(
+            self.concurrent
+                .keys()
+                .filter(|k| !self.records.contains_key(*k))
+                .count(),
+        )
+    }
+
+    /// 校验全部不变量：值的类型、大小与整数范围，并发版本的结构，保留键的形态，键数上限。
+    ///
+    /// # Errors
+    /// 返回第一个不满足的不变量对应的错误。
+    pub fn validate(&self) -> Result<()> {
+        record::validate(&self.records)?;
+        record::validate_concurrent(&self.records, &self.concurrent)?;
+        record::validate_reserved(&self.records, &self.concurrent)?;
+        if self.key_count() > MAX_KEYS {
+            return Err(FormatError::TooManyKeys);
+        }
+        Ok(())
     }
 
     /// 读取未删除记录的值。
@@ -194,6 +223,9 @@ impl ItemDoc {
     /// # Errors
     /// 值的类型与键不匹配时返回 [`FormatError::ValueKindMismatch`]。
     pub fn set(&mut self, key: RecordKey, value: RecordValue, hlc: Hlc, rev: Id128) -> Result<()> {
+        if key.is_reserved() {
+            return Err(FormatError::ReservedKey);
+        }
         record::check_value(&key, &value)?;
         // 新版本写于全部头之后，因果覆盖该键的所有并发版本（§4.2）
         self.concurrent.remove(&key);
@@ -209,7 +241,18 @@ impl ItemDoc {
     }
 
     /// 删除记录：写入墓碑，而不是移除（`spec/revisions.md` §4.2）。
-    pub fn delete(&mut self, key: RecordKey, hlc: Hlc, rev: Id128) {
+    ///
+    /// # Errors
+    /// 保留键返回 [`FormatError::ReservedKey`]：确定恢复只能经由 [`ItemDoc::settle_for_write`]。
+    pub fn delete(&mut self, key: RecordKey, hlc: Hlc, rev: Id128) -> Result<()> {
+        if key.is_reserved() {
+            return Err(FormatError::ReservedKey);
+        }
+        self.write_tombstone(key, hlc, rev);
+        Ok(())
+    }
+
+    fn write_tombstone(&mut self, key: RecordKey, hlc: Hlc, rev: Id128) {
         self.concurrent.remove(&key);
         self.records.insert(
             key,
@@ -246,10 +289,7 @@ impl ItemDoc {
             .clone();
         match value {
             Some(v) => self.set(key.clone(), v, hlc, rev),
-            None => {
-                self.delete(key.clone(), hlc, rev);
-                Ok(())
-            }
+            None => self.delete(key.clone(), hlc, rev),
         }
     }
 
@@ -263,7 +303,7 @@ impl ItemDoc {
             .cloned()
             .collect();
         for key in suppressed {
-            self.delete(key, hlc, rev);
+            self.write_tombstone(key, hlc, rev);
         }
     }
 
@@ -405,6 +445,12 @@ impl ItemOverview {
         if o.v != FORMAT_VERSION {
             return Err(FormatError::UnsupportedVersion(o.v));
         }
+        // 与条目详情使用同一个整数范围（第三轮评审 H7）
+        if o.trashed_at
+            .is_some_and(|t| !(-MAX_SAFE_INT..=MAX_SAFE_INT).contains(&t))
+        {
+            return Err(FormatError::ValueTooLarge);
+        }
         Ok(o)
     }
 }
@@ -457,6 +503,108 @@ impl VaultMeta {
 mod tests {
     use super::*;
     use crate::record::{FieldData, FieldValue, KvEntry};
+
+    /// 第三轮评审 H2：键数在上限之内时，"删除全部字段"之后的墓碑一定放得进一个信封，
+    /// 即使每个键名都是最长、且每个字节都需要转义（`spec/revisions.md` §7.1）。
+    #[test]
+    fn review3_h2_all_tombstones_within_key_limit_fit_one_envelope() {
+        let mut d = ItemDoc::new(ItemType::Login);
+        let rev = Id128::from_bytes([7; 16]);
+        for i in 0..MAX_KEYS {
+            let mut name = format!("{i:04}");
+            name.push_str(&"\u{1}".repeat(256 - name.len()));
+            d.delete(RecordKey::Tag(name), Hlc(u64::MAX), rev).unwrap();
+        }
+        assert_eq!(d.key_count(), MAX_KEYS);
+        let bytes = d.encode_for_write().unwrap();
+        assert!(
+            bytes.len() < keevo_crypto::MAX_PLAINTEXT_LEN / 2,
+            "{}",
+            bytes.len()
+        );
+    }
+
+    /// 第三轮评审 H4：保留键不能直接写入；解码时只接受规范允许的形态。
+    #[test]
+    fn review3_h4_reserved_purged_key_is_enforced() {
+        let purged = RecordKey::attr("purged");
+        let rev = Id128::from_bytes([7; 16]);
+        let mut d = ItemDoc::new(ItemType::Login);
+        assert_eq!(
+            d.set(purged.clone(), RecordValue::Bool(true), Hlc(2), rev),
+            Err(FormatError::ReservedKey)
+        );
+        assert_eq!(
+            d.delete(purged.clone(), Hlc(2), rev),
+            Err(FormatError::ReservedKey)
+        );
+
+        let decodes = |doc: &ItemDoc| ItemDoc::decode(&doc.encode().unwrap());
+        // 当前版本是活的删除标记：拒绝
+        let mut live = ItemDoc::new(ItemType::Login);
+        live.records.insert(
+            purged.clone(),
+            RecordVersion {
+                hlc: Hlc(7),
+                rev,
+                value: Some(RecordValue::Bool(false)),
+            },
+        );
+        assert_eq!(decodes(&live), Err(FormatError::ReservedKey));
+        assert_eq!(
+            live.encode_for_write().err(),
+            Some(FormatError::ReservedKey)
+        );
+        // 并发版本里出现非删除标记的值：拒绝
+        let mut odd = ItemDoc::new(ItemType::Login);
+        odd.concurrent.insert(
+            purged.clone(),
+            vec![RecordVersion {
+                hlc: Hlc(0),
+                rev,
+                value: Some(RecordValue::Bool(false)),
+            }],
+        );
+        assert_eq!(decodes(&odd), Err(FormatError::ReservedKey));
+        // 合法形态：被撤销的删除版本（hlc 0、true），以及已确定恢复的墓碑
+        let mut ok = ItemDoc::new(ItemType::Login);
+        ok.concurrent.insert(
+            purged.clone(),
+            vec![RecordVersion {
+                hlc: Hlc(0),
+                rev,
+                value: Some(RecordValue::Bool(true)),
+            }],
+        );
+        assert!(decodes(&ok).is_ok());
+        ok.settle_for_write(Hlc(9), Id128::from_bytes([8; 16]));
+        assert!(decodes(&ok).is_ok());
+        assert!(ok.records[&purged].is_tombstone());
+    }
+
+    /// 第三轮评审 H7：概要与详情使用同一个整数范围；写入前重新校验直接构造的文档。
+    #[test]
+    fn review3_h7_overview_ints_and_write_validation() {
+        let mut o = sample().overview();
+        o.trashed_at = Some(record::MAX_SAFE_INT + 1);
+        assert_eq!(
+            ItemOverview::decode(&o.encode().unwrap()),
+            Err(FormatError::ValueTooLarge)
+        );
+        let mut d = ItemDoc::new(ItemType::Login);
+        d.records.insert(
+            RecordKey::Tag("t".into()),
+            RecordVersion {
+                hlc: Hlc(1),
+                rev: Id128::from_bytes([7; 16]),
+                value: Some(RecordValue::Bool(true)),
+            },
+        );
+        assert_eq!(
+            d.encode_for_write().err(),
+            Some(FormatError::ValueKindMismatch)
+        );
+    }
 
     /// 第二轮评审 §4：重复的记录键、超过 256 KiB 的值、超出 ±(2⁵³−1) 的整数都拒绝。
     #[test]
@@ -640,7 +788,8 @@ mod tests {
             rev,
         )
         .unwrap();
-        d.delete(RecordKey::Field(Id128::from_bytes([4; 16])), Hlc(5), rev);
+        d.delete(RecordKey::Field(Id128::from_bytes([4; 16])), Hlc(5), rev)
+            .unwrap();
         d
     }
 

@@ -697,3 +697,53 @@ fn review2_g1_display_name_is_sanitized_consistently() {
     let client = ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "A\u{2066}B");
     assert_eq!(client.display_name(), "AB");
 }
+
+// ---------------------------------------------------------------- 评审第三轮 §4.4
+
+/// 第三轮 §4.4：配对记录保存失败时按拒绝处理，扩展收不到 `paired`。
+#[test]
+fn review3_pairing_save_failure_is_a_rejection() {
+    struct FailingStore;
+    impl PairingStore for FailingStore {
+        fn find(&self, _: &[u8; 32]) -> Option<crate::service::PairingRecord> {
+            None
+        }
+        fn save(&mut self, _: crate::service::PairingRecord) -> std::io::Result<()> {
+            Err(std::io::Error::other("disk full"))
+        }
+        fn revoke(&mut self, _: &[u8; 32]) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let svc = Service::new();
+    let mut client =
+        ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "Chrome · 个人");
+    let mut conn = svc.connect(ORIGIN);
+    let d = deliver(&svc, &mut conn, &client.start_pairing().unwrap());
+    let (frames, _) = client.on_frame(&d.to_client[0]).unwrap();
+    let d = deliver(&svc, &mut conn, &frames[0]);
+    assert!(d.confirm.is_some());
+    let d = collect(conn.confirm_pairing(true, &mut FailingStore));
+    assert!(d.closed);
+    let (_, events) = client.on_frame(&d.to_client[0]).unwrap();
+    assert!(
+        matches!(events[0], ClientEvent::Error(ErrorCode::PairingRejected)),
+        "{events:?}"
+    );
+}
+
+/// 第三轮 §4.4：保险库锁定时不接受配对，返回 `locked`，也不占用配对闸门。
+#[test]
+fn review3_pairing_requires_unlocked_vault() {
+    let svc = Service::new();
+    svc.backend.locked.set(true);
+    let mut client = ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "x");
+    let mut conn = svc.connect(ORIGIN);
+    let d = deliver(&svc, &mut conn, &client.start_pairing().unwrap());
+    assert!(d.closed && !d.started);
+    let (_, events) = client.on_frame(&d.to_client[0]).unwrap();
+    assert!(
+        matches!(events[0], ClientEvent::Error(ErrorCode::Locked)),
+        "{events:?}"
+    );
+}
