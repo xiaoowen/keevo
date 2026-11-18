@@ -1,7 +1,10 @@
 //! 通过 UniFFI 把 `keevo-core` 导出给 Swift。
 //!
 //! M1.1 导出条目的完整增删改查：详情、编辑、回收站、永久删除、历史与恢复、冲突处理、精简与重建，
-//! 以及 KDF 参数确认。
+//! 以及 KDF 参数确认；本机密钥包裹（免输账户密钥、Touch ID，`spec/crypto.md` §8.7）。
+//!
+//! Secure Enclave 的操作由 Swift 实现 [`SecureEnclaveProvider`] 提供。被包裹的材料（AUK、账户密钥、
+//! 设备 ID）不经过 Swift，跨越边界的只有每次包裹各不相同的协商结果。
 //!
 //! **已知限制（M1 处理）**：
 //! - 秘密值（主密码、账户密钥、字段值）目前以普通 `String` 跨越 FFI 边界。
@@ -10,6 +13,9 @@
 use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
+
+use keevo_core::local::{EnclaveError, EnclaveKey, EphemeralAgreement, LocalKeys, SecureEnclave};
+use keevo_core::{LocalPurpose, Store};
 
 use keevo_core::{
     AccountSecretKey, CoreError, Edit, FieldData, FieldKind, Id128, ItemDoc, ItemType, KdfParams,
@@ -44,6 +50,15 @@ pub enum KeevoError {
     NotFound,
     /// 数据被篡改或损坏。
     Tampered,
+    /// 用户取消了 Touch ID 或认证超时。什么都没有改变，不要提示错误。
+    Cancelled,
+    /// Secure Enclave 暂时不可用（如屏幕锁定）。什么都没有改变，稍后重试；
+    /// 一直如此时可以让用户选择 [`open_vault_reenrolling`]。
+    EnclaveUnavailable,
+    /// 本机没有可用的账户密钥，需要用户从应急包输入，然后调用 [`KeevoVault::unlock`]。
+    SecretKeyRequired,
+    /// Touch ID 未启用或已失效（如指纹变化），改用主密码；解锁成功后自动重新包裹。
+    TouchIdUnavailable,
     /// 输入不合法。
     InvalidInput {
         /// 说明。
@@ -69,6 +84,10 @@ impl fmt::Display for KeevoError {
             Self::AccountExists => f.write_str("account exists"),
             Self::NotFound => f.write_str("not found"),
             Self::Tampered => f.write_str("tampered"),
+            Self::Cancelled => f.write_str("cancelled"),
+            Self::EnclaveUnavailable => f.write_str("secure enclave unavailable"),
+            Self::SecretKeyRequired => f.write_str("secret key required"),
+            Self::TouchIdUnavailable => f.write_str("touch id unavailable"),
             Self::InvalidInput { message } => write!(f, "invalid input: {message}"),
             Self::Internal { message } => write!(f, "internal: {message}"),
         }
@@ -89,11 +108,149 @@ impl From<CoreError> for KeevoError {
             CoreError::AccountExists => Self::AccountExists,
             CoreError::NotFound => Self::NotFound,
             CoreError::Tampered => Self::Tampered,
+            CoreError::Cancelled => Self::Cancelled,
+            CoreError::EnclaveUnavailable => Self::EnclaveUnavailable,
+            CoreError::SecretKeyRequired => Self::SecretKeyRequired,
+            CoreError::TouchIdUnavailable => Self::TouchIdUnavailable,
             other => Self::Internal {
                 message: other.to_string(),
             },
         }
     }
+}
+
+/// Swift 报告的 Secure Enclave 错误（`spec/crypto.md` §8.7"失败与恢复"）。
+#[derive(Debug, uniffi::Error)]
+pub enum EnclaveFailure {
+    /// 用户取消或认证超时。
+    Cancelled,
+    /// 暂时不可用，或无法确定原因。
+    Unavailable,
+    /// 能确定材料本身已失效：blob 无法解析、密钥因指纹变化而失效。
+    Unusable,
+}
+
+impl fmt::Display for EnclaveFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Cancelled => "cancelled",
+            Self::Unavailable => "unavailable",
+            Self::Unusable => "unusable",
+        })
+    }
+}
+
+impl std::error::Error for EnclaveFailure {}
+
+impl From<uniffi::UnexpectedUniFFICallbackError> for EnclaveFailure {
+    fn from(_: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        // 无法确定原因：按暂时不可用处理，什么都不改变
+        Self::Unavailable
+    }
+}
+
+/// 新建的 Secure Enclave 密钥。
+#[derive(uniffi::Record)]
+pub struct EnclaveKeyData {
+    /// 密钥 blob（`dataRepresentation`）。
+    pub blob: Vec<u8>,
+    /// 公钥（`x963Representation`，65 字节）。
+    pub public_key: Vec<u8>,
+}
+
+/// 临时密钥的协商结果。
+#[derive(uniffi::Record)]
+pub struct EphemeralAgreementData {
+    /// 临时公钥（`x963Representation`，65 字节）。
+    pub ephemeral_public: Vec<u8>,
+    /// 协商结果（`SharedSecret` 的原始 32 字节）。
+    pub shared: Vec<u8>,
+}
+
+/// 由 Swift（CryptoKit）实现的 Secure Enclave 操作（`spec/crypto.md` §8.7"分工"）。
+/// `purpose` 是用途字节：0x01 AUK（访问控制要求 `biometryCurrentSet`）、0x02 账户密钥、
+/// 0x03 服务静态私钥、0x04 设备标记。
+#[uniffi::export(with_foreign)]
+pub trait SecureEnclaveProvider: Send + Sync {
+    /// 按用途创建 Secure Enclave P-256 密钥。
+    ///
+    /// # Errors
+    /// 见 [`EnclaveFailure`]。
+    fn create_key(&self, purpose: u8) -> Result<EnclaveKeyData, EnclaveFailure>;
+
+    /// 生成临时 P-256 密钥并与 `public_key` 协商（软件运算）。
+    ///
+    /// # Errors
+    /// 公钥无效时返回 [`EnclaveFailure::Unusable`]。
+    fn agree_ephemeral(
+        &self,
+        public_key: Vec<u8>,
+    ) -> Result<EphemeralAgreementData, EnclaveFailure>;
+
+    /// 用 blob 恢复 Secure Enclave 私钥，与临时公钥协商。用途 0x01 在此弹出 Touch ID。
+    ///
+    /// # Errors
+    /// 见 [`EnclaveFailure`]。
+    fn agree(
+        &self,
+        purpose: u8,
+        key_blob: Vec<u8>,
+        ephemeral_public: Vec<u8>,
+    ) -> Result<Vec<u8>, EnclaveFailure>;
+}
+
+/// 把 Swift 的实现接到核心层的 [`SecureEnclave`] 上。协商结果一到 Rust 就放进会清零的缓冲区。
+struct EnclaveAdapter(Arc<dyn SecureEnclaveProvider>);
+
+const fn enclave_error(e: &EnclaveFailure) -> EnclaveError {
+    match e {
+        EnclaveFailure::Cancelled => EnclaveError::Cancelled,
+        EnclaveFailure::Unavailable => EnclaveError::Unavailable,
+        EnclaveFailure::Unusable => EnclaveError::Unusable,
+    }
+}
+
+impl SecureEnclave for EnclaveAdapter {
+    fn create_key(&self, purpose: LocalPurpose) -> Result<EnclaveKey, EnclaveError> {
+        let key = self
+            .0
+            .create_key(purpose.byte())
+            .map_err(|e| enclave_error(&e))?;
+        Ok(EnclaveKey {
+            blob: key.blob,
+            public_key: key.public_key,
+        })
+    }
+
+    fn agree_ephemeral(&self, public_key: &[u8]) -> Result<EphemeralAgreement, EnclaveError> {
+        let a = self
+            .0
+            .agree_ephemeral(public_key.to_vec())
+            .map_err(|e| enclave_error(&e))?;
+        Ok(EphemeralAgreement {
+            ephemeral_public: a.ephemeral_public,
+            shared: zeroize::Zeroizing::new(a.shared),
+        })
+    }
+
+    fn agree(
+        &self,
+        purpose: LocalPurpose,
+        blob: &[u8],
+        ephemeral_public: &[u8],
+    ) -> Result<zeroize::Zeroizing<Vec<u8>>, EnclaveError> {
+        self.0
+            .agree(purpose.byte(), blob.to_vec(), ephemeral_public.to_vec())
+            .map(zeroize::Zeroizing::new)
+            .map_err(|e| enclave_error(&e))
+    }
+}
+
+fn local_keys(dir: &str, enclave: Arc<dyn SecureEnclaveProvider>) -> Result<LocalKeys, KeevoError> {
+    Ok(LocalKeys::load(
+        Path::new(dir),
+        Arc::new(EnclaveAdapter(enclave)),
+    )?)
 }
 
 /// 新建账户的结果。
@@ -307,14 +464,22 @@ pub struct LoginInput {
     pub url: String,
 }
 
-/// 新建账户：在 `path` 创建数据库、账户与默认保险库。
+/// 新建账户：在 `path` 创建数据库、账户与默认保险库，并把设备标记与账户密钥包裹到
+/// 本机密钥目录 `local_dir`（`spec/crypto.md` §8.7）。之后日常只需主密码。
 ///
 /// # Errors
-/// 已有账户等情况返回对应错误。
+/// 已有账户等情况返回对应错误；Secure Enclave 不可用时返回 [`KeevoError::EnclaveUnavailable`]。
 #[uniffi::export]
-pub fn create_account(path: String, password: String) -> Result<NewAccount, KeevoError> {
+pub fn create_account(
+    path: String,
+    password: String,
+    local_dir: String,
+    enclave: Arc<dyn SecureEnclaveProvider>,
+) -> Result<NewAccount, KeevoError> {
     let params = KdfParams::generate_default().map_err(CoreError::from)?;
-    let (vault, secret_key) = Vault::create(Path::new(&path), &password, params)?;
+    let local = local_keys(&local_dir, enclave)?;
+    let store = Store::open(Path::new(&path)).map_err(CoreError::from)?;
+    let (vault, secret_key) = Vault::create_with_local(store, &password, params, local)?;
     Ok(NewAccount {
         vault: Arc::new(KeevoVault {
             inner: Mutex::new(vault),
@@ -323,14 +488,39 @@ pub fn create_account(path: String, password: String) -> Result<NewAccount, Keev
     })
 }
 
-/// 打开已有的数据库（锁定状态）。
+/// 打开已有的数据库（锁定状态），接入本机密钥目录 `local_dir`。
 ///
 /// # Errors
-/// 没有账户时返回 [`KeevoError::NoAccount`]。
+/// 没有账户时返回 [`KeevoError::NoAccount`]；Secure Enclave 暂时不可用时返回
+/// [`KeevoError::EnclaveUnavailable`]，此时什么都没有改变。
 #[uniffi::export]
-pub fn open_vault(path: String) -> Result<Arc<KeevoVault>, KeevoError> {
+pub fn open_vault(
+    path: String,
+    local_dir: String,
+    enclave: Arc<dyn SecureEnclaveProvider>,
+) -> Result<Arc<KeevoVault>, KeevoError> {
+    let local = local_keys(&local_dir, enclave)?;
+    let store = Store::open(Path::new(&path)).map_err(CoreError::from)?;
     Ok(Arc::new(KeevoVault {
-        inner: Mutex::new(Vault::open(Path::new(&path))?),
+        inner: Mutex::new(Vault::open_with_local(store, local)?),
+    }))
+}
+
+/// 重新登记本机并打开：生成新的设备 ID，丢弃本机的全部包裹，之后需要输入账户密钥。
+/// 只在 [`open_vault`] 一直返回 [`KeevoError::EnclaveUnavailable`]、用户确认之后调用。
+///
+/// # Errors
+/// 同 [`open_vault`]。
+#[uniffi::export]
+pub fn open_vault_reenrolling(
+    path: String,
+    local_dir: String,
+    enclave: Arc<dyn SecureEnclaveProvider>,
+) -> Result<Arc<KeevoVault>, KeevoError> {
+    let local = local_keys(&local_dir, enclave)?;
+    let store = Store::open(Path::new(&path)).map_err(CoreError::from)?;
+    Ok(Arc::new(KeevoVault {
+        inner: Mutex::new(Vault::open_reenrolling_local(store, local)?),
     }))
 }
 
@@ -367,6 +557,49 @@ impl KeevoVault {
                 code: e.code().to_owned(),
             })?;
         Ok(self.vault().unlock(&password, &sk)?)
+    }
+
+    /// 只用主密码解锁：账户密钥取自本机包裹。耗时约 1 秒（Argon2id），请在后台线程调用。
+    ///
+    /// # Errors
+    /// 本机没有可用的账户密钥时返回 [`KeevoError::SecretKeyRequired`]，此时询问账户密钥并调用
+    /// [`KeevoVault::unlock`]；主密码错误返回 [`KeevoError::WrongCredentials`]。
+    pub fn unlock_with_password(&self, password: String) -> Result<(), KeevoError> {
+        Ok(self.vault().unlock_with_password(&password)?)
+    }
+
+    /// 用 Touch ID 解锁。会弹出系统的 Touch ID 提示，请在后台线程调用。
+    ///
+    /// # Errors
+    /// 用户取消返回 [`KeevoError::Cancelled`]；未启用或已失效返回 [`KeevoError::TouchIdUnavailable`]。
+    pub fn unlock_with_touch_id(&self) -> Result<(), KeevoError> {
+        Ok(self.vault().unlock_with_touch_id()?)
+    }
+
+    /// 启用 Touch ID：用户再输入一次主密码。耗时约 1 秒，请在后台线程调用。
+    ///
+    /// # Errors
+    /// 已锁定返回 [`KeevoError::Locked`]；主密码错误返回 [`KeevoError::WrongCredentials`]。
+    pub fn enable_touch_id(&self, password: String) -> Result<(), KeevoError> {
+        Ok(self.vault().enable_touch_id(&password)?)
+    }
+
+    /// 关闭 Touch ID。
+    ///
+    /// # Errors
+    /// 写入失败时返回错误。
+    pub fn disable_touch_id(&self) -> Result<(), KeevoError> {
+        Ok(self.vault().disable_touch_id()?)
+    }
+
+    /// Touch ID 是否已启用且未失效。
+    pub fn touch_id_enabled(&self) -> bool {
+        self.vault().touch_id_enabled()
+    }
+
+    /// 本机是否有可用的账户密钥；没有时解锁界面要询问账户密钥。
+    pub fn has_local_secret_key(&self) -> bool {
+        self.vault().has_local_secret_key()
     }
 
     /// 锁定：清除内存中的全部密钥。
@@ -638,7 +871,7 @@ impl KeevoVault {
         Ok(kdf_info(&self.vault().kdf_params()?))
     }
 
-    /// 用户确认了 `confirmed` 这组 KDF 参数后解锁。参数已不是这一组时返回
+    /// 用户确认了 `confirmed` 这组 KDF 参数后解锁；`secret_key` 为 `None` 时取自本机包裹。参数已不是这一组时返回
     /// [`KeevoError::KdfNeedsConfirmation`]，不执行派生（`spec/crypto.md` §5.3）。
     ///
     /// # Errors
@@ -646,19 +879,26 @@ impl KeevoVault {
     pub fn unlock_confirming_kdf(
         &self,
         password: String,
-        secret_key: String,
+        secret_key: Option<String>,
         confirmed: KdfInfo,
     ) -> Result<(), KeevoError> {
-        let sk =
-            AccountSecretKey::parse(&secret_key).map_err(|e| KeevoError::InvalidSecretKey {
-                code: e.code().to_owned(),
-            })?;
+        let sk = secret_key
+            .map(|s| {
+                AccountSecretKey::parse(&s).map_err(|e| KeevoError::InvalidSecretKey {
+                    code: e.code().to_owned(),
+                })
+            })
+            .transpose()?;
         let mut vault = self.vault();
         let params = vault.kdf_params()?;
         if kdf_info(&params) != confirmed {
             return Err(KeevoError::KdfNeedsConfirmation);
         }
-        Ok(vault.unlock_confirmed_expensive_kdf(&password, &sk, &params)?)
+        match sk {
+            Some(sk) => vault.unlock_confirmed_expensive_kdf(&password, &sk, &params)?,
+            None => vault.unlock_with_password_confirmed(&password, &params)?,
+        }
+        Ok(())
     }
 }
 

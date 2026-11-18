@@ -3,8 +3,9 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use keevo_crypto::{
-    AadContext, AccountKeyset, AccountSecretKey, CryptoError, Id128, KdfParams, ObjectType, Part,
-    SymmetricKey, derive_account_unlock_key, open, seal,
+    AadContext, AccountKeyset, AccountSecretKey, CryptoError, Id128, KdfParams, LocalPurpose,
+    ObjectType, Part, SymmetricKey, derive_account_unlock_key, open, seal, wrap_auk,
+    wrap_device_marker, wrap_secret_key,
 };
 use keevo_format::{
     Conflict, FORMAT_VERSION, FieldData, FieldKind, FieldValue, HeadState, Hlc, HlcClock, ItemDoc,
@@ -13,6 +14,7 @@ use keevo_format::{
 use keevo_store::{AccountRow, ObjectKind, RevisionRow, Store};
 
 use crate::error::{CoreError, Result};
+use crate::local::{LocalKeys, Unwrapped};
 
 const META_DEVICE_ID: &str = "device_id";
 const META_HLC: &str = "hlc_last";
@@ -130,6 +132,12 @@ pub struct Vault {
     session: Option<Session>,
     /// 解锁代次：每次成功解锁加 1。配对等跨越用户确认的操作据此判断"仍是同一次解锁"（`spec/ipc.md` §4.2）。
     unlock_epoch: u64,
+    /// 本机密钥（`spec/crypto.md` §8.7）。测试与开发服务不使用。
+    local: Option<LocalKeys>,
+    /// 本机的账户密钥包裹已失效，用户输入账户密钥解锁后补登。
+    secret_key_broken: bool,
+    /// Touch ID 的包裹已失效，用主密码解锁后重新包裹。
+    touch_id_broken: bool,
 }
 
 impl Vault {
@@ -185,9 +193,108 @@ impl Vault {
                 vault_keys: HashMap::new(),
             }),
             unlock_epoch: 1,
+            local: None,
+            secret_key_broken: false,
+            touch_id_broken: false,
         };
         vault.create_vault(DEFAULT_VAULT_NAME)?;
         Ok((vault, secret_key))
+    }
+
+    /// 新建账户，并把设备标记与账户密钥包裹到本机（`spec/crypto.md` §8.7"登记"）。
+    /// 之后日常只需主密码；返回的账户密钥仍须由用户保存到应急包。
+    ///
+    /// # Errors
+    /// 见 [`Vault::create`]；包裹失败时返回 [`CoreError::EnclaveUnavailable`] 等。
+    pub fn create_with_local(
+        store: Store,
+        password: &str,
+        params: KdfParams,
+        mut local: LocalKeys,
+    ) -> Result<(Self, AccountSecretKey)> {
+        let (mut vault, secret_key) = Self::create_with_store(store, password, params)?;
+        let account_id = vault.session()?.account_id;
+        let device_id = vault.device_id;
+        let mut entries = std::collections::BTreeMap::new();
+        entries.insert(
+            LocalPurpose::DeviceMarker,
+            local.new_entry(LocalPurpose::DeviceMarker, |a| {
+                wrap_device_marker(&device_id, &account_id, a)
+            })?,
+        );
+        entries.insert(
+            LocalPurpose::SecretKey,
+            local.new_entry(LocalPurpose::SecretKey, |a| {
+                wrap_secret_key(&secret_key, &account_id, &device_id, a)
+            })?,
+        );
+        local.commit(entries, |keys, p| {
+            verify_entry(keys, p, &account_id, &device_id)
+        })?;
+        vault.local = Some(local);
+        Ok((vault, secret_key))
+    }
+
+    /// 打开已有的数据库并接入本机密钥，初始为锁定状态。设备 ID 取自本机的设备标记；
+    /// 标记不存在或已失效时生成新的设备 ID 并重新登记（`spec/revisions.md` §8）。
+    ///
+    /// # Errors
+    /// 见 [`Vault::open`]；Secure Enclave 暂时不可用时返回 [`CoreError::EnclaveUnavailable`]，
+    /// 此时什么都没有改变。
+    pub fn open_with_local(store: Store, local: LocalKeys) -> Result<Self> {
+        let mut vault = Self::open_with_store(store)?;
+        vault.attach_local(local, false)?;
+        Ok(vault)
+    }
+
+    /// 重新登记本机并打开：生成新的设备 ID，丢弃本机的全部包裹（`spec/crypto.md` §8.7）。
+    /// 用于 [`Vault::open_with_local`] 一直返回 [`CoreError::EnclaveUnavailable`]、用户主动选择恢复的情形。
+    /// 之后需要从应急包输入账户密钥。
+    ///
+    /// # Errors
+    /// 包裹或写入失败时返回对应错误。
+    pub fn open_reenrolling_local(store: Store, local: LocalKeys) -> Result<Self> {
+        let mut vault = Self::open_with_store(store)?;
+        vault.attach_local(local, true)?;
+        Ok(vault)
+    }
+
+    fn attach_local(&mut self, mut local: LocalKeys, force_new: bool) -> Result<()> {
+        let account = self.store.account()?.ok_or(CoreError::NoAccount)?;
+        let marker = if force_new {
+            Unwrapped::Unusable
+        } else {
+            local.device_marker(&account.id)?
+        };
+        match marker {
+            Unwrapped::Ok(id) => {
+                if id != self.device_id {
+                    self.store.set_meta(META_DEVICE_ID, id.as_bytes())?;
+                    self.device_id = id;
+                }
+                self.secret_key_broken = false;
+            }
+            Unwrapped::Missing | Unwrapped::Unusable => {
+                // 其余包裹绑定旧的设备 ID，随之不可用：新一代只有设备标记
+                let device_id = Id128::random()?;
+                let mut entries = std::collections::BTreeMap::new();
+                entries.insert(
+                    LocalPurpose::DeviceMarker,
+                    local.new_entry(LocalPurpose::DeviceMarker, |a| {
+                        wrap_device_marker(&device_id, &account.id, a)
+                    })?,
+                );
+                local.commit(entries, |keys, p| {
+                    verify_entry(keys, p, &account.id, &device_id)
+                })?;
+                self.store.set_meta(META_DEVICE_ID, device_id.as_bytes())?;
+                self.device_id = device_id;
+                self.secret_key_broken = true;
+            }
+        }
+        self.touch_id_broken = false;
+        self.local = Some(local);
+        Ok(())
     }
 
     /// 打开已有的数据库，初始为锁定状态。
@@ -222,6 +329,9 @@ impl Vault {
             clock: HlcClock::restore(last),
             session: None,
             unlock_epoch: 0,
+            local: None,
+            secret_key_broken: false,
+            touch_id_broken: false,
         })
     }
 
@@ -287,19 +397,26 @@ impl Vault {
             return Err(CoreError::KdfNeedsConfirmation);
         }
         let auk = derive_account_unlock_key(password, secret_key, &account.id, &params)?;
-        let keyset = AccountKeyset::open(
-            &auk,
-            &account.id,
-            account.epoch,
-            &params,
-            &account.keyset_ct,
-        )
-        .map_err(|e| match e {
-            CryptoError::KeyIdMismatch | CryptoError::DecryptionFailed => {
-                CoreError::WrongCredentials
-            }
-            other => CoreError::Crypto(other),
-        })?;
+        self.open_session(&account, &params, &auk)?;
+        self.after_password_unlock(&account.id, secret_key, &auk);
+        Ok(())
+    }
+
+    /// 用 AUK 打开密钥集与各保险库密钥，建立会话。AUK 不对时返回 [`CoreError::WrongCredentials`]。
+    fn open_session(
+        &mut self,
+        account: &AccountRow,
+        params: &KdfParams,
+        auk: &SymmetricKey,
+    ) -> Result<()> {
+        let keyset =
+            AccountKeyset::open(auk, &account.id, account.epoch, params, &account.keyset_ct)
+                .map_err(|e| match e {
+                    CryptoError::KeyIdMismatch | CryptoError::DecryptionFailed => {
+                        CoreError::WrongCredentials
+                    }
+                    other => CoreError::Crypto(other),
+                })?;
 
         let mut vault_keys = HashMap::new();
         for vault_id in self.store.objects(ObjectKind::Vault)? {
@@ -327,6 +444,204 @@ impl Vault {
         });
         self.unlock_epoch = self.unlock_epoch.wrapping_add(1);
         Ok(())
+    }
+
+    /// 主密码解锁成功之后的本机维护：补登失效的账户密钥、重新包裹失效的 Touch ID、清理旧代次。
+    /// 这些都是尽力而为：失败不影响这次解锁，下次解锁再试。
+    fn after_password_unlock(
+        &mut self,
+        account_id: &Id128,
+        secret_key: &AccountSecretKey,
+        auk: &SymmetricKey,
+    ) {
+        let device_id = self.device_id;
+        let Some(local) = self.local.as_mut() else {
+            return;
+        };
+        let mut entries = local.entries();
+        let mut changed = false;
+        if (self.secret_key_broken || !local.has(LocalPurpose::SecretKey))
+            && let Ok(entry) = local.new_entry(LocalPurpose::SecretKey, |a| {
+                wrap_secret_key(secret_key, account_id, &device_id, a)
+            })
+        {
+            entries.insert(LocalPurpose::SecretKey, entry);
+            changed = true;
+        }
+        if self.touch_id_broken
+            && local.has(LocalPurpose::Auk)
+            && let Ok(entry) = local.new_entry(LocalPurpose::Auk, |a| {
+                wrap_auk(auk, account_id, &device_id, a)
+            })
+        {
+            entries.insert(LocalPurpose::Auk, entry);
+            changed = true;
+        }
+        if changed
+            && local
+                .commit(entries, |keys, p| {
+                    verify_entry(keys, p, account_id, &device_id)
+                })
+                .is_ok()
+        {
+            self.secret_key_broken = false;
+            self.touch_id_broken = false;
+        }
+        let _ = local.cleanup();
+    }
+
+    /// 只用主密码解锁：账户密钥取自本机包裹（`spec/crypto.md` §8.7"免输账户密钥解锁"）。
+    ///
+    /// # Errors
+    /// 本机没有可用的账户密钥时返回 [`CoreError::SecretKeyRequired`]，此时改用 [`Vault::unlock`]；
+    /// 其余同 [`Vault::unlock`]。
+    pub fn unlock_with_password(&mut self, password: &str) -> Result<()> {
+        let secret_key = self.local_secret_key()?;
+        self.unlock_inner(password, &secret_key, None)
+    }
+
+    /// 同 [`Vault::unlock_with_password`]，但用户已确认 `confirmed` 这组 KDF 参数（`spec/crypto.md` §5.3）。
+    ///
+    /// # Errors
+    /// 同 [`Vault::unlock_with_password`]。
+    pub fn unlock_with_password_confirmed(
+        &mut self,
+        password: &str,
+        confirmed: &KdfParams,
+    ) -> Result<()> {
+        let secret_key = self.local_secret_key()?;
+        self.unlock_inner(password, &secret_key, Some(confirmed))
+    }
+
+    fn local_secret_key(&mut self) -> Result<AccountSecretKey> {
+        let account = self.store.account()?.ok_or(CoreError::NoAccount)?;
+        let local = self.local.as_ref().ok_or(CoreError::SecretKeyRequired)?;
+        match local.secret_key(&account.id, &self.device_id)? {
+            Unwrapped::Ok(sk) => Ok(sk),
+            Unwrapped::Missing => Err(CoreError::SecretKeyRequired),
+            Unwrapped::Unusable => {
+                self.secret_key_broken = true;
+                Err(CoreError::SecretKeyRequired)
+            }
+        }
+    }
+
+    /// 本机是否有可用的账户密钥包裹（据此决定解锁界面是否询问账户密钥）。
+    #[must_use]
+    pub fn has_local_secret_key(&self) -> bool {
+        !self.secret_key_broken
+            && self
+                .local
+                .as_ref()
+                .is_some_and(|l| l.has(LocalPurpose::SecretKey))
+    }
+
+    /// Touch ID 是否已启用且未失效。
+    #[must_use]
+    pub fn touch_id_enabled(&self) -> bool {
+        !self.touch_id_broken
+            && self
+                .local
+                .as_ref()
+                .is_some_and(|l| l.has(LocalPurpose::Auk))
+    }
+
+    /// 启用 Touch ID：用户再输入一次主密码，确认无误后包裹 AUK（`spec/crypto.md` §8.7）。
+    ///
+    /// # Errors
+    /// 已锁定返回 [`CoreError::Locked`]；主密码错误返回 [`CoreError::WrongCredentials`]；
+    /// 本机没有账户密钥返回 [`CoreError::SecretKeyRequired`]。
+    pub fn enable_touch_id(&mut self, password: &str) -> Result<()> {
+        self.session()?;
+        let account = self.store.account()?.ok_or(CoreError::NoAccount)?;
+        let params = KdfParams::decode(&account.kdf_params)?;
+        let secret_key = self.local_secret_key()?;
+        let auk = derive_account_unlock_key(password, &secret_key, &account.id, &params)?;
+        AccountKeyset::open(
+            &auk,
+            &account.id,
+            account.epoch,
+            &params,
+            &account.keyset_ct,
+        )
+        .map_err(|e| match e {
+            CryptoError::KeyIdMismatch | CryptoError::DecryptionFailed => {
+                CoreError::WrongCredentials
+            }
+            other => CoreError::Crypto(other),
+        })?;
+        let device_id = self.device_id;
+        let local = self.local.as_mut().ok_or(CoreError::SecretKeyRequired)?;
+        let mut entries = local.entries();
+        entries.insert(
+            LocalPurpose::Auk,
+            local.new_entry(LocalPurpose::Auk, |a| {
+                wrap_auk(&auk, &account.id, &device_id, a)
+            })?,
+        );
+        local.commit(entries, |keys, p| {
+            verify_entry(keys, p, &account.id, &device_id)
+        })?;
+        self.touch_id_broken = false;
+        Ok(())
+    }
+
+    /// 关闭 Touch ID：新一代中去掉 AUK 的包裹。
+    ///
+    /// # Errors
+    /// 写入失败时返回对应错误。
+    pub fn disable_touch_id(&mut self) -> Result<()> {
+        let account = self.store.account()?.ok_or(CoreError::NoAccount)?;
+        let device_id = self.device_id;
+        let Some(local) = self.local.as_mut() else {
+            return Ok(());
+        };
+        if !local.has(LocalPurpose::Auk) {
+            return Ok(());
+        }
+        let mut entries = local.entries();
+        entries.remove(&LocalPurpose::Auk);
+        local.commit(entries, |keys, p| {
+            verify_entry(keys, p, &account.id, &device_id)
+        })?;
+        self.touch_id_broken = false;
+        Ok(())
+    }
+
+    /// 用 Touch ID 解锁：Secure Enclave 解开 AUK，直接打开密钥集，不执行 KDF。
+    ///
+    /// # Errors
+    /// 用户取消返回 [`CoreError::Cancelled`]；未启用或已失效返回 [`CoreError::TouchIdUnavailable`]，
+    /// 此时改用主密码，解锁成功后自动重新包裹。
+    pub fn unlock_with_touch_id(&mut self) -> Result<()> {
+        if self.touch_id_broken {
+            return Err(CoreError::TouchIdUnavailable);
+        }
+        let account = self.store.account()?.ok_or(CoreError::NoAccount)?;
+        let params = KdfParams::decode(&account.kdf_params)?;
+        let local = self.local.as_ref().ok_or(CoreError::TouchIdUnavailable)?;
+        let auk = match local.auk(&account.id, &self.device_id)? {
+            Unwrapped::Ok(auk) => auk,
+            Unwrapped::Missing => return Err(CoreError::TouchIdUnavailable),
+            Unwrapped::Unusable => {
+                self.touch_id_broken = true;
+                return Err(CoreError::TouchIdUnavailable);
+            }
+        };
+        match self.open_session(&account, &params, &auk) {
+            Ok(()) => {
+                if let Some(local) = self.local.as_ref() {
+                    let _ = local.cleanup();
+                }
+                Ok(())
+            }
+            Err(CoreError::WrongCredentials) => {
+                // AUK 已不是当前的（例如主密码已更改）
+                self.touch_id_broken = true;
+                Err(CoreError::TouchIdUnavailable)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// 当前的解锁代次；锁定时为 `None`。每次成功解锁都会得到一个新值，因此"锁定后又解锁"不等于同一次解锁。
@@ -1102,6 +1417,24 @@ fn now_ms() -> u64 {
 fn id_from(bytes: &[u8]) -> Result<Id128> {
     let arr: [u8; 16] = bytes.try_into().map_err(|_| CoreError::Tampered)?;
     Ok(Id128::from_bytes(arr))
+}
+
+/// 提交新一代前的验证：不要求用户在场的包裹必须能解开（`spec/crypto.md` §8.7）。
+fn verify_entry(
+    keys: &LocalKeys,
+    purpose: LocalPurpose,
+    account_id: &Id128,
+    device_id: &Id128,
+) -> Result<bool> {
+    Ok(match purpose {
+        LocalPurpose::DeviceMarker => {
+            matches!(keys.device_marker(account_id)?, Unwrapped::Ok(id) if id == *device_id)
+        }
+        LocalPurpose::SecretKey => {
+            matches!(keys.secret_key(account_id, device_id)?, Unwrapped::Ok(_))
+        }
+        LocalPurpose::Auk | LocalPurpose::ServiceStatic => true,
+    })
 }
 
 #[cfg(test)]

@@ -87,7 +87,7 @@ flowchart TD
 | 本地 IPC、局域网配对 | `Noise_XX/IK_25519_ChaChaPoly_SHA256` | — |
 | 随机数 | 操作系统 CSPRNG（`getrandom`） | — |
 | TOTP | HMAC-SHA-1/256/512（RFC 6238） | — |
-| 生物识别包裹 | Secure Enclave P-256 ECDH + HKDF-SHA256 + AES-256-GCM（CryptoKit，密钥以 blob 存成文件） | 访问控制 `privateKeyUsage` + `biometryCurrentSet` |
+| 生物识别包裹 | Secure Enclave P-256 ECDH（CryptoKit，密钥以 blob 存成文件）+ HKDF-SHA256 + XChaCha20-Poly1305（核心层，`spec/crypto.md` §8.7） | 访问控制 `privateKeyUsage` + `biometryCurrentSet` |
 
 **算法敏捷性**：
 - 每个信封都带 `format_version` 与 `alg_id`。
@@ -142,11 +142,12 @@ AAD = fixed_binary_encode(
 
 - **主密码解锁**：2SKD → AUK → 解封密钥集。
 - **Touch ID 解锁**：
-  - 首次用主密码解锁后，生成一把 Secure Enclave P-256 密钥，访问控制为 `biometryCurrentSet`。
+  - 用户启用 Touch ID 时须再输入一次主密码。核心层重新派生 AUK 并确认无误后，生成一把 Secure Enclave P-256 密钥，访问控制为 `biometryCurrentSet`。
   - 用这把密钥包裹 AUK（格式见 `spec/crypto.md` §8.7），Secure Enclave 密钥的 blob 与包裹结果存入数据目录下的文件（0600）。Keevo 不绑定开发者团队，用不了数据保护钥匙串（ADR-0003）。
   - blob 只能由本机的 Secure Enclave 使用，但不绑定应用身份：同用户进程拿到 blob 后可以自己发起 Touch ID 请求，提示文字可以伪造（A7 的残余风险）。
   - 解锁时由 Secure Enclave 解密，必须通过 Touch ID。
-  - 指纹集合一旦变化，Secure Enclave 密钥即失效，必须输入主密码。
+  - 指纹集合一旦变化，Secure Enclave 密钥即失效，必须输入主密码；用主密码解锁成功后自动重新包裹。
+  - AUK 与账户密钥只在核心层（Rust）中出现，Swift 只执行 Secure Enclave 的密钥协商（`spec/crypto.md` §8.7 分工）。
 - **账户密钥**：由不需要用户在场的 Secure Enclave 密钥包裹后存成文件。复制到别的 Mac 上解不开，因此不随备份迁移出可用的密钥；但同用户进程可以在本机无提示地解开它（已实测）。不提供 iCloud 钥匙串同步（需要团队签发的权限）。
 - **Vault Service 的 Noise 静态私钥**：同样包裹存放，同样能被同用户进程在本机取出；取得它可以冒充 Vault Service 与扩展握手（ADR-0003）。
 - **配对记录与站点授权**：存入加密的保险库数据库，而不是包裹文件（`spec/ipc.md` §4.2）。

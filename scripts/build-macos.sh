@@ -25,9 +25,10 @@ cp "$GEN/keevo_ffiFFI.modulemap" "$APP/Sources/keevo_ffiFFI/include/module.modul
 cp "$GEN/keevo_ffi.swift" "$APP/Sources/KeevoKit/Generated/keevo_ffi.swift"
 
 cd "$APP"
-# 只装了 Command Line Tools 时，默认构建系统无法初始化，需使用原生构建系统
+# 只装了 Command Line Tools 时，默认构建系统无法初始化，需使用原生构建系统。
+# 过滤掉弃用警告；构建失败时必须退出，否则后面会运行上一次构建留下的旧二进制。
 KEEVO_RUST_LIB_DIR="$LIB_DIR" swift build --build-system native -c release 2>&1 \
-  | grep -v "has been deprecated" || true
+  | { grep -v "has been deprecated" || true; }
 test -x "$APP/.build/release/Keevo" && test -x "$APP/.build/release/keevo-smoke"
 
 if [[ "${1:-}" == "--smoke" ]]; then

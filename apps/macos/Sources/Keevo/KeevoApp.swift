@@ -24,6 +24,10 @@ struct KeevoApp: App {
                     .keyboardShortcut("l", modifiers: [.command, .shift])
             }
         }
+        Settings {
+            SettingsView().tinted
+                .environment(model)
+        }
     }
 }
 
@@ -43,13 +47,14 @@ struct RootView: View {
     var body: some View {
         switch model.phase {
         case .onboarding: OnboardingView()
+        case .unavailable: EnclaveUnavailableView()
         case .locked: LockView()
         case .unlocked: MainView()
         }
     }
 }
 
-extension RootView {
+extension View {
     /// 全局使用 Keevo 品牌色作为强调色。
     var tinted: some View {
         self.tint(KV.Colors.accentFill)

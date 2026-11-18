@@ -32,6 +32,11 @@ impl AccountSecretKey {
         Self(Zeroizing::new(bytes))
     }
 
+    /// 由已清零保护的原始值构造（本机包裹解包，`spec/crypto.md` §8.7）。
+    pub(crate) const fn from_secret(bytes: Zeroizing<[u8; 16]>) -> Self {
+        Self(bytes)
+    }
+
     pub(crate) fn expose(&self) -> &[u8; 16] {
         &self.0
     }

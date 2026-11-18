@@ -15,6 +15,7 @@ name = "keevo_ffi"
 [dependencies]
 keevo-core = { path = "../keevo-core" }
 uniffi = "0.32"
+zeroize = "1"
 
 [dev-dependencies]
 keevo-format = { path = "../keevo-format" }

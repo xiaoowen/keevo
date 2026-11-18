@@ -32,6 +32,16 @@ pub enum CoreError {
     NotFound,
     /// 数据被篡改或损坏：认证失败，或内容与上下文不符。
     Tampered,
+    /// 用户取消了 Touch ID，或认证超时。什么都没有改变（`spec/crypto.md` §8.7）。
+    Cancelled,
+    /// Secure Enclave 暂时不可用（如屏幕锁定）。什么都没有改变，稍后重试。
+    EnclaveUnavailable,
+    /// 本机没有可用的账户密钥，需要用户从应急包输入。
+    SecretKeyRequired,
+    /// Touch ID 未启用或已失效（如指纹变化），需要用主密码解锁。
+    TouchIdUnavailable,
+    /// 本机密钥文件读写失败。
+    Io(std::io::ErrorKind),
     /// 密码学错误。
     Crypto(CryptoError),
     /// 数据格式错误。
@@ -52,6 +62,11 @@ impl fmt::Display for CoreError {
             Self::AccountExists => f.write_str("account already exists"),
             Self::NotFound => f.write_str("not found"),
             Self::Tampered => f.write_str("data was tampered with or corrupted"),
+            Self::Cancelled => f.write_str("cancelled by the user"),
+            Self::EnclaveUnavailable => f.write_str("secure enclave is temporarily unavailable"),
+            Self::SecretKeyRequired => f.write_str("secret key is required"),
+            Self::TouchIdUnavailable => f.write_str("touch id is not available"),
+            Self::Io(kind) => write!(f, "io: {kind}"),
             Self::Crypto(e) => write!(f, "crypto: {e}"),
             Self::Format(e) => write!(f, "format: {e}"),
             Self::Store(e) => write!(f, "store: {e}"),

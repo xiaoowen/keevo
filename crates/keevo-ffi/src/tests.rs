@@ -229,12 +229,12 @@ fn kdf_confirmation_is_bound_to_params() {
     };
     assert!(matches!(
         f.vault
-            .unlock_confirming_kdf("pw".into(), f.secret_key.clone(), other),
+            .unlock_confirming_kdf("pw".into(), Some(f.secret_key.clone()), other),
         Err(KeevoError::KdfNeedsConfirmation)
     ));
     assert!(!f.vault.is_unlocked(), "确认的不是当前参数，不执行派生");
     f.vault
-        .unlock_confirming_kdf("pw".into(), f.secret_key.clone(), info)
+        .unlock_confirming_kdf("pw".into(), Some(f.secret_key.clone()), info)
         .unwrap();
     assert!(f.vault.is_unlocked());
 }

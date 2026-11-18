@@ -11,6 +11,8 @@ import Observation
 final class AppModel {
     enum Phase {
         case onboarding
+        /// Secure Enclave 暂时不可用，无法打开数据库（spec/crypto.md §8.7）。
+        case unavailable
         case locked
         case unlocked
     }
@@ -23,43 +25,125 @@ final class AppModel {
     private(set) var vaults: [VaultEntry] = []
     private(set) var items: [ItemEntry] = []
 
+    /// 本机没有可用的账户密钥，解锁时需要用户从应急包输入。
+    private(set) var needsSecretKey = false
+    /// Touch ID 已启用且未失效。
+    private(set) var touchIDEnabled = false
+
     private var vault: KeevoVault?
     private let dbPath: String
+    private let localDir: String
+    private let enclave = SecureEnclaveBridge(touchIDReason: "解锁 Keevo")
     private var observers: [NSObjectProtocol] = []
 
     init() {
-        // M0 空壳：存放在 Application Support。M1 改为 App Group 容器（docs/architecture.md §4.3）
+        // 数据目录（ADR-0003）：数据库与本机密钥目录（spec/crypto.md §8.7）
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Keevo-M0", isDirectory: true)
-        try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+            .appendingPathComponent("Keevo", isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: support, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]
+        )
         dbPath = support.appendingPathComponent("vault.sqlite").path
-
-        if FileManager.default.fileExists(atPath: dbPath), let opened = try? openVault(path: dbPath) {
-            vault = opened
-            phase = .locked
+        localDir = support.appendingPathComponent("local", isDirectory: true).path
+        if FileManager.default.fileExists(atPath: dbPath) {
+            open(reenrolling: false)
         }
         observeSystemLockEvents()
+    }
+
+    /// Touch ID 在这台 Mac 上是否可用（登记了指纹）。
+    var touchIDAvailable: Bool { SecureEnclaveBridge.touchIDAvailable }
+
+    // MARK: - 打开
+
+    /// 打开数据库。Secure Enclave 暂时不可用时进入 `.unavailable`，什么都不改变。
+    func open(reenrolling: Bool) {
+        errorMessage = nil
+        do {
+            let opened = reenrolling
+                ? try openVaultReenrolling(path: dbPath, localDir: localDir, enclave: enclave)
+                : try openVault(path: dbPath, localDir: localDir, enclave: enclave)
+            vault = opened
+            refreshLocalState()
+            phase = .locked
+        } catch KeevoError.EnclaveUnavailable {
+            phase = .unavailable
+        } catch {
+            phase = .unavailable
+            report(error)
+        }
     }
 
     // MARK: - 账户
 
     func createAccount(password: String) async {
         await run {
-            let path = self.dbPath
-            let account = try await Task.detached { try KeevoKit.createAccount(path: path, password: password) }.value
+            let (path, localDir, enclave) = (self.dbPath, self.localDir, self.enclave)
+            let account = try await Task.detached {
+                try KeevoKit.createAccount(path: path, password: password, localDir: localDir, enclave: enclave)
+            }.value
             self.vault = account.vault
             self.pendingSecretKey = account.secretKey
+            self.refreshLocalState()
             try self.reload()
             self.phase = .unlocked
         }
     }
 
+    /// 解锁。`secretKey` 为空时只用主密码，账户密钥取自本机包裹。
     func unlock(password: String, secretKey: String) async {
         guard let vault else { return }
+        let manual = secretKey.trimmingCharacters(in: .whitespaces)
         await run {
-            try await Task.detached { try vault.unlock(password: password, secretKey: secretKey) }.value
-            try self.reload()
-            self.phase = .unlocked
+            do {
+                try await Task.detached {
+                    if manual.isEmpty {
+                        try vault.unlockWithPassword(password: password)
+                    } else {
+                        try vault.unlock(password: password, secretKey: manual)
+                    }
+                }.value
+            } catch KeevoError.SecretKeyRequired {
+                self.needsSecretKey = true
+                throw KeevoError.SecretKeyRequired
+            }
+            try self.didUnlock()
+        }
+    }
+
+    /// 用 Touch ID 解锁。用户取消时不显示错误。
+    func unlockWithTouchID() async {
+        guard let vault, touchIDEnabled else { return }
+        await run {
+            do {
+                try await Task.detached { try vault.unlockWithTouchId() }.value
+            } catch KeevoError.Cancelled {
+                return
+            } catch KeevoError.TouchIdUnavailable {
+                self.refreshLocalState()
+                throw KeevoError.TouchIdUnavailable
+            }
+            try self.didUnlock()
+        }
+    }
+
+    /// 启用 Touch ID：需要再输入一次主密码。
+    func enableTouchID(password: String) async -> Bool {
+        guard let vault else { return false }
+        var ok = false
+        await run {
+            try await Task.detached { try vault.enableTouchId(password: password) }.value
+            self.refreshLocalState()
+            ok = true
+        }
+        return ok
+    }
+
+    func disableTouchID() {
+        guard let vault else { return }
+        perform {
+            try vault.disableTouchId()
+            self.refreshLocalState()
         }
     }
 
@@ -71,6 +155,18 @@ final class AppModel {
         pendingSecretKey = nil
         Clipboard.clearIfOwned()
         if vault != nil { phase = .locked }
+    }
+
+    private func didUnlock() throws {
+        refreshLocalState()
+        try reload()
+        phase = .unlocked
+    }
+
+    private func refreshLocalState() {
+        guard let vault else { return }
+        needsSecretKey = !vault.hasLocalSecretKey()
+        touchIDEnabled = vault.touchIdEnabled()
     }
 
     // MARK: - 条目
@@ -144,6 +240,14 @@ final class AppModel {
         switch error {
         case .WrongCredentials:
             return "主密码或账户密钥不正确。"
+        case .SecretKeyRequired:
+            return "这台 Mac 上没有可用的账户密钥（例如数据是从别处恢复的）。请从应急包中输入账户密钥，之后只需主密码。"
+        case .TouchIdUnavailable:
+            return "Touch ID 已失效（例如指纹有变化）。请输入主密码解锁，Touch ID 会随后自动恢复。"
+        case .EnclaveUnavailable:
+            return "Secure Enclave 暂时不可用，请稍后重试。"
+        case .Cancelled:
+            return "已取消。"
         case .InvalidSecretKey(let code) where code == "checksum_mismatch":
             return "账户密钥校验失败，请检查是否有输错的字符。"
         case .InvalidSecretKey:

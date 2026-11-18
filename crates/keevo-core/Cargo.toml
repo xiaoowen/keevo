@@ -13,6 +13,7 @@ keevo-crypto = { path = "../keevo-crypto" }
 keevo-format = { path = "../keevo-format" }
 keevo-store = { path = "../keevo-store" }
 url = "2"
+zeroize = "1"
 
 [dev-dependencies]
 keevo-store = { path = "../keevo-store", features = ["test-util"] }

@@ -60,9 +60,11 @@ struct LockView: View {
             Text("Keevo 已锁定").font(.title2.weight(.semibold))
             Form {
                 SecureField("主密码", text: $password)
-                // M0 需要手动输入；M1 从钥匙串读取，并支持 Touch ID
-                TextField("账户密钥（K1-…）", text: $secretKey)
-                    .font(.body.monospaced())
+                // 账户密钥平时取自本机的 Secure Enclave 包裹；只有本机没有可用的包裹时才询问
+                if model.needsSecretKey {
+                    TextField("账户密钥（K1-…，见应急包）", text: $secretKey)
+                        .font(.body.monospaced())
+                }
             }
             .formStyle(.grouped)
             .frame(width: 420)
@@ -71,7 +73,15 @@ struct LockView: View {
                     Task { await model.unlock(password: password, secretKey: secretKey) }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(password.isEmpty || secretKey.isEmpty || model.busy)
+                .disabled(password.isEmpty || (model.needsSecretKey && secretKey.isEmpty) || model.busy)
+                if model.touchIDEnabled {
+                    Button {
+                        Task { await model.unlockWithTouchID() }
+                    } label: {
+                        Label("使用 Touch ID", systemImage: "touchid")
+                    }
+                    .disabled(model.busy)
+                }
                 if model.busy { ProgressView().controlSize(.small) }
             }
             ErrorText()
@@ -79,6 +89,39 @@ struct LockView: View {
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: model.phase) { password = ""; secretKey = "" }
+    }
+}
+
+/// Secure Enclave 暂时不可用，无法打开数据库（spec/crypto.md §8.7"暂时不可用也不是失败"）。
+struct EnclaveUnavailableView: View {
+    @Environment(AppModel.self) private var model
+    @ViewState private var confirmReenroll = false
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "exclamationmark.lock")
+                .font(.system(size: 44))
+                .foregroundStyle(.secondary)
+            Text("暂时无法打开 Keevo").font(.title2.weight(.semibold))
+            Text("这台 Mac 的 Secure Enclave 暂时不可用，Keevo 没有做任何改动。请确认屏幕已解锁，然后重试。")
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 440)
+            HStack {
+                Button("重试") { model.open(reenrolling: false) }
+                    .keyboardShortcut(.defaultAction)
+                Button("重新登记这台 Mac…") { confirmReenroll = true }
+            }
+            ErrorText()
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .confirmationDialog("重新登记这台 Mac？", isPresented: $confirmReenroll) {
+            Button("重新登记") { model.open(reenrolling: true) }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("Keevo 会丢弃这台 Mac 上保存的账户密钥与 Touch ID 设置。保险库中的数据不受影响，但下次解锁需要从应急包输入账户密钥。")
+        }
     }
 }
 

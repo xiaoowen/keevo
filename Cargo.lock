@@ -797,6 +797,7 @@ dependencies = [
  "keevo-store",
  "rusqlite",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -824,6 +825,7 @@ dependencies = [
  "keevo-core",
  "keevo-format",
  "uniffi",
+ "zeroize",
 ]
 
 [[package]]

@@ -60,3 +60,9 @@ path = "fuzz_targets/ipc_service_frames.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "local_wrap_open"
+path = "fuzz_targets/local_wrap_open.rs"
+test = false
+doc = false

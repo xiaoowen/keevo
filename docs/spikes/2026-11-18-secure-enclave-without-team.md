@@ -33,3 +33,26 @@
 | 其他进程拿到 blob 后能否使用该 SE 密钥 | 本次未测 | **第二轮模型评审已实测：能**。另一个代码标识、cdhash 都不同的临时签名程序，只凭 blob 文件就无提示地解包。见 ADR-0003 与 `spec/crypto.md` §8.7 的保护范围 |
 | 临时签名 + Hardened Runtime 的应用能否正常启动、加载静态链接的 Rust 核心 | 本次只测了命令行程序。第二轮评审实测：这种程序能加载 Apple 系统库，另一个临时签名的 dylib 被 Library Validation 拒绝 | M1.1 验证完整应用 |
 | 未公证的应用下载后首次打开的流程 | 需要从网络下载、带隔离属性的安装包 | M3 定稿安装说明前验证 |
+
+## 补充：错误分类实测（M1.1，2026-11-18）
+
+为本机密钥包裹（`spec/crypto.md` §8.7）区分"取消、暂时不可用、失效"三类错误，在同一台 Mac 上测量 CryptoKit 的实际报错。程序为临时编译的命令行工具，结论已用于 `apps/macos/Sources/KeevoKit/SecureEnclaveBridge.swift`。
+
+| 情形 | 报错的位置 | 错误 | 分类 |
+|---|---|---|---|
+| blob 中间改动一个字节 | 恢复私钥时不报错；协商时报错 | CryptoTokenKit `-3`（`corruptedData`），"unable to compute shared secret"，附带 `AKSError` | 失效 |
+| blob 被截断、随机字节 | 恢复私钥时 | CryptoTokenKit `-3`，"corrupted objectID detected" | 失效 |
+| 临时公钥不在曲线上、或为压缩格式 | 解析公钥时 | `CryptoKitError.incorrectParameterSize` / `.invalidParameter` | 失效 |
+| 需要用户在场的密钥，用禁止交互的认证上下文协商 | 协商时 | LocalAuthentication `-1004`（`notInteractive`） | 暂时不可用 |
+| 未登记指纹时创建 `biometryCurrentSet` 密钥 | 创建时 | LocalAuthentication `-1000`；`canEvaluatePolicy` 报告 `-7`（`biometryNotEnrolled`） | 暂时不可用（创建失败不涉及已有材料） |
+
+用真实的 Secure Enclave 跑冒烟测试（`scripts/build-macos.sh --smoke`）：账户密钥与设备标记的 blob 被改动后，Keevo 分别按"要求账户密钥"与"重新登记本机"处理，没有误判为暂时不可用。
+
+**仍需验证**（与 Touch ID 一起，在登记了指纹的 Mac 上进行）：
+
+| 项目 | 风险 | 当前处理 |
+|---|---|---|
+| 锁屏期间使用 `WhenUnlockedThisDeviceOnly` 的密钥报什么错 | 如果也是 CryptoTokenKit `-3`，锁屏时打开数据库会被误判为设备标记失效，进而换掉设备 ID（可用应急包恢复） | 打开数据库发生在登录之后、应用启动时，锁屏期间通常不会发生。验证后按实际错误码细分 |
+| 指纹变化后使用 `biometryCurrentSet` 密钥报什么错 | 如果报 `authenticationFailed`，会被当作"取消"，Touch ID 一直提示却不会进入"失效后恢复" | 用途 0x01 中无法确定的错误按失效处理；`authenticationFailed` 目前按取消处理，验证后调整 |
+| Touch ID 提示中的原因文字 | — | 使用 `LAContext.localizedReason` |
+
