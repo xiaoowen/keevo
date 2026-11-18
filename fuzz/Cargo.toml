@@ -11,6 +11,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+keevo-core = { path = "../crates/keevo-core" }
 keevo-crypto = { path = "../crates/keevo-crypto" }
 keevo-format = { path = "../crates/keevo-format" }
 keevo-ipc = { path = "../crates/keevo-ipc" }
@@ -64,5 +65,11 @@ bench = false
 [[bin]]
 name = "local_wrap_open"
 path = "fuzz_targets/local_wrap_open.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "otp_parse"
+path = "fuzz_targets/otp_parse.rs"
 test = false
 doc = false

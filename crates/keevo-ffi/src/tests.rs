@@ -336,3 +336,50 @@ fn lock_wipes_issued_secrets() {
     assert!(password.value.is_empty());
     assert!(!password.value.equals("hunter2".into()));
 }
+
+/// 一次性密码：添加前解析预览（不含密钥）；按字段取验证码，锁定后句柄清零。
+#[test]
+fn otp_fields() {
+    let info = parse_otp(
+        "otpauth://totp/GitHub:octocat?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&algorithm=SHA256&digits=8&period=60".into(),
+    )
+    .unwrap();
+    assert_eq!(info.issuer.as_deref(), Some("GitHub"));
+    assert_eq!(info.account.as_deref(), Some("octocat"));
+    assert_eq!(
+        (info.algorithm.as_str(), info.digits, info.period),
+        ("SHA256", 8, 60)
+    );
+    assert!(matches!(
+        parse_otp("nope!".into()),
+        Err(KeevoError::InvalidOtp)
+    ));
+
+    let f = Fixture::new();
+    let id = f.login("GitHub");
+    f.vault
+        .update_item(
+            id.clone(),
+            vec![ItemEdit::AddField {
+                kind: "totp".into(),
+                label: "一次性密码".into(),
+                purpose: Some("otp".into()),
+                value: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ".into(),
+            }],
+        )
+        .unwrap();
+    let detail = f.vault.item(id.clone()).unwrap();
+    let field = detail.fields.iter().find(|x| x.kind == "totp").unwrap();
+    let code = f.vault.otp_code(id.clone(), field.id.clone()).unwrap();
+    assert_eq!(code.code.expose().len(), 6);
+    assert!(code.code.expose().bytes().all(|b| b.is_ascii_digit()));
+    assert_eq!(code.period, 30);
+    assert!(code.remaining_ms <= 30_000 && code.remaining_ms > 0);
+    let user = detail.fields.iter().find(|x| x.kind == "text").unwrap();
+    assert!(matches!(
+        f.vault.otp_code(id, user.id.clone()),
+        Err(KeevoError::InvalidOtp)
+    ));
+    f.vault.lock();
+    assert!(code.code.is_empty(), "锁定后验证码句柄清零");
+}

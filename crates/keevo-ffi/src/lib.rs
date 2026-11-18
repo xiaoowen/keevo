@@ -65,6 +65,8 @@ pub enum KeevoError {
     TouchIdUnavailable,
     /// Touch ID 未能识别指纹。连续 3 次后必须输入主密码。
     AuthenticationFailed,
+    /// 一次性密码的配置不合法（不是 `otpauth://totp/` URI 或 Base32 密钥，或参数超出范围）。
+    InvalidOtp,
     /// 输入不合法。
     InvalidInput {
         /// 说明。
@@ -95,6 +97,7 @@ impl fmt::Display for KeevoError {
             Self::SecretKeyRequired => f.write_str("secret key required"),
             Self::TouchIdUnavailable => f.write_str("touch id unavailable"),
             Self::AuthenticationFailed => f.write_str("touch id authentication failed"),
+            Self::InvalidOtp => f.write_str("invalid one-time password"),
             Self::InvalidInput { message } => write!(f, "invalid input: {message}"),
             Self::Internal { message } => write!(f, "internal: {message}"),
         }
@@ -120,6 +123,7 @@ impl From<CoreError> for KeevoError {
             CoreError::SecretKeyRequired => Self::SecretKeyRequired,
             CoreError::TouchIdUnavailable => Self::TouchIdUnavailable,
             CoreError::AuthenticationFailed => Self::AuthenticationFailed,
+            CoreError::InvalidOtp => Self::InvalidOtp,
             CoreError::OutOfRange => Self::InvalidInput {
                 message: "out of range".into(),
             },
@@ -377,6 +381,54 @@ impl SecretValue {
         let other = Zeroizing::new(other);
         self.with(|s| s == other.as_str())
     }
+}
+
+/// 一次性密码的配置（不含密钥），用于添加时预览与校验。
+#[derive(uniffi::Record)]
+pub struct OtpInfo {
+    /// 发行方。
+    pub issuer: Option<String>,
+    /// 账户名。
+    pub account: Option<String>,
+    /// 哈希：`SHA1`、`SHA256`、`SHA512`。
+    pub algorithm: String,
+    /// 位数。
+    pub digits: u32,
+    /// 周期（秒）。
+    pub period: u32,
+}
+
+/// 某一时刻的验证码。
+#[derive(uniffi::Record)]
+pub struct OtpCodeEntry {
+    /// 验证码。
+    pub code: Arc<SecretValue>,
+    /// 周期（秒）。
+    pub period: u32,
+    /// 距失效还有多少毫秒。
+    pub remaining_ms: u64,
+}
+
+/// 解析 `otpauth://totp/…` URI 或 Base32 密钥，返回不含密钥的配置。用于添加一次性密码前校验输入。
+///
+/// # Errors
+/// 不合法时返回 [`KeevoError::InvalidOtp`]。
+#[uniffi::export]
+pub fn parse_otp(text: String) -> Result<OtpInfo, KeevoError> {
+    let text = Zeroizing::new(text);
+    let c = keevo_core::otp::OtpConfig::parse(&text)?;
+    Ok(OtpInfo {
+        issuer: c.issuer.clone(),
+        account: c.account.clone(),
+        algorithm: match c.algorithm {
+            keevo_core::OtpAlgorithm::Sha1 => "SHA1",
+            keevo_core::OtpAlgorithm::Sha256 => "SHA256",
+            keevo_core::OtpAlgorithm::Sha512 => "SHA512",
+        }
+        .to_owned(),
+        digits: c.digits,
+        period: c.period,
+    })
 }
 
 /// 新建账户的结果。
@@ -920,6 +972,25 @@ impl KeevoVault {
     /// 已锁定或条目不存在时返回对应错误。
     pub fn purge_item(&self, item_id: String) -> Result<(), KeevoError> {
         Ok(self.vault().purge_item(parse_id(&item_id)?)?)
+    }
+
+    /// 一次性密码字段此刻的验证码。界面按 `remaining_ms` 在到期时重新获取。
+    ///
+    /// # Errors
+    /// 字段不存在返回 [`KeevoError::NotFound`]；不是一次性密码字段或配置不合法返回 [`KeevoError::InvalidOtp`]。
+    pub fn otp_code(&self, item_id: String, field_id: String) -> Result<OtpCodeEntry, KeevoError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+            .unwrap_or(0);
+        let code = self
+            .vault()
+            .otp_code(parse_id(&item_id)?, parse_id(&field_id)?, now)?;
+        Ok(OtpCodeEntry {
+            code: self.secrets.issue(code.code),
+            period: code.period,
+            remaining_ms: code.remaining_ms,
+        })
     }
 
     /// 条目的历史，从新到旧。

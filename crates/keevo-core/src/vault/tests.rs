@@ -614,3 +614,51 @@ fn history_and_restore_version() {
         "修订不属于该条目"
     );
 }
+
+/// 一次性密码字段：按字段取验证码；不是一次性密码字段、配置不合法、字段不存在各有错误码。
+#[test]
+fn otp_code_of_field() {
+    let (mut vault, _) =
+        Vault::create_with_store(Store::open_in_memory().unwrap(), "pw", fast_params()).unwrap();
+    let vault_id = vault.vaults().unwrap()[0].id;
+    let otp = |label: &str, text: &str| NewField {
+        kind: FieldKind::Totp,
+        label: label.into(),
+        purpose: Some(Purpose::Otp),
+        data: FieldData::Text(text.into()),
+    };
+    let id = vault
+        .create_item(
+            vault_id,
+            ItemType::TwoFactor,
+            "GitHub",
+            vec![
+                otp("验证码", "otpauth://totp/GitHub:octocat?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&digits=8"),
+                otp("坏的", "not base32!"),
+            ],
+        )
+        .unwrap();
+    let doc = vault.item(id).unwrap().doc;
+    let field_id = |label: &str| {
+        doc.records
+            .iter()
+            .find_map(|(k, v)| match (k, &v.value) {
+                (RecordKey::Field(fid), Some(RecordValue::Field(f))) if f.label == label => {
+                    Some(*fid)
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let code = vault.otp_code(id, field_id("验证码"), 59_000).unwrap();
+    assert_eq!(code.code.as_str(), "94287082");
+    assert_eq!(code.remaining_ms, 1_000);
+    assert_eq!(
+        vault.otp_code(id, field_id("坏的"), 0).err(),
+        Some(CoreError::InvalidOtp)
+    );
+    assert_eq!(
+        vault.otp_code(id, Id128::random().unwrap(), 0).err(),
+        Some(CoreError::NotFound)
+    );
+}

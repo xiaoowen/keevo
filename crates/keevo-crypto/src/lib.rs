@@ -32,6 +32,7 @@ mod noise;
 mod padding;
 mod random;
 mod secret_key;
+mod totp;
 mod two_skd;
 
 #[cfg(test)]
@@ -58,6 +59,7 @@ pub use noise::{
     pairing_nonce,
 };
 pub use secret_key::AccountSecretKey;
+pub use totp::{MAX_OTP_SECRET_LEN, OTP_DIGITS, OtpAlgorithm, OtpKey};
 pub use two_skd::{MAX_PASSWORD_LEN, derive_account_unlock_key};
 
 /// 解密后的明文。离开作用域时自动清零整个缓冲区（包括未使用的容量）。

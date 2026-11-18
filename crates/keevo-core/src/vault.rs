@@ -1256,6 +1256,28 @@ impl Vault {
         })
     }
 
+    /// 条目中一次性密码字段（`totp`）在 Unix 毫秒 `unix_ms` 时的验证码（`docs/product.md` §5.4）。
+    ///
+    /// # Errors
+    /// 字段不存在返回 [`CoreError::NotFound`]；不是一次性密码字段或配置不合法返回 [`CoreError::InvalidOtp`]。
+    pub fn otp_code(
+        &self,
+        item_id: Id128,
+        field_id: Id128,
+        unix_ms: u64,
+    ) -> Result<crate::otp::OtpCode> {
+        let view = self.item(item_id)?;
+        match view.doc.get(&RecordKey::Field(field_id)) {
+            Some(RecordValue::Field(f)) => match (&f.kind, &f.data) {
+                (FieldKind::Totp, FieldData::Text(text)) => {
+                    crate::otp::OtpConfig::parse(text.expose())?.code_at(unix_ms)
+                }
+                _ => Err(CoreError::InvalidOtp),
+            },
+            _ => Err(CoreError::NotFound),
+        }
+    }
+
     /// 条目的历史修订数（含已清理内容的修订）。
     ///
     /// # Errors
