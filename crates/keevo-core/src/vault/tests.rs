@@ -483,3 +483,79 @@ fn review3_h2_item_beyond_key_limit_must_be_rebuilt() {
         .update_item(new_id, vec![Edit::SetFavorite(true)])
         .unwrap();
 }
+
+/// 第四轮评审 J2：头多于单个墓碑的父修订上限时，分批写墓碑，最后只剩一个头。
+#[test]
+fn review4_j2_tombstones_are_batched() {
+    let heads: Vec<Id128> = (0..10u8).map(|i| Id128::from_bytes([i; 16])).collect();
+    let mut n = 100u8;
+    let plan = tombstone_plan(heads.clone(), 3, || {
+        n += 1;
+        Ok(Id128::from_bytes([n; 16]))
+    })
+    .unwrap();
+    assert!(plan.iter().all(|(_, parents)| parents.len() <= 3));
+    let mut covered: Vec<Id128> = plan.iter().flat_map(|(_, p)| p.clone()).collect();
+    covered.sort();
+    let mut expected = heads;
+    expected.extend(plan.iter().take(plan.len() - 1).map(|(id, _)| *id));
+    expected.sort();
+    assert_eq!(covered, expected, "每个头与每个中间墓碑恰好被覆盖一次");
+    assert_eq!(plan.len(), 4 + 2 + 1);
+    let single = tombstone_plan(vec![Id128::from_bytes([1; 16])], 3, || {
+        Ok(Id128::from_bytes([9; 16]))
+    })
+    .unwrap();
+    assert_eq!(single.len(), 1);
+}
+
+/// 第四轮评审 J2：重建是原子的。永久删除旧条目失败时，新条目也不会留下。
+#[test]
+fn review4_j2_failed_rebuild_leaves_nothing() {
+    let (mut vault, _) =
+        Vault::create_with_store(Store::open_in_memory().unwrap(), "pw", fast_params()).unwrap();
+    let vault_id = vault.vaults().unwrap()[0].id;
+    let id = vault
+        .create_item(vault_id, ItemType::Login, "t", vec![])
+        .unwrap();
+    let before = vault.items().unwrap().len();
+    vault
+        .store
+        .execute_for_tests(
+            "CREATE TRIGGER no_tombstones BEFORE INSERT ON revision WHEN NEW.deleted = 1
+             BEGIN SELECT RAISE(ABORT, 'injected'); END",
+        )
+        .unwrap();
+    assert!(vault.rebuild_item(id, &[]).is_err());
+    assert_eq!(
+        vault.items().unwrap().len(),
+        before,
+        "失败的重建不应留下副本"
+    );
+    vault
+        .store
+        .execute_for_tests("DROP TRIGGER no_tombstones")
+        .unwrap();
+    let new_id = vault.rebuild_item(id, &[]).unwrap();
+    assert_eq!(vault.items().unwrap().len(), before);
+    assert_eq!(vault.item(new_id).unwrap().doc.overview().title, "t");
+}
+
+/// 第四轮评审 J3：非法的标签名在写入前被拒绝，条目仍可正常读取。
+#[test]
+fn review4_j3_invalid_tag_is_rejected_before_writing() {
+    let (mut vault, _) =
+        Vault::create_with_store(Store::open_in_memory().unwrap(), "pw", fast_params()).unwrap();
+    let vault_id = vault.vaults().unwrap()[0].id;
+    let id = vault
+        .create_item(vault_id, ItemType::Login, "t", vec![])
+        .unwrap();
+    assert_eq!(
+        vault
+            .update_item(id, vec![Edit::AddTag(String::new())])
+            .err(),
+        Some(CoreError::Format(keevo_format::FormatError::InvalidKey))
+    );
+    assert_eq!(vault.revision_count(id).unwrap(), 1, "什么都没有写入");
+    assert_eq!(vault.item(id).unwrap().doc.overview().title, "t");
+}

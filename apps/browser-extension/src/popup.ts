@@ -53,6 +53,8 @@ const ERRORS: Record<string, string> = {
   pairing_rejected: "配对已被拒绝或超时。",
   pairing_limited: "Keevo 正在处理另一个配对，或配对尝试过于频繁，请稍后再试。",
   locked: "Keevo 已锁定。请先在 Keevo 中解锁，再配对或填充。",
+  not_authorized: "这次填充没有得到授权。",
+  response_too_large: "这个条目的内容太长，无法自动填充。请在 Keevo 中复制。",
   bad_request: "通信出错，请重试。",
   protocol: "通信出错，请重试。",
 };

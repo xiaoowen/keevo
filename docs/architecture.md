@@ -109,7 +109,7 @@ flowchart LR
 | IPC socket | `…/ipc/`（目录权限 0700） |
 | 账户密钥 | Secure Enclave 密钥包裹后存成文件（`…/keys/`，0600），只能在本机解开 |
 | Touch ID 解锁材料 | 需要用户在场的 Secure Enclave 密钥包裹 AUK，存成文件 |
-| Vault Service 的 Noise 静态私钥 | Secure Enclave 密钥包裹后存成文件（`spec/crypto.md` §8.6） |
+| Vault Service 的 Noise 静态私钥 | Secure Enclave 密钥包裹后存成文件（`spec/crypto.md` §8.7） |
 | 浏览器配对记录与站点授权 | 加密的保险库数据库，解锁时读入内存（`spec/ipc.md` §4.2） |
 | 设备签名密钥（M2） | Secure Enclave，不可导出，仅限本机 |
 | iCloud 同步数据（M2） | `iCloud 云盘/Keevo/`（`~/Library/Mobile Documents/com~apple~CloudDocs/Keevo/`），只有密文 |

@@ -42,33 +42,40 @@ let password = "主密码 correct horse battery"
 
 print("Keevo 冒烟测试（Swift → UniFFI → Rust）")
 
-let created = try createAccount(path: db, password: password)
-let vault = created.vault
-check(vault.isUnlocked(), "创建账户后处于解锁状态")
-check(created.secretKey.hasPrefix("K1-") && created.secretKey.count == 34, "账户密钥为 K1- 显示格式")
+// 第一阶段放在单独的作用域里：离开作用域时第一个实例被释放。同一数据库同时只能有一个打开者
+// （spec/revisions.md §7.2），重新打开之前必须先关闭。
+let secretKey: String
+let itemId: String
+do {
+    let created = try createAccount(path: db, password: password)
+    let vault = created.vault
+    check(vault.isUnlocked(), "创建账户后处于解锁状态")
+    check(created.secretKey.hasPrefix("K1-") && created.secretKey.count == 34, "账户密钥为 K1- 显示格式")
 
-let personal = try vault.vaults()
-check(personal.count == 1 && personal[0].name == "个人", "默认保险库为「个人」")
+    let personal = try vault.vaults()
+    check(personal.count == 1 && personal[0].name == "个人", "默认保险库为「个人」")
 
-let itemId = try vault.createLogin(
-    vaultId: personal[0].id,
-    input: LoginInput(title: "GitHub", username: "octocat", password: "s3cret-🔐", url: "https://github.com")
-)
+    itemId = try vault.createLogin(
+        vaultId: personal[0].id,
+        input: LoginInput(title: "GitHub", username: "octocat", password: "s3cret-🔐", url: "https://github.com")
+    )
 
-vault.lock()
-check(!vault.isUnlocked(), "锁定后处于锁定状态")
-expectError("锁定后无法读取条目", { _ = try vault.items() }) { if case .Locked = $0 { return true }; return false }
-expectError("错误的主密码无法解锁", { try vault.unlock(password: "wrong", secretKey: created.secretKey) }) {
-    if case .WrongCredentials = $0 { return true }; return false
-}
-expectError("格式错误的账户密钥被识别", { try vault.unlock(password: password, secretKey: "K1-0000") }) {
-    if case .InvalidSecretKey(let code) = $0 { return code == "wrong_length" }; return false
+    vault.lock()
+    check(!vault.isUnlocked(), "锁定后处于锁定状态")
+    expectError("锁定后无法读取条目", { _ = try vault.items() }) { if case .Locked = $0 { return true }; return false }
+    expectError("错误的主密码无法解锁", { try vault.unlock(password: "wrong", secretKey: created.secretKey) }) {
+        if case .WrongCredentials = $0 { return true }; return false
+    }
+    expectError("格式错误的账户密钥被识别", { try vault.unlock(password: password, secretKey: "K1-0000") }) {
+        if case .InvalidSecretKey(let code) = $0 { return code == "wrong_length" }; return false
+    }
+    secretKey = created.secretKey
 }
 
 // 模拟应用重启：重新打开数据库文件，并用小写形式输入账户密钥
 let reopened = try openVault(path: db)
 check(!reopened.isUnlocked(), "重新打开后处于锁定状态")
-try reopened.unlock(password: password, secretKey: created.secretKey.lowercased())
+try reopened.unlock(password: password, secretKey: secretKey.lowercased())
 check(reopened.isUnlocked(), "用主密码与账户密钥解锁")
 
 let items = try reopened.items()

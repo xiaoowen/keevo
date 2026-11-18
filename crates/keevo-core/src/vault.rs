@@ -113,6 +113,8 @@ pub struct Vault {
     device_id: Id128,
     clock: HlcClock,
     session: Option<Session>,
+    /// 解锁代次：每次成功解锁加 1。配对等跨越用户确认的操作据此判断"仍是同一次解锁"（`spec/ipc.md` §4.2）。
+    unlock_epoch: u64,
 }
 
 impl Vault {
@@ -167,6 +169,7 @@ impl Vault {
                 keyset,
                 vault_keys: HashMap::new(),
             }),
+            unlock_epoch: 1,
         };
         vault.create_vault(DEFAULT_VAULT_NAME)?;
         Ok((vault, secret_key))
@@ -203,6 +206,7 @@ impl Vault {
             device_id,
             clock: HlcClock::restore(last),
             session: None,
+            unlock_epoch: 0,
         })
     }
 
@@ -306,7 +310,18 @@ impl Vault {
             keyset,
             vault_keys,
         });
+        self.unlock_epoch = self.unlock_epoch.wrapping_add(1);
         Ok(())
+    }
+
+    /// 当前的解锁代次；锁定时为 `None`。每次成功解锁都会得到一个新值，因此"锁定后又解锁"不等于同一次解锁。
+    #[must_use]
+    pub const fn unlock_epoch(&self) -> Option<u64> {
+        if self.session.is_some() {
+            Some(self.unlock_epoch)
+        } else {
+            None
+        }
     }
 
     /// 锁定：清除内存中的全部密钥。
@@ -613,21 +628,12 @@ impl Vault {
     pub fn purge_item(&mut self, item_id: Id128) -> Result<()> {
         let view = self.item(item_id)?;
         let heads = self.store.heads(&item_id)?;
-        let rev_id = Id128::random()?;
-        self.store.insert_revision(&RevisionRow {
-            rev_id,
-            object_id: item_id,
-            kind: ObjectKind::Item,
-            vault_id: view.vault_id,
-            parents: heads.iter().map(|h| h.rev_id).collect(),
-            origin_device: self.device_id,
-            origin_seq: None,
-            wrapped_key_ct: None,
-            overview_ct: None,
-            details_ct: None,
-            deleted: true,
-            pruned: false,
-        })?;
+        let rows = self.tombstone_rows(
+            view.vault_id,
+            item_id,
+            heads.iter().map(|h| h.rev_id).collect(),
+        )?;
+        self.store.insert_revisions(&rows)?;
         Ok(())
     }
 
@@ -652,8 +658,22 @@ impl Vault {
             }
         }
         let ik = SymmetricKey::generate()?;
-        self.write_item_revision(view.vault_id, new_id, rev_id, Vec::new(), &ik, Some(&doc))?;
-        self.purge_item(item_id)?;
+        // 新条目与旧条目的墓碑在一个事务中写入：要么都成功，要么都不发生（第四轮评审 J2）
+        let mut rows = vec![self.item_revision_row(
+            view.vault_id,
+            new_id,
+            rev_id,
+            Vec::new(),
+            &ik,
+            Some(&doc),
+        )?];
+        let heads = self.store.heads(&item_id)?;
+        rows.extend(self.tombstone_rows(
+            view.vault_id,
+            item_id,
+            heads.iter().map(|h| h.rev_id).collect(),
+        )?);
+        self.store.insert_revisions(&rows)?;
         Ok(new_id)
     }
 
@@ -738,6 +758,21 @@ impl Vault {
         ik: &SymmetricKey,
         doc: Option<&ItemDoc>,
     ) -> Result<()> {
+        let row = self.item_revision_row(vault_id, item_id, rev_id, parents, ik, doc)?;
+        self.store.insert_revision(&row)?;
+        Ok(())
+    }
+
+    /// 构造一个条目修订（加密），但不写入。
+    fn item_revision_row(
+        &self,
+        vault_id: Id128,
+        item_id: Id128,
+        rev_id: Id128,
+        parents: Vec<Id128>,
+        ik: &SymmetricKey,
+        doc: Option<&ItemDoc>,
+    ) -> Result<RevisionRow> {
         let session = self.session()?;
         let vk = session
             .vault_keys
@@ -784,7 +819,7 @@ impl Vault {
             ),
             None => (None, None, None),
         };
-        self.store.insert_revision(&RevisionRow {
+        Ok(RevisionRow {
             rev_id,
             object_id: item_id,
             kind: ObjectKind::Item,
@@ -797,8 +832,36 @@ impl Vault {
             details_ct: details,
             deleted: doc.is_none(),
             pruned: false,
-        })?;
-        Ok(())
+        })
+    }
+
+    /// 永久删除需要的墓碑修订（`spec/revisions.md` §6）。头不超过 [`keevo_store::MAX_TOMBSTONE_PARENTS`]
+    /// 个时只有一个墓碑；更多时分批：每批一个墓碑，再用墓碑覆盖这些墓碑，直到只剩一个头。
+    /// 调用方必须在**一个事务**中写入全部墓碑（第四轮评审 J2）。
+    fn tombstone_rows(
+        &self,
+        vault_id: Id128,
+        item_id: Id128,
+        heads: Vec<Id128>,
+    ) -> Result<Vec<RevisionRow>> {
+        let plan = tombstone_plan(heads, keevo_store::MAX_TOMBSTONE_PARENTS, Id128::random)?;
+        Ok(plan
+            .into_iter()
+            .map(|(rev_id, parents)| RevisionRow {
+                rev_id,
+                object_id: item_id,
+                kind: ObjectKind::Item,
+                vault_id,
+                parents,
+                origin_device: self.device_id,
+                origin_seq: None,
+                wrapped_key_ct: None,
+                overview_ct: None,
+                details_ct: None,
+                deleted: true,
+                pruned: false,
+            })
+            .collect())
     }
 
     /// 修改单个属性（回收站状态等）。与其他编辑一样经由写时收敛（[`Vault::revise`]），
@@ -811,6 +874,29 @@ impl Vault {
             }
             Ok(())
         })
+    }
+}
+
+/// 墓碑的分批计划：返回按写入顺序排列的 (墓碑 ID, 父修订)。每个墓碑最多 `max` 个父修订；
+/// 最后一个墓碑是唯一的头。头不超过 `max` 个时只有一个墓碑。
+fn tombstone_plan(
+    mut level: Vec<Id128>,
+    max: usize,
+    mut new_id: impl FnMut() -> keevo_crypto::Result<Id128>,
+) -> Result<Vec<(Id128, Vec<Id128>)>> {
+    let max = max.max(2);
+    let mut plan = Vec::new();
+    loop {
+        let mut next = Vec::new();
+        for chunk in level.chunks(max) {
+            let id = new_id()?;
+            plan.push((id, chunk.to_vec()));
+            next.push(id);
+        }
+        if next.len() <= 1 {
+            return Ok(plan);
+        }
+        level = next;
     }
 }
 

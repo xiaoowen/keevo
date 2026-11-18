@@ -20,10 +20,10 @@
 
 | 状态 | 交付物 | 说明 |
 |---|---|---|
-| ✅ | 加密规范 `spec/crypto.md` v0.4 草案 + 测试向量 | 由独立的 Python 参考实现生成向量，CI 自动比对 |
-| ✅ | 修订模型规范 `spec/revisions.md` v0.4 草案 | 修订图、记录级 HLC、因果优先合并（并发版本保证分组合并结果一致）、墓碑；M1 的数据模型直接基于它 |
-| ✅ | `spec/vault-format.md` v0.4 草案 | 条目详情、概要、保险库元数据的明文结构 |
-| ✅ | `spec/ipc.md` v0.4 草案 | 分帧、对端身份校验、Noise 配对（XX + 配对承诺 + SAS）与会话（IK）、会话内消息、最小披露与按站点授权 |
+| ✅ | 加密规范 `spec/crypto.md` 1.0（已冻结） + 测试向量 | 由独立的 Python 参考实现生成向量，CI 自动比对 |
+| ✅ | 修订模型规范 `spec/revisions.md` 1.0（已冻结） | 修订图、记录级 HLC、因果优先合并（并发版本保证分组合并结果一致）、墓碑；M1 的数据模型直接基于它 |
+| ✅ | `spec/vault-format.md` 1.0（已冻结） | 条目详情、概要、保险库元数据的明文结构 |
+| ✅ | `spec/ipc.md` 1.0（已冻结） | 分帧、对端身份校验、Noise 配对（XX + 配对承诺 + SAS）与会话（IK）、会话内消息、最小披露与按站点授权 |
 | ✅ | `keevo-crypto` | 2SKD、加密信封、密钥包裹、密钥集、账户密钥编码；含 RFC 已知答案测试与跨实现向量测试 |
 | ✅ | `keevo-format`、`keevo-store`、`keevo-core` | 记录映射与因果合并（含 300 组多设备随机模拟与分组合并检验）、SQLite schema v2、账户创建 / 解锁 / 锁定与条目读写、冲突处理 |
 | ✅ | iCloud 技术验证 | iCloud 云盘中的普通文件夹无需证书即可完成写入、上传状态、移除本地内容、按需下载、文件协调与变化监听，4 次运行全部通过（[报告](spikes/2026-11-18-icloud-folder.md)）；据此决定不绑定团队、采用普通文件夹（[ADR-0002](adr/0002-icloud-drive-folder-without-team.md)）。跨设备延迟与 Dropbox / OneDrive 移到 M2 的真实环境长测 |
@@ -33,10 +33,10 @@
 | ✅ | CI | 格式、clippy、测试（Linux + macOS）、密码学边界、测试向量比对、cargo-deny、cargo-vet、macOS 冒烟测试、6 个模糊测试目标 |
 | ✅ | 治理文件 | 多许可证落地（App Store 附加许可为草案，待法律审阅）、`CONTRIBUTING.md`（DCO）、`SECURITY.md`、`CODE_OF_CONDUCT.md`、ADR 模板、CODEOWNERS、PR 模板 |
 
-| ✅ | 规范的外部模型评审 | 2026-11-18 完成三轮，每轮的发现全部处理（[docs/reviews/](reviews/)）。第三轮结论：可以作为 M1 的开发基础；它列出的冻结前事项已在第三轮处理中完成（[处理记录](reviews/2026-11-18-model-review-round3-response.md)） |
+| ✅ | 规范的外部模型评审与冻结 | 2026-11-18 完成四轮，每轮的发现全部处理（[docs/reviews/](reviews/)）。第四轮结论为有条件冻结，所列条件已在处理中完成；四份规范定为 1.0 并冻结，冻结清单见 [spec/README.md](../spec/README.md) |
 
 **退出标准**：
-- 规范经过外部模型评审，评审发现全部处理（评审说明：[spec/REVIEW.md](../spec/REVIEW.md)）。不再要求外部人工评审。
+- 规范经过外部模型评审，评审发现全部处理（评审说明：[spec/REVIEW.md](../spec/REVIEW.md)）。不再要求外部人工评审。**已完成**：四份规范 1.0 已冻结。
 - "创建 → 锁定 → 解锁 → 读写条目"的完整流程，在 Rust 测试和 macOS 空壳应用中都能跑通。
 
 ## 3. M1 本地保险库 MVP（4–5 个月）

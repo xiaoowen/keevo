@@ -20,6 +20,8 @@ pub enum IpcError {
     InvalidState,
     /// I/O 错误。
     Io(String),
+    /// 应用消息超过一条 Noise 消息能承载的明文上限（§2）。
+    TooLarge,
 }
 
 impl fmt::Display for IpcError {
@@ -31,6 +33,7 @@ impl fmt::Display for IpcError {
             Self::Crypto(e) => write!(f, "crypto: {e}"),
             Self::InvalidState => f.write_str("invalid state"),
             Self::Io(e) => write!(f, "io: {e}"),
+            Self::TooLarge => f.write_str("message too large"),
         }
     }
 }

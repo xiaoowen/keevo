@@ -25,7 +25,8 @@ pub enum PeerPolicy {
     DevSameUserOnly,
 }
 
-/// 请用户确认配对：展示短认证串，返回用户是否确认。实现应在 60 秒内未确认时返回 `false`。
+/// 请用户确认配对：展示短认证串，返回用户是否确认。实现必须在 `deadline` 到达时关闭界面并返回 `false`
+/// （`spec/ipc.md` §4.2）；状态机也会拒绝迟到的确认，但只有界面按时返回，连接与配对闸门才会按时释放。
 pub trait PairingPrompt: Send + Sync {
     /// 收到配对请求的第 1 条消息时调用：立即告诉用户"有浏览器正在请求配对"，让每次尝试都可见
     /// （`spec/ipc.md` §4.2）。
@@ -33,7 +34,13 @@ pub trait PairingPrompt: Send + Sync {
         let _ = browser;
     }
     /// 展示并等待确认。
-    fn confirm(&self, sas: [u8; 6], name: &str, browser: &str) -> bool;
+    fn confirm(
+        &self,
+        sas: [u8; 6],
+        name: &str,
+        browser: &str,
+        deadline: std::time::Instant,
+    ) -> bool;
 }
 
 /// 已建立会话的登记表：连接编号 → (扩展公钥, 用于主动断开的 socket 句柄)。
@@ -197,15 +204,39 @@ impl<S: PairingStore + Send + 'static> VaultService<S> {
         for output in outputs {
             match output {
                 Output::Send(frame) => {
-                    if write_socket_frame(stream, &frame).is_err() {
+                    // 配对进行中时，写入同样服从绝对截止时间（§4.2，第四轮评审 §5.2）
+                    let timeout = match conn.pairing_deadline() {
+                        Some(d) => {
+                            let left = d.saturating_duration_since(std::time::Instant::now());
+                            if left.is_zero() {
+                                return false;
+                            }
+                            Some(left)
+                        }
+                        None => None,
+                    };
+                    if stream.set_write_timeout(timeout).is_err()
+                        || write_socket_frame(stream, &frame).is_err()
+                    {
                         return false;
                     }
                 }
                 Output::PairingStarted { browser } => self.prompt.started(&browser),
                 Output::ConfirmPairing { sas, name, browser } => {
                     // 等待用户确认期间不持有任何锁
-                    let accepted = self.prompt.confirm(sas, &name, &browser);
-                    let more = conn.confirm_pairing(accepted, &mut *lock(&self.pairings));
+                    let deadline = conn
+                        .pairing_deadline()
+                        .unwrap_or_else(std::time::Instant::now);
+                    let accepted = self.prompt.confirm(sas, &name, &browser, deadline);
+                    // 持有保险库锁读取解锁代次并提交：确认与锁定之间有确定的先后（第四轮评审 J5）
+                    let more = {
+                        let vault = lock(&self.vault);
+                        conn.confirm_pairing(
+                            accepted,
+                            &mut *lock(&self.pairings),
+                            vault.unlock_epoch(),
+                        )
+                    };
                     // 确认后会话才建立：先登记，再发送 `paired`（第三轮评审 H6）
                     if !self.register(id, conn, stream) || !self.emit(id, stream, conn, more) {
                         return false;
@@ -279,7 +310,7 @@ mod tests {
 
     struct Accept;
     impl PairingPrompt for Accept {
-        fn confirm(&self, _: [u8; 6], _: &str, _: &str) -> bool {
+        fn confirm(&self, _: [u8; 6], _: &str, _: &str, _: Instant) -> bool {
             true
         }
     }

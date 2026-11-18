@@ -36,6 +36,8 @@ pub enum FormatError {
     TooManyKeys,
     /// 修订的父修订超过 [`crate::MAX_GRAPH_PARENTS`] 个。
     TooManyParents,
+    /// 记录键的名称不合法（`spec/vault-format.md` §2）。
+    InvalidKey,
 }
 
 impl fmt::Display for FormatError {
@@ -55,6 +57,7 @@ impl fmt::Display for FormatError {
             Self::ReservedKey => f.write_str("reserved record key"),
             Self::TooManyKeys => f.write_str("too many record keys"),
             Self::TooManyParents => f.write_str("too many parent revisions"),
+            Self::InvalidKey => f.write_str("invalid record key"),
         }
     }
 }

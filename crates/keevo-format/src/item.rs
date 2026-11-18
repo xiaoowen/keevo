@@ -7,7 +7,7 @@ use zeroize::Zeroizing;
 use crate::FORMAT_VERSION;
 use crate::error::{FormatError, Result};
 use crate::hlc::Hlc;
-use crate::json::{from_json, to_json};
+use crate::json::{from_canonical_json, from_json, to_json};
 use crate::record::{
     self, ConcurrentMap, MAX_KEYS, MAX_SAFE_INT, RecordKey, RecordMap, RecordValue, RecordVersion,
 };
@@ -66,8 +66,7 @@ pub enum FieldKind {
     RecoveryCodes,
     /// 键值对列表。
     KvList,
-    /// 附件引用。
-    File,
+    // 附件不在 v1 中：附件引用与分块格式定稿后随新的文档版本加入（`spec/vault-format.md` §2.3）。
 }
 
 impl FieldKind {
@@ -183,6 +182,10 @@ impl ItemDoc {
             records: doc.records,
             concurrent: doc.concurrent,
         };
+        // 只接受规范编码（第四轮评审 J7）。先比较字节，再做语义校验，错误的先后与规范一致
+        if doc.encode()?.as_slice() != bytes {
+            return Err(FormatError::Malformed("not canonical".into()));
+        }
         doc.validate()?;
         Ok(doc)
     }
@@ -248,6 +251,9 @@ impl ItemDoc {
         if key.is_reserved() {
             return Err(FormatError::ReservedKey);
         }
+        if !key.is_valid() {
+            return Err(FormatError::InvalidKey);
+        }
         self.write_tombstone(key, hlc, rev);
         Ok(())
     }
@@ -295,12 +301,23 @@ impl ItemDoc {
 
     /// 写时收敛前的准备（`spec/revisions.md` §5.4）：只有并发版本、没有当前值的键（只会因撤销删除产生）
     /// 写入墓碑，把"已撤销删除"确定下来。否则并发的修改日后被覆盖时，旧的删除会重新生效。
+    ///
+    /// 同时收拢删除状态键上全为墓碑的并发版本：它们都表示"未删除"，改写成一个新墓碑不改变语义，
+    /// 却能让这类版本不再无限累积（第四轮评审 J2）。
     pub fn settle_for_write(&mut self, hlc: Hlc, rev: Id128) {
         let suppressed: Vec<RecordKey> = self
             .concurrent
-            .keys()
-            .filter(|k| !self.records.contains_key(*k))
-            .cloned()
+            .iter()
+            .filter(|(k, versions)| {
+                !self.records.contains_key(*k)
+                    || (k.is_deletion_state()
+                        && self
+                            .records
+                            .get(*k)
+                            .is_some_and(RecordVersion::is_tombstone)
+                        && versions.iter().all(RecordVersion::is_tombstone))
+            })
+            .map(|(k, _)| k.clone())
             .collect();
         for key in suppressed {
             self.write_tombstone(key, hlc, rev);
@@ -441,7 +458,7 @@ impl ItemOverview {
     /// # Errors
     /// 结构错误或版本不支持时返回对应错误。
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let o: Self = from_json(bytes)?;
+        let o: Self = from_canonical_json(bytes)?;
         if o.v != FORMAT_VERSION {
             return Err(FormatError::UnsupportedVersion(o.v));
         }
@@ -491,7 +508,7 @@ impl VaultMeta {
     /// # Errors
     /// 结构错误或版本不支持时返回对应错误。
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let m: Self = from_json(bytes)?;
+        let m: Self = from_canonical_json(bytes)?;
         if m.v != FORMAT_VERSION {
             return Err(FormatError::UnsupportedVersion(m.v));
         }
@@ -503,6 +520,109 @@ impl VaultMeta {
 mod tests {
     use super::*;
     use crate::record::{FieldData, FieldValue, KvEntry};
+
+    /// 第四轮评审 J3：写入与解码使用同一条键名规则，非法键名在写入时就被拒绝。
+    #[test]
+    fn review4_j3_invalid_key_names_are_rejected_on_write() {
+        let rev = Id128::from_bytes([7; 16]);
+        let mut d = ItemDoc::new(ItemType::Login);
+        for key in [
+            RecordKey::Tag(String::new()),
+            RecordKey::Tag("x".repeat(257)),
+            RecordKey::attr("Title"),
+            RecordKey::attr(""),
+        ] {
+            assert_eq!(
+                d.set(key.clone(), RecordValue::Tag, Hlc(1), rev).err(),
+                Some(FormatError::InvalidKey),
+                "{key:?}"
+            );
+            assert_eq!(
+                d.delete(key.clone(), Hlc(1), rev).err(),
+                Some(FormatError::InvalidKey),
+                "{key:?}"
+            );
+        }
+        // 绕过 set 直接构造，也在写入边界被拒绝
+        d.records.insert(
+            RecordKey::Tag(String::new()),
+            RecordVersion {
+                hlc: Hlc(1),
+                rev,
+                value: Some(RecordValue::Tag),
+            },
+        );
+        assert_eq!(d.encode_for_write().err(), Some(FormatError::InvalidKey));
+    }
+
+    /// 第四轮评审 J7：只接受规范编码。数组形式的结构体、`tag` 的对象写法、可选字段写成 null、
+    /// 非规范的数字写法都拒绝；可以表示但超出安全范围的整数报 `value_too_large`。
+    #[test]
+    fn review4_j7_only_canonical_encodings_are_accepted() {
+        let good = sample().encode().unwrap();
+        assert!(ItemDoc::decode(&good).is_ok());
+        let text = String::from_utf8(good.to_vec()).unwrap();
+        let rejects = |json: &str| {
+            assert!(
+                matches!(
+                    ItemDoc::decode(json.as_bytes()),
+                    Err(FormatError::Malformed(_))
+                ),
+                "{json}"
+            );
+        };
+        rejects(&text.replacen("{\"v\":1,", "{ \"v\":1,", 1));
+        rejects(r#"[1,"login",{}]"#);
+        rejects(&text.replacen("\"val\":\"tag\"", "\"val\":{\"tag\":null}", 1));
+        let rev = "07".repeat(16);
+        let with_null = format!(
+            r#"{{"v":1,"type":"login","records":{{"field:{f}":{{"hlc":"0000000000000001","rev":"{rev}","val":{{"field":{{"section":null,"order":"a0","kind":"text","label":"l","purpose":null,"data":{{"text":"x"}}}}}}}}}}}}"#,
+            f = "01".repeat(16)
+        );
+        rejects(&with_null);
+        for n in ["-0", "0.0", "0e0", "18446744073709551616"] {
+            rejects(&format!(
+                r#"{{"v":1,"type":"login","records":{{"attr:n":{{"hlc":"0000000000000001","rev":"{rev}","val":{{"int":{n}}}}}}}}}"#
+            ));
+        }
+        let big = format!(
+            r#"{{"v":1,"type":"login","records":{{"attr:n":{{"hlc":"0000000000000001","rev":"{rev}","val":{{"int":9007199254740992}}}}}}}}"#
+        );
+        assert_eq!(
+            ItemDoc::decode(big.as_bytes()),
+            Err(FormatError::ValueTooLarge)
+        );
+        // 附件字段不在 v1 中
+        rejects(&text.replacen("\"kind\":\"text\"", "\"kind\":\"file\"", 1));
+    }
+
+    /// 第四轮评审 J2：删除状态键上全为墓碑的并发版本在写入前收拢成一个新墓碑，不会无限累积。
+    #[test]
+    fn review4_j2_settled_restore_tombstones_collapse() {
+        let purged = RecordKey::attr("purged");
+        let mut d = ItemDoc::new(ItemType::Login);
+        d.records.insert(
+            purged.clone(),
+            RecordVersion {
+                hlc: Hlc(5),
+                rev: Id128::from_bytes([1; 16]),
+                value: None,
+            },
+        );
+        let many: Vec<RecordVersion> = (2..200u8)
+            .map(|i| RecordVersion {
+                hlc: Hlc(5),
+                rev: Id128::from_bytes([i; 16]),
+                value: None,
+            })
+            .collect();
+        d.concurrent.insert(purged.clone(), many);
+        assert!(d.validate().is_ok());
+        d.settle_for_write(Hlc(9), Id128::from_bytes([250; 16]));
+        assert!(!d.concurrent.contains_key(&purged));
+        assert!(d.records[&purged].is_tombstone());
+        assert_eq!(d.records[&purged].rev, Id128::from_bytes([250; 16]));
+    }
 
     /// 第三轮评审 H2：键数在上限之内时，"删除全部字段"之后的墓碑一定放得进一个信封，
     /// 即使每个键名都是最长、且每个字节都需要转义（`spec/revisions.md` §7.1）。

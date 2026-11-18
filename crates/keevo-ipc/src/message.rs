@@ -54,7 +54,7 @@ impl ControlFrame {
     /// # Errors
     /// 格式错误时返回 [`IpcError::BadMessage`]。
     pub fn from_json(bytes: &[u8]) -> Result<Self, IpcError> {
-        serde_json::from_slice(bytes).map_err(|_| IpcError::BadMessage)
+        decode_canonical(bytes)
     }
 }
 
@@ -98,6 +98,10 @@ pub enum ErrorCode {
     PairingRejected,
     /// 已有配对正在进行，或配对尝试过于频繁（§4.2）。
     PairingLimited,
+    /// 用户拒绝本次 `fill` 的站点授权、授权超时，或配对因频率限制被暂停（§5.2）。
+    NotAuthorized,
+    /// 响应放不进一条 Noise 消息（§2）。例如凭据过长，无法自动填充，应在 Keevo 中复制。
+    ResponseTooLarge,
     /// Vault Service 已锁定。
     Locked,
     /// 条目与网址不匹配。
@@ -119,6 +123,8 @@ impl ErrorCode {
             Self::NotPaired => "not_paired",
             Self::PairingRejected => "pairing_rejected",
             Self::PairingLimited => "pairing_limited",
+            Self::NotAuthorized => "not_authorized",
+            Self::ResponseTooLarge => "response_too_large",
             Self::Locked => "locked",
             Self::UrlMismatch => "url_mismatch",
             Self::NotFound => "not_found",
@@ -285,4 +291,26 @@ fn is_format_char(c: char) -> bool {
         | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF
         | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F | 0x1BCA0..=0x1BCA3
         | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
+}
+
+/// 一条 Noise 消息能承载的应用明文上限：65,535 字节的 Noise 消息减去 16 字节认证标签（§2）。
+pub const MAX_APP_MESSAGE: usize = 65_519;
+/// `candidates` 最多返回的条目数（§5.2）。
+pub const MAX_CANDIDATES: usize = 20;
+/// 候选的标题与副标题最多保留的 Unicode 标量值个数，只用于显示。
+pub const MAX_CANDIDATE_TEXT: usize = 200;
+
+/// 解码一条 JSON 消息，只接受其**规范编码**（§5）：解析后重新编码，必须与收到的字节完全相同。
+/// 因此字段顺序、空白、转义、未知字段、可选字段的 `null` 都只有一种合法写法。
+/// 重新编码的缓冲区会清零（消息里可能有密码）。
+pub(crate) fn decode_canonical<T: Serialize + serde::de::DeserializeOwned>(
+    bytes: &[u8],
+) -> Result<T, IpcError> {
+    let value: T = serde_json::from_slice(bytes).map_err(|_| IpcError::BadMessage)?;
+    let mut again = zeroize::Zeroizing::new(Vec::with_capacity(bytes.len()));
+    serde_json::to_writer(&mut *again, &value).map_err(|_| IpcError::BadMessage)?;
+    if again.as_slice() != bytes {
+        return Err(IpcError::BadMessage);
+    }
+    Ok(value)
 }

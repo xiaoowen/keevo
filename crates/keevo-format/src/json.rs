@@ -39,3 +39,16 @@ pub fn from_json<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     serde_json::from_slice(bytes)
         .map_err(|e| FormatError::Malformed(format!("line {} column {}", e.line(), e.column())))
 }
+
+/// 解码，并要求输入恰好是其规范编码（`spec/vault-format.md` §1）：解析后重新编码，必须与输入逐字节相同。
+/// 因此字段顺序、空白、转义、数字写法、可选字段的 `null`、结构体写成数组等，都只有一种合法写法。
+///
+/// # Errors
+/// 结构错误或不是规范编码时返回 [`FormatError::Malformed`]。
+pub fn from_canonical_json<T: DeserializeOwned + Serialize>(bytes: &[u8]) -> Result<T> {
+    let value: T = from_json(bytes)?;
+    if to_json(&value)?.as_slice() != bytes {
+        return Err(FormatError::Malformed("not canonical".into()));
+    }
+    Ok(value)
+}

@@ -202,7 +202,7 @@ impl ExtensionClient {
 
 fn decode(transport: &mut Transport, data: &[u8]) -> Result<ServerMessage, IpcError> {
     let plaintext = transport.decrypt(data)?;
-    serde_json::from_slice(&plaintext).map_err(|_| IpcError::BadMessage)
+    crate::message::decode_canonical(&plaintext)
 }
 
 /// 按 UTF-8 字符边界截断到最多 `max` 字节。

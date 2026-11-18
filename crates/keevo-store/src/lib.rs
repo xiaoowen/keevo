@@ -12,7 +12,7 @@ use keevo_crypto::Id128;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 /// 当前 schema 版本。
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 const SCHEMA_V1: &str = r"
 CREATE TABLE meta (
@@ -72,6 +72,10 @@ CREATE TABLE device (
 /// （`spec/revisions.md` §7.2）。迁移前已有的修订年龄未知，记为 0，即与迁移时的有效时间相同。
 const MIGRATE_V2: &str = "ALTER TABLE revision ADD COLUMN stored_ms INTEGER NOT NULL DEFAULT 0;";
 
+/// v2 → v3：`stored_ms` 的含义改为 Keevo 的累计运行时间。v2 的开发数据库存的是墙上时间，
+/// 年龄未知，一律记为 0（第四轮评审 J1）。
+const MIGRATE_V3: &str = "UPDATE revision SET stored_ms = 0;";
+
 /// 普通修订最多的父修订数（`spec/revisions.md` §7.1）。写时收敛以全部头为父，头更多时条目只能重建。
 pub const MAX_PARENTS: usize = 4096;
 /// 墓碑修订最多的父修订数。墓碑没有内容，允许更多父修订，使"重建"之后旧条目总能被永久删除。
@@ -101,6 +105,8 @@ pub enum StoreError {
     Corrupt(&'static str),
     /// 数据库来自更新版本的 Keevo。
     UnsupportedSchema(u32),
+    /// 数据库已被另一个 `Store` 打开（同一进程或另一个进程）。同一数据库同时只能有一个打开者。
+    InUse,
 }
 
 impl fmt::Display for StoreError {
@@ -113,6 +119,7 @@ impl fmt::Display for StoreError {
             Self::TooLarge => f.write_str("revision exceeds size limits"),
             Self::Corrupt(what) => write!(f, "corrupt database: {what}"),
             Self::UnsupportedSchema(v) => write!(f, "unsupported schema version {v}"),
+            Self::InUse => f.write_str("database is already open"),
         }
     }
 }
@@ -212,6 +219,8 @@ pub struct RevisionMeta {
 /// 本地数据库。
 pub struct Store {
     conn: Connection,
+    /// 独占锁（`spec/revisions.md` §7.2）：有效时间按打开者自己的单调时钟计，同一数据库只能有一个打开者。
+    _lock: Option<std::fs::File>,
     /// 有效时间的基准：(进程启动后首次使用时的有效时间, 当时的单调时钟读数)。
     clock: Option<(u64, std::time::Instant)>,
 }
@@ -222,7 +231,24 @@ impl Store {
     /// # Errors
     /// SQLite 错误，或数据库来自更新版本时返回对应错误。
     pub fn open(path: &Path) -> Result<Self> {
-        Self::init(Connection::open(path)?, true)
+        // 先取得独占锁，再打开数据库：同一数据库同时只能有一个打开者（第四轮评审 J1）
+        let mut lock_path = path.as_os_str().to_owned();
+        lock_path.push(".lock");
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|e| StoreError::Sqlite(e.to_string()))?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => return Err(StoreError::InUse),
+            Err(std::fs::TryLockError::Error(e)) => return Err(StoreError::Sqlite(e.to_string())),
+        }
+        let mut store = Self::init(Connection::open(path)?, true)?;
+        store._lock = Some(lock);
+        Ok(store)
     }
 
     /// 内存数据库，仅用于测试。
@@ -241,7 +267,11 @@ impl Store {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         // 删除的内容用零覆盖（虽然都是密文，仍尽量不留痕迹）
         conn.pragma_update(None, "secure_delete", "ON")?;
-        let mut store = Self { conn, clock: None };
+        let mut store = Self {
+            conn,
+            _lock: None,
+            clock: None,
+        };
         store.migrate()?;
         Ok(store)
     }
@@ -264,6 +294,9 @@ impl Store {
         }
         if version < 2 {
             tx.execute_batch(MIGRATE_V2)?;
+        }
+        if version < 3 {
+            tx.execute_batch(MIGRATE_V3)?;
         }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
@@ -398,83 +431,23 @@ impl Store {
     /// # Errors
     /// 父修订缺失返回 [`StoreError::MissingParent`]，修订重复返回 [`StoreError::DuplicateRevision`]。
     pub fn insert_revision(&mut self, row: &RevisionRow) -> Result<()> {
-        // 写入与读取（`check_sizes`）用同一套上限，写进去的东西一定读得出来
-        let env = keevo_crypto::MAX_ENVELOPE_LEN;
-        let max_parents = if row.deleted {
-            MAX_TOMBSTONE_PARENTS
-        } else {
-            MAX_PARENTS
-        };
-        if row.parents.len() > max_parents
-            || [&row.wrapped_key_ct, &row.overview_ct, &row.details_ct]
-                .iter()
-                .any(|c| c.as_ref().is_some_and(|c| c.len() > env))
-        {
-            return Err(StoreError::TooLarge);
-        }
+        self.insert_revisions(std::slice::from_ref(row))
+    }
+
+    /// 在**一个事务**中按顺序写入多个修订：要么全部写入，要么一个都不写（第四轮评审 J2）。
+    /// 用于重建条目（新条目与旧条目的墓碑）以及分批写墓碑。后面的修订可以以前面的为父修订。
+    ///
+    /// # Errors
+    /// 同 [`Store::insert_revision`]；任何一个失败时整个事务回滚。
+    pub fn insert_revisions(&mut self, rows: &[RevisionRow]) -> Result<()> {
         let stored =
             i64::try_from(self.effective_now()?).map_err(|_| StoreError::Corrupt("clock"))?;
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let exists: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM revision WHERE rev_id = ?1",
-            [row.rev_id.as_bytes().as_slice()],
-            |r| r.get(0),
-        )?;
-        if exists > 0 {
-            return Err(StoreError::DuplicateRevision);
+        for row in rows {
+            insert_one(&tx, row, stored)?;
         }
-        for parent in &row.parents {
-            let found: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM revision WHERE rev_id = ?1 AND object_id = ?2",
-                [
-                    parent.as_bytes().as_slice(),
-                    row.object_id.as_bytes().as_slice(),
-                ],
-                |r| r.get(0),
-            )?;
-            if found == 0 {
-                return Err(StoreError::MissingParent);
-            }
-        }
-        tx.execute(
-            "INSERT INTO revision (rev_id, object_id, object_type, vault_id, parents, origin_device,
-                                   origin_seq, wrapped_key_ct, overview_ct, details_ct, deleted, pruned,
-                                   stored_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-            params![
-                row.rev_id.as_bytes().as_slice(),
-                row.object_id.as_bytes().as_slice(),
-                row.kind.code(),
-                row.vault_id.as_bytes().as_slice(),
-                encode_ids(&row.parents),
-                row.origin_device.as_bytes().as_slice(),
-                row.origin_seq.map(i64::try_from).transpose().map_err(|_| StoreError::Corrupt("origin_seq"))?,
-                row.wrapped_key_ct,
-                row.overview_ct,
-                row.details_ct,
-                row.deleted,
-                row.pruned,
-                stored,
-            ],
-        )?;
-        for parent in &row.parents {
-            tx.execute(
-                "DELETE FROM head WHERE object_id = ?1 AND rev_id = ?2",
-                [
-                    row.object_id.as_bytes().as_slice(),
-                    parent.as_bytes().as_slice(),
-                ],
-            )?;
-        }
-        tx.execute(
-            "INSERT INTO head (object_id, rev_id) VALUES (?1, ?2)",
-            [
-                row.object_id.as_bytes().as_slice(),
-                row.rev_id.as_bytes().as_slice(),
-            ],
-        )?;
         tx.commit()?;
         Ok(())
     }
@@ -661,6 +634,16 @@ impl Store {
         Ok(base.saturating_add(elapsed))
     }
 
+    /// 测试用：直接执行 SQL（例如注入故障）。只在启用 `test-util` 特性时存在，供其他 crate 的测试使用。
+    ///
+    /// # Errors
+    /// SQLite 错误。
+    #[cfg(feature = "test-util")]
+    pub fn execute_for_tests(&self, sql: &str) -> Result<()> {
+        self.conn.execute_batch(sql)?;
+        Ok(())
+    }
+
     /// 测试用：让有效时间前进 `ms`，模拟 Keevo 运行了这么久。
     #[cfg(test)]
     pub(crate) fn pass_running_time(&mut self, ms: u64) -> Result<()> {
@@ -779,3 +762,87 @@ fn decode_ids(bytes: &[u8]) -> Result<Vec<Id128>> {
 
 #[cfg(test)]
 mod tests;
+
+/// 在给定事务中写入一个修订（不提交）。
+fn insert_one(tx: &rusqlite::Transaction<'_>, row: &RevisionRow, stored: i64) -> Result<()> {
+    // 父修订是集合：先排序去重，再计数与编码，与修订图的规则一致（第四轮评审 §5.2）
+    let mut parents = row.parents.clone();
+    parents.sort_unstable();
+    parents.dedup();
+    // 写入与读取（`check_sizes`）用同一套上限，写进去的东西一定读得出来
+    let env = keevo_crypto::MAX_ENVELOPE_LEN;
+    let max_parents = if row.deleted {
+        MAX_TOMBSTONE_PARENTS
+    } else {
+        MAX_PARENTS
+    };
+    if parents.len() > max_parents
+        || [&row.wrapped_key_ct, &row.overview_ct, &row.details_ct]
+            .iter()
+            .any(|c| c.as_ref().is_some_and(|c| c.len() > env))
+    {
+        return Err(StoreError::TooLarge);
+    }
+    let exists: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM revision WHERE rev_id = ?1",
+        [row.rev_id.as_bytes().as_slice()],
+        |r| r.get(0),
+    )?;
+    if exists > 0 {
+        return Err(StoreError::DuplicateRevision);
+    }
+    for parent in &parents {
+        let found: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM revision WHERE rev_id = ?1 AND object_id = ?2",
+            [
+                parent.as_bytes().as_slice(),
+                row.object_id.as_bytes().as_slice(),
+            ],
+            |r| r.get(0),
+        )?;
+        if found == 0 {
+            return Err(StoreError::MissingParent);
+        }
+    }
+    tx.execute(
+        "INSERT INTO revision (rev_id, object_id, object_type, vault_id, parents, origin_device,
+                               origin_seq, wrapped_key_ct, overview_ct, details_ct, deleted, pruned,
+                               stored_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            row.rev_id.as_bytes().as_slice(),
+            row.object_id.as_bytes().as_slice(),
+            row.kind.code(),
+            row.vault_id.as_bytes().as_slice(),
+            encode_ids(&parents),
+            row.origin_device.as_bytes().as_slice(),
+            row.origin_seq
+                .map(i64::try_from)
+                .transpose()
+                .map_err(|_| StoreError::Corrupt("origin_seq"))?,
+            row.wrapped_key_ct,
+            row.overview_ct,
+            row.details_ct,
+            row.deleted,
+            row.pruned,
+            stored,
+        ],
+    )?;
+    for parent in &parents {
+        tx.execute(
+            "DELETE FROM head WHERE object_id = ?1 AND rev_id = ?2",
+            [
+                row.object_id.as_bytes().as_slice(),
+                parent.as_bytes().as_slice(),
+            ],
+        )?;
+    }
+    tx.execute(
+        "INSERT INTO head (object_id, rev_id) VALUES (?1, ?2)",
+        [
+            row.object_id.as_bytes().as_slice(),
+            row.rev_id.as_bytes().as_slice(),
+        ],
+    )?;
+    Ok(())
+}

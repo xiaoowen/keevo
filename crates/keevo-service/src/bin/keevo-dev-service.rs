@@ -39,16 +39,36 @@ impl PairingPrompt for TerminalPrompt {
         eprintln!("\n[配对] 收到来自 {browser} 的配对请求，等待扩展完成握手……");
     }
 
-    fn confirm(&self, sas: [u8; 6], name: &str, browser: &str) -> bool {
+    fn confirm(
+        &self,
+        sas: [u8; 6],
+        name: &str,
+        browser: &str,
+        deadline: std::time::Instant,
+    ) -> bool {
         let code: Vec<String> = sas.iter().map(|b| format!("{b:02x}")).collect();
         eprintln!("\n浏览器「{name}」（{browser}）请求配对。");
         eprintln!("请确认扩展弹窗中显示的验证码与此一致：  {}", code.join(" "));
         eprint!("一致吗？[y/N] ");
         let _ = std::io::stderr().flush();
-        let mut line = String::new();
-        let ok = std::io::stdin().lock().read_line(&mut line).is_ok()
-            && line.trim().eq_ignore_ascii_case("y");
-        eprintln!("{}", if ok { "已配对。" } else { "已拒绝。" });
+        // 在另一个线程读终端，到截止时间仍未回答即按拒绝处理
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let ok = std::io::stdin().lock().read_line(&mut line).is_ok()
+                && line.trim().eq_ignore_ascii_case("y");
+            let _ = tx.send(ok);
+        });
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        let ok = rx.recv_timeout(left).unwrap_or(false);
+        eprintln!(
+            "{}",
+            if ok {
+                "已配对。"
+            } else {
+                "已拒绝（或超时）。"
+            }
+        );
         ok
     }
 }
@@ -56,7 +76,7 @@ impl PairingPrompt for TerminalPrompt {
 struct AutoConfirm;
 
 impl PairingPrompt for AutoConfirm {
-    fn confirm(&self, _: [u8; 6], name: &str, _: &str) -> bool {
+    fn confirm(&self, _: [u8; 6], name: &str, _: &str, _: std::time::Instant) -> bool {
         eprintln!("[auto-confirm] 已自动确认「{name}」的配对");
         true
     }

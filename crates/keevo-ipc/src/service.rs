@@ -11,8 +11,9 @@ use keevo_crypto::{Handshake, PAIR_NONCE_LEN, StaticKeypair, Transport, pairing_
 
 use crate::error::IpcError;
 use crate::message::{
-    Call, CallResult, ControlFrame, ErrorBody, ErrorCode, Event, HostHello, MAX_NAME_BYTES,
-    PROTOCOL_VERSION, Request, ServerMessage, b64, sanitize_display_name, unb64,
+    Call, CallResult, ControlFrame, ErrorBody, ErrorCode, Event, HostHello, MAX_APP_MESSAGE,
+    MAX_CANDIDATE_TEXT, MAX_CANDIDATES, MAX_NAME_BYTES, PROTOCOL_VERSION, Request, ServerMessage,
+    b64, decode_canonical, sanitize_display_name, unb64,
 };
 
 /// 配对的时限（`spec/ipc.md` §4.2）：从收到第 1 条消息起算，覆盖握手与用户确认，超时视为拒绝。
@@ -145,6 +146,10 @@ pub trait VaultBackend {
     fn item_matches(&self, item_id: &str, url: &str) -> Option<bool>;
     /// 条目的填充凭据。只会在 [`VaultBackend::item_matches`] 返回 `Some(true)` 之后调用。
     fn fill(&self, item_id: &str) -> Option<crate::message::FillData>;
+    /// 当前的解锁代次；锁定时为 `None`。每次解锁得到新值，配对确认时据此判断"仍是同一次解锁"（§4.2）。
+    fn unlock_epoch(&self) -> Option<u64> {
+        (!self.is_locked()).then_some(0)
+    }
 }
 
 /// 状态机的输出。
@@ -182,12 +187,14 @@ enum State {
         hs: Box<Handshake>,
         commitment: [u8; 32],
         deadline: Instant,
+        epoch: u64,
     },
     AwaitConfirm {
         hello: HostHello,
         transport: Box<Transport>,
         name: String,
         deadline: Instant,
+        epoch: u64,
     },
     Established {
         transport: Box<Transport>,
@@ -290,13 +297,21 @@ impl ServiceConnection {
         }
     }
 
-    /// 用户对配对的决定。
-    pub fn confirm_pairing(&mut self, accepted: bool, store: &mut dyn PairingStore) -> Vec<Output> {
+    /// 用户对配对的决定。`epoch_now` 是此刻的解锁代次（[`VaultBackend::unlock_epoch`]）：
+    /// 已锁定，或已不是配对开始时的那一次解锁，都按拒绝处理（§4.2，第四轮评审 J5）。
+    /// 调用方应在持有保险库锁的情况下读取代次并调用本方法，使确认与锁定之间有确定的先后。
+    pub fn confirm_pairing(
+        &mut self,
+        accepted: bool,
+        store: &mut dyn PairingStore,
+        epoch_now: Option<u64>,
+    ) -> Vec<Output> {
         let State::AwaitConfirm {
             hello,
             mut transport,
             name,
             deadline,
+            epoch,
         } = std::mem::replace(&mut self.state, State::Closed)
         else {
             return Vec::new();
@@ -304,6 +319,9 @@ impl ServiceConnection {
         // 超时由状态机自己执行，不依赖调用方（评审：规范与实现不一致）
         if !accepted || Instant::now() > deadline {
             return self.fail(ErrorCode::PairingRejected);
+        }
+        if epoch_now != Some(epoch) {
+            return self.fail(ErrorCode::Locked);
         }
         self.release_gate();
         let origin = hello.extension_origin.clone();
@@ -367,7 +385,7 @@ impl ServiceConnection {
             State::Closed => Ok(Vec::new()),
             State::AwaitHostHello => {
                 let hello: HostHello =
-                    serde_json::from_slice(frame).map_err(|_| ErrorCode::BadRequest)?;
+                    decode_canonical(frame).map_err(|_| ErrorCode::BadRequest)?;
                 if hello.v != PROTOCOL_VERSION {
                     return Err(ErrorCode::UnsupportedVersion);
                 }
@@ -380,9 +398,7 @@ impl ServiceConnection {
             State::AwaitFirst { hello } => match parse(frame)? {
                 ControlFrame::Pair { d } => {
                     // 配对只在解锁时进行：确认需要原生界面，记录要写入加密数据库（§4.2 第 6 步）
-                    if backend.is_locked() {
-                        return Err(ErrorCode::Locked);
-                    }
+                    let epoch = backend.unlock_epoch().ok_or(ErrorCode::Locked)?;
                     // 时限从收到第 1 条消息的时刻起算（§4.2）
                     let received = Instant::now();
                     let deadline = received
@@ -407,6 +423,7 @@ impl ServiceConnection {
                         hs: Box::new(hs),
                         commitment,
                         deadline,
+                        epoch,
                     };
                     Ok(vec![
                         Output::PairingStarted { browser },
@@ -444,6 +461,7 @@ impl ServiceConnection {
                 mut hs,
                 commitment,
                 deadline,
+                epoch,
             } => {
                 let ControlFrame::Noise { d } = parse(frame)? else {
                     return Err(ErrorCode::BadRequest);
@@ -478,6 +496,7 @@ impl ServiceConnection {
                     transport: Box::new(transport),
                     name: name.clone(),
                     deadline,
+                    epoch,
                 };
                 Ok(vec![Output::ConfirmPairing { sas, name, browser }])
             }
@@ -499,9 +518,22 @@ impl ServiceConnection {
                     .decrypt(&unb64(&d).map_err(|_| ErrorCode::BadRequest)?)
                     .map_err(|_| ErrorCode::BadRequest)?;
                 let request: Request =
-                    serde_json::from_slice(&plaintext).map_err(|_| ErrorCode::BadRequest)?;
+                    decode_canonical(&plaintext).map_err(|_| ErrorCode::BadRequest)?;
                 let reply = handle(&request, backend);
-                let frame = encrypt(&mut transport, &reply).map_err(|_| ErrorCode::BadRequest)?;
+                // 放不进一条 Noise 消息的响应改为 `response_too_large`（§2，第四轮评审 J4）
+                let frame = match encrypt(&mut transport, &reply) {
+                    Err(IpcError::TooLarge) => encrypt(
+                        &mut transport,
+                        &ServerMessage::Err {
+                            id: request.id,
+                            error: ErrorBody {
+                                code: ErrorCode::ResponseTooLarge,
+                            },
+                        },
+                    ),
+                    other => other,
+                }
+                .map_err(|_| ErrorCode::BadRequest)?;
                 self.state = State::Established { transport, origin };
                 Ok(vec![Output::Send(frame)])
             }
@@ -529,7 +561,17 @@ fn handle(request: &Request, backend: &dyn VaultBackend) -> ServerMessage {
         Call::Candidates { url } => ServerMessage::Ok {
             id,
             result: CallResult::Candidates {
-                items: backend.candidates(url),
+                // 有界返回：最多 20 个，标题与副标题截短，只用于显示（§5.2）
+                items: backend
+                    .candidates(url)
+                    .into_iter()
+                    .take(MAX_CANDIDATES)
+                    .map(|c| crate::message::Candidate {
+                        title: c.title.chars().take(MAX_CANDIDATE_TEXT).collect(),
+                        subtitle: c.subtitle.chars().take(MAX_CANDIDATE_TEXT).collect(),
+                        ..c
+                    })
+                    .collect(),
             },
         },
         Call::Fill { item_id, url } => match backend.item_matches(item_id, url) {
@@ -560,6 +602,9 @@ fn send_noise(message: &[u8]) -> Result<Output, ErrorCode> {
 fn encrypt(transport: &mut Transport, message: &ServerMessage) -> Result<Vec<u8>, IpcError> {
     let json =
         zeroize::Zeroizing::new(serde_json::to_vec(message).map_err(|_| IpcError::BadMessage)?);
+    if json.len() > MAX_APP_MESSAGE {
+        return Err(IpcError::TooLarge);
+    }
     let ct = transport.encrypt(&json)?;
     ControlFrame::Noise { d: b64(&ct) }.to_json()
 }

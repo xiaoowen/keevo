@@ -16,7 +16,7 @@ ADR-0002 决定不使用任何现有团队，但仍计划在正式发布前（�
 
 1. **签名**：所有 macOS 产物使用临时签名（`codesign -s -`），启用 Hardened Runtime，并保留它默认启用的 Library Validation。不申请、不使用任何团队的证书与描述文件，也不使用需要团队授权的受管能力（managed capabilities）。可以在临时签名中声明的本地 entitlement 与运行时例外（例如禁用 Library Validation），项目同样一律不用。
 2. **依赖团队的功能移出路线图**（见下文）。将来如果要做，必须先写一份新的 ADR 推翻本决定。
-3. **本机密钥**改为"Secure Enclave 密钥包裹后存成普通文件"，格式见 `spec/crypto.md` §8.6，不使用数据保护钥匙串（[技术验证](../spikes/2026-11-18-secure-enclave-without-team.md)）。配对记录与站点授权不用这种文件，而是存入加密的保险库数据库（`spec/ipc.md` §4.2）。
+3. **本机密钥**改为"Secure Enclave 密钥包裹后存成普通文件"，格式见 `spec/crypto.md` §8.7，不使用数据保护钥匙串（[技术验证](../spikes/2026-11-18-secure-enclave-without-team.md)）。配对记录与站点授权不用这种文件，而是存入加密的保险库数据库（`spec/ipc.md` §4.2）。
 4. **IPC 对端校验**改为固定 cdhash：构建时把 `keevo-native-host`、`keevo` CLI 的 cdhash 编译进主程序，Vault Service 只接受这些对端；运行时不从磁盘读取（`spec/ipc.md` §3.1）。
 5. **数据位置**改为 `~/Library/Application Support/Keevo/`。App Group 容器需要 Team ID 前缀与 entitlement，不再使用。
 6. **分发**：在 GitHub Releases 发布临时签名的构建，并实现可复现构建；同时提供从源码构建的脚本。
@@ -45,7 +45,7 @@ ADR-0002 决定不使用任何现有团队，但仍计划在正式发布前（�
 
 | 原方案 | 替代 | 安全影响 |
 |---|---|---|
-| Touch ID：Secure Enclave 包裹 AUK，存入数据保护钥匙串 | 需要用户在场的 Secure Enclave 密钥包裹 AUK（`spec/crypto.md` §8.6），存入数据目录下的文件（0600） | blob 只能由本机的 Secure Enclave 使用，复制到别处无用。但它**不绑定应用身份**：同用户进程拿到 blob 后，可以自己发起一次 Touch ID 请求，提示文字可以伪造。归入 A7 的残余风险 |
+| Touch ID：Secure Enclave 包裹 AUK，存入数据保护钥匙串 | 需要用户在场的 Secure Enclave 密钥包裹 AUK（`spec/crypto.md` §8.7），存入数据目录下的文件（0600） | blob 只能由本机的 Secure Enclave 使用，复制到别处无用。但它**不绑定应用身份**：同用户进程拿到 blob 后，可以自己发起一次 Touch ID 请求，提示文字可以伪造。归入 A7 的残余风险 |
 | 账户密钥：数据保护钥匙串，`ThisDeviceOnly` | 不需要用户在场的 Secure Enclave 密钥包裹后存成文件 | 不随备份迁移到其他 Mac（blob 在别处无法使用）。**同用户进程可以在本机无提示地解开它**（第二轮评审已用另一个临时签名程序实测）。账户密钥泄露后，安全性退化为主密码与 KDF 的强度 |
 | Vault Service 的 Noise 静态私钥：钥匙串 | 同上 | 同用户进程同样可以取出。与账户密钥不同，它没有"还需主密码"这第二层：取得它就能冒充 Vault Service 与扩展握手，看到扩展请求的网址，或向扩展返回伪造的填充数据。接受为 A7 的残余风险，因为每次浏览器重启都要求 Touch ID 的代价过高 |
 | 浏览器配对记录、站点授权：钥匙串 | 加密的保险库数据库（`spec/ipc.md` §4.2） | 不需要用户在场的 Secure Enclave 包裹无法阻止同用户进程解开再重新包裹，提供不了授权记录的完整性，因此不用它 |

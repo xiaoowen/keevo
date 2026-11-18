@@ -181,12 +181,12 @@ fn prune_keeps_revisions_stored_after_the_cutoff() {
 
 /// v1 数据库升级到 v2：已有修订的写入时间记为 0，只按数量规则保留。
 #[test]
-fn migrates_schema_v1_to_v2() {
+fn migrates_schema_v1_to_current() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch(SCHEMA_V1).unwrap();
     conn.pragma_update(None, "user_version", 1).unwrap();
     let mut store = Store::init(conn, false).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 2);
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     store.insert_revision(&rev(1, &[])).unwrap();
     let stored: i64 = store
         .conn
@@ -376,4 +376,79 @@ fn review3_h3_meta_and_head_ids_are_length_checked() {
         store.objects(ObjectKind::Item),
         Err(StoreError::Corrupt(_))
     ));
+}
+
+/// 第四轮评审 J1：同一数据库同时只能有一个打开者；关闭后可以再打开。
+#[test]
+fn review4_j1_database_has_a_single_owner() {
+    let dir = std::env::temp_dir().join(format!("keevo-j1-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("v.sqlite");
+    let first = Store::open(&path).unwrap();
+    assert_eq!(Store::open(&path).err(), Some(StoreError::InUse));
+    drop(first);
+    assert!(Store::open(&path).is_ok());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// 第四轮评审 J1：v2 数据库里的 `stored_ms` 是墙上时间，升级到 v3 时一律记为 0（年龄未知）。
+#[test]
+fn review4_j1_v2_wall_clock_ages_are_reset() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(SCHEMA_V1).unwrap();
+    conn.execute_batch(MIGRATE_V2).unwrap();
+    conn.pragma_update(None, "user_version", 2).unwrap();
+    conn.execute(
+        "INSERT INTO revision (rev_id, object_id, object_type, vault_id, parents, origin_device, stored_ms)
+         VALUES (?1, ?2, 3, ?3, x'', ?4, 1763366400000)",
+        rusqlite::params![
+            id(1).as_bytes().to_vec(),
+            id(50).as_bytes().to_vec(),
+            id(60).as_bytes().to_vec(),
+            id(70).as_bytes().to_vec()
+        ],
+    )
+    .unwrap();
+    let store = Store::init(conn, false).unwrap();
+    let stored: i64 = store
+        .conn
+        .query_row("SELECT stored_ms FROM revision", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(stored, 0);
+}
+
+/// 第四轮评审 J2：多个修订在一个事务中写入，任何一个失败都整体回滚。
+#[test]
+fn review4_j2_batch_insert_is_atomic() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.insert_revision(&rev(1, &[])).unwrap();
+    let ok = rev(2, &[1]);
+    let bad = rev(3, &[99]); // 父修订不存在
+    assert_eq!(
+        store.insert_revisions(&[ok, bad]),
+        Err(StoreError::MissingParent)
+    );
+    assert!(
+        store.revision(&id(2)).unwrap().is_none(),
+        "失败时前面的修订也不应写入"
+    );
+    assert_eq!(head_ids(&store), vec![id(1)]);
+    store
+        .insert_revisions(&[rev(2, &[1]), rev(3, &[2])])
+        .unwrap();
+    assert_eq!(head_ids(&store), vec![id(3)]);
+}
+
+/// 第四轮评审 §5.2：父修订按集合计数与编码，重复的父修订只算一个。
+#[test]
+fn review4_parent_lists_are_normalized() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.insert_revision(&rev(1, &[])).unwrap();
+    let mut r = rev(2, &[]);
+    r.parents = vec![id(1); MAX_PARENTS + 1];
+    store.insert_revision(&r).unwrap();
+    assert_eq!(
+        store.revision(&id(2)).unwrap().unwrap().parents,
+        vec![id(1)]
+    );
 }

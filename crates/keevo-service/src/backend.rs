@@ -31,6 +31,10 @@ impl VaultBackend for CoreBackend<'_> {
         !self.vault.is_unlocked()
     }
 
+    fn unlock_epoch(&self) -> Option<u64> {
+        self.vault.unlock_epoch()
+    }
+
     fn candidates(&self, url: &str) -> Vec<Candidate> {
         let Ok(items) = self.vault.items() else {
             return Vec::new();

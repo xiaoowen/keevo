@@ -128,7 +128,7 @@ fn pair(svc: &mut Service, accept: bool) -> (ExtensionClient, Option<[u8; 32]>, 
     let d = deliver(svc, &mut conn, &frames[0]);
     assert_eq!(d.confirm, Some(client_sas), "两端的 SAS 必须一致");
 
-    let d = collect(conn.confirm_pairing(accept, &mut svc.store));
+    let d = collect(conn.confirm_pairing(accept, &mut svc.store, svc.backend.unlock_epoch()));
     let (_, events) = client.on_frame(&d.to_client[0]).unwrap();
     match &events[0] {
         ClientEvent::Paired { service_public } => {
@@ -571,7 +571,7 @@ fn late_confirmation_is_treated_as_rejection() {
     let d = deliver(&svc, &mut conn, &frames[0]);
     assert!(d.confirm.is_some());
     std::thread::sleep(std::time::Duration::from_millis(250));
-    let d = collect(conn.confirm_pairing(true, &mut svc.store));
+    let d = collect(conn.confirm_pairing(true, &mut svc.store, svc.backend.unlock_epoch()));
     assert!(d.closed);
     assert!(
         svc.store.find(&client.public_key()).is_none(),
@@ -594,7 +594,7 @@ fn session_first_message_payload_must_be_empty() {
     let d = deliver(&svc, &mut conn, &client.start_pairing().unwrap());
     let (frames, _) = client.on_frame(&d.to_client[0]).unwrap();
     deliver(&svc, &mut conn, &frames[0]);
-    collect(conn.confirm_pairing(true, &mut svc.store));
+    collect(conn.confirm_pairing(true, &mut svc.store, svc.backend.unlock_epoch()));
     assert!(svc.store.find(&client.public_key()).is_some());
 
     let ext = StaticKeypair::from_private(ext_private);
@@ -723,7 +723,7 @@ fn review3_pairing_save_failure_is_a_rejection() {
     let (frames, _) = client.on_frame(&d.to_client[0]).unwrap();
     let d = deliver(&svc, &mut conn, &frames[0]);
     assert!(d.confirm.is_some());
-    let d = collect(conn.confirm_pairing(true, &mut FailingStore));
+    let d = collect(conn.confirm_pairing(true, &mut FailingStore, svc.backend.unlock_epoch()));
     assert!(d.closed);
     let (_, events) = client.on_frame(&d.to_client[0]).unwrap();
     assert!(
@@ -746,4 +746,149 @@ fn review3_pairing_requires_unlocked_vault() {
         matches!(events[0], ClientEvent::Error(ErrorCode::Locked)),
         "{events:?}"
     );
+}
+
+// ---------------------------------------------------------------- 评审第四轮
+
+/// 第四轮 J5：配对开始后保险库被锁定（或锁定后又解锁），确认时按拒绝处理，不保存配对。
+#[test]
+fn review4_j5_lock_during_pairing_prevents_save() {
+    let mut svc = Service::new();
+    let mut client = ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "x");
+    let mut conn = svc.connect(ORIGIN);
+    let d = deliver(&svc, &mut conn, &client.start_pairing().unwrap());
+    let (frames, _) = client.on_frame(&d.to_client[0]).unwrap();
+    svc.backend.locked.set(true);
+    let d = deliver(&svc, &mut conn, &frames[0]);
+    assert!(d.confirm.is_some());
+    let d = collect(conn.confirm_pairing(true, &mut svc.store, svc.backend.unlock_epoch()));
+    assert!(d.closed);
+    assert!(
+        svc.store.find(&client.public_key()).is_none(),
+        "锁定时不得保存配对"
+    );
+    // 锁定后又解锁：代次已变，旧的确认同样无效
+    let (_, events) = client.on_frame(&d.to_client[0]).unwrap();
+    assert!(
+        matches!(events[0], ClientEvent::Error(ErrorCode::Locked)),
+        "{events:?}"
+    );
+    svc.backend.locked.set(false);
+    let mut client = ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "x");
+    let mut conn = svc.connect(ORIGIN);
+    let d = deliver(&svc, &mut conn, &client.start_pairing().unwrap());
+    let (frames, _) = client.on_frame(&d.to_client[0]).unwrap();
+    deliver(&svc, &mut conn, &frames[0]);
+    let d = collect(conn.confirm_pairing(true, &mut svc.store, Some(99)));
+    assert!(d.closed);
+    assert!(
+        svc.store.find(&client.public_key()).is_none(),
+        "不是同一次解锁"
+    );
+}
+
+/// 第四轮 J7（IPC 部分）：消息只接受规范编码。多余空白、调换字段顺序、未知字段都拒绝。
+#[test]
+fn review4_ipc_messages_must_be_canonical() {
+    let ok = br#"{"t":"hello","v":1}"#;
+    assert_eq!(
+        ControlFrame::from_json(ok).unwrap().to_json().unwrap(),
+        ok.to_vec()
+    );
+    // 语义相同、但不是规范编码：多余空白、调换字段顺序。Serde 本身接受它们，规范编码检查拒绝
+    for bad in [
+        &br#"{"t":"hello", "v":1}"#[..],
+        br#"{"v":1,"t":"hello"}"#,
+        br#"{"t":"hello","v":1.0}"#,
+    ] {
+        assert!(
+            ControlFrame::from_json(bad).is_err(),
+            "{}",
+            String::from_utf8_lossy(bad)
+        );
+    }
+    assert!(
+        serde_json::from_slice::<ControlFrame>(br#"{"v":1,"t":"hello"}"#).is_ok(),
+        "前提：Serde 接受调换顺序"
+    );
+}
+
+/// 第四轮 J4：放不进一条 Noise 消息的 `fill` 响应返回 `response_too_large`，连接保持可用；
+/// `candidates` 最多 20 个，标题截短。
+#[test]
+fn review4_j4_responses_are_bounded() {
+    struct Big;
+    impl VaultBackend for Big {
+        fn is_locked(&self) -> bool {
+            false
+        }
+        fn candidates(&self, _: &str) -> Vec<Candidate> {
+            (0..50)
+                .map(|i| Candidate {
+                    item_id: format!("i{i}"),
+                    title: "长".repeat(5000),
+                    subtitle: "s".into(),
+                })
+                .collect()
+        }
+        fn item_matches(&self, _: &str, _: &str) -> Option<bool> {
+            Some(true)
+        }
+        fn fill(&self, _: &str) -> Option<FillData> {
+            Some(FillData {
+                username: "u".into(),
+                password: "p".repeat(70_000),
+                totp: None,
+            })
+        }
+    }
+    let mut svc = Service::new();
+    let (mut client, _, mut conn) = pair(&mut svc, true);
+    let mut send = |conn: &mut ServiceConnection, c: Call| {
+        let (_, frame) = client.request(c).unwrap();
+        let d = collect(conn.on_frame(&frame, &svc.store, &Big));
+        assert!(!d.closed, "超大响应不应断开连接");
+        let (_, mut events) = client.on_frame(&d.to_client[0]).unwrap();
+        match events.remove(0) {
+            ClientEvent::Message(m) => m,
+            other => panic!("{other:?}"),
+        }
+    };
+    let fill = send(
+        &mut conn,
+        Call::Fill {
+            item_id: "i".into(),
+            url: "https://a.example".into(),
+        },
+    );
+    assert_eq!(error_code(&fill), Some(ErrorCode::ResponseTooLarge));
+    let c = send(
+        &mut conn,
+        Call::Candidates {
+            url: "https://a.example".into(),
+        },
+    );
+    let ServerMessage::Ok {
+        result: CallResult::Candidates { items },
+        ..
+    } = c
+    else {
+        panic!("{c:?}")
+    };
+    assert_eq!(items.len(), crate::message::MAX_CANDIDATES);
+    assert!(
+        items
+            .iter()
+            .all(|i| i.title.chars().count() == crate::message::MAX_CANDIDATE_TEXT)
+    );
+}
+
+/// 第四轮：规范已定义的 `not_authorized` 与新的 `response_too_large` 都能解码。
+#[test]
+fn review4_declared_error_codes_are_decodable() {
+    for code in ["not_authorized", "response_too_large", "pairing_limited"] {
+        let json = format!(r#"{{"t":"error","code":"{code}"}}"#);
+        let frame = ControlFrame::from_json(json.as_bytes()).unwrap();
+        assert_eq!(frame.to_json().unwrap(), json.into_bytes());
+    }
 }

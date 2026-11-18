@@ -31,7 +31,7 @@ const HOST: &str = env!("CARGO_BIN_EXE_keevo-native-host");
 struct AutoConfirm(Mutex<Vec<[u8; 6]>>);
 
 impl PairingPrompt for AutoConfirm {
-    fn confirm(&self, sas: [u8; 6], name: &str, browser: &str) -> bool {
+    fn confirm(&self, sas: [u8; 6], name: &str, browser: &str, _: std::time::Instant) -> bool {
         assert_eq!(name, "Chrome · 测试");
         assert_eq!(browser, "dev");
         self.0.lock().unwrap().push(sas);

@@ -15,6 +15,7 @@ keevo-store = { path = "../keevo-store" }
 url = "2"
 
 [dev-dependencies]
+keevo-store = { path = "../keevo-store", features = ["test-util"] }
 rusqlite = { version = "0.43.0", features = ["bundled"] }
 
 [lints]

@@ -421,6 +421,5 @@ const fn field_kind_name(k: FieldKind) -> &'static str {
         FieldKind::Reference => "reference",
         FieldKind::RecoveryCodes => "recovery_codes",
         FieldKind::KvList => "kv_list",
-        FieldKind::File => "file",
     }
 }

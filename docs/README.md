@@ -67,3 +67,4 @@
 | D10 | 同步方案 | 基于不可变文件的加密日志；默认 iCloud，兼容任意同步文件夹；M2 交付（[ADR-0001](adr/0001-file-based-cloud-sync.md)） | 已决定 |
 | D11 | 自托管服务端 | 暂缓、不排期；同步引擎通过 `SyncStore` 预留扩展点 | 已决定 |
 | D12 | 开发者团队与 iCloud 位置 | 不绑定任何 Apple 开发者团队，也不为 Keevo 申请；iCloud 同步用 iCloud 云盘中的普通文件夹（[ADR-0002](adr/0002-icloud-drive-folder-without-team.md)、[ADR-0003](adr/0003-no-apple-developer-team.md)）。依赖团队的功能（公证、iOS、系统级自动填充、Safari、Mac App Store）移出路线图 | 已决定 |
+| D13 | 规范冻结 | 四份规范 1.0 于 2026-11-18 冻结，此前经过四轮外部模型评审（不做外部人工评审）。改变格式必须使用新的线上版本标识并保留对旧版本的读取（[spec/README.md](../spec/README.md)） | 已决定 |

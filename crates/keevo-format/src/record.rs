@@ -61,19 +61,29 @@ impl RecordKey {
 
     fn parse(s: &str) -> Option<Self> {
         let (kind, rest) = s.split_once(':')?;
-        match kind {
-            "attr" => (!rest.is_empty()
-                && rest.len() <= MAX_ATTR_NAME
-                && rest
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'))
-            .then(|| Self::Attr(rest.to_owned())),
-            "tag" => {
-                (!rest.is_empty() && rest.len() <= MAX_TAG_LEN).then(|| Self::Tag(rest.to_owned()))
+        let key = match kind {
+            "attr" => Self::Attr(rest.to_owned()),
+            "tag" => Self::Tag(rest.to_owned()),
+            "section" => Self::Section(id_hex::parse(rest)?),
+            "field" => Self::Field(id_hex::parse(rest)?),
+            _ => return None,
+        };
+        key.is_valid().then_some(key)
+    }
+
+    /// 名称是否合法（`spec/vault-format.md` §2）：属性名 `[a-z0-9_]`、1–64 字节；标签名 1–256 字节。
+    /// 写入与解码使用同一条规则，写进去的键一定读得出来（第四轮评审 J3）。
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        match self {
+            Self::Attr(n) => {
+                !n.is_empty()
+                    && n.len() <= MAX_ATTR_NAME
+                    && n.bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
             }
-            "section" => id_hex::parse(rest).map(Self::Section),
-            "field" => id_hex::parse(rest).map(Self::Field),
-            _ => None,
+            Self::Tag(t) => !t.is_empty() && t.len() <= MAX_TAG_LEN,
+            Self::Section(_) | Self::Field(_) => true,
         }
     }
 }
@@ -241,6 +251,9 @@ pub type ConcurrentMap = BTreeMap<RecordKey, Vec<RecordVersion>>;
 /// 只有删除状态（`attr:trashed`、`attr:purged`）可以只有并发版本而没有当前版本（§4.3）。
 pub(crate) fn validate_concurrent(records: &RecordMap, concurrent: &ConcurrentMap) -> Result<()> {
     for (key, versions) in concurrent {
+        if !key.is_valid() {
+            return Err(FormatError::InvalidKey);
+        }
         if !records.contains_key(key) && !key.is_deletion_state() {
             return Err(FormatError::Malformed(
                 "concurrent: key without current version".into(),
@@ -282,9 +295,29 @@ pub const MAX_VALUE_LEN: usize = 256 * 1024;
 /// 整数值的范围：±(2⁵³−1)，保证在 JavaScript 等环境中无损，规范编码也唯一。
 pub const MAX_SAFE_INT: i64 = (1 << 53) - 1;
 
-/// 校验一个值：类型与键匹配，整数在安全范围内，编码后不超过 [`MAX_VALUE_LEN`]。
+/// 排序键的字母表与长度（`spec/vault-format.md` §2.4）。
+const MAX_ORDER_LEN: usize = 64;
+
+fn valid_order(order: &str) -> bool {
+    !order.is_empty()
+        && order.len() <= MAX_ORDER_LEN
+        && order.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// 校验一个值：类型与键匹配，整数在安全范围内，排序键合法，编码后不超过 [`MAX_VALUE_LEN`]。
 pub(crate) fn check_value(key: &RecordKey, value: &RecordValue) -> Result<()> {
+    if !key.is_valid() {
+        return Err(FormatError::InvalidKey);
+    }
     if !key.accepts(value) {
+        return Err(FormatError::ValueKindMismatch);
+    }
+    let order_ok = match value {
+        RecordValue::Section(s) => valid_order(&s.order),
+        RecordValue::Field(f) => valid_order(&f.order),
+        _ => true,
+    };
+    if !order_ok {
         return Err(FormatError::ValueKindMismatch);
     }
     if let RecordValue::Int(i) = value
@@ -300,6 +333,9 @@ pub(crate) fn check_value(key: &RecordKey, value: &RecordValue) -> Result<()> {
 
 pub(crate) fn validate(records: &RecordMap) -> Result<()> {
     for (key, version) in records {
+        if !key.is_valid() {
+            return Err(FormatError::InvalidKey);
+        }
         if let Some(value) = &version.value {
             check_value(key, value)?;
         }
