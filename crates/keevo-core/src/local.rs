@@ -25,6 +25,8 @@ const POINTER_TMP: &str = "current.tmp";
 const GEN_PREFIX: &str = "gen-";
 /// 指针中代次的最大位数。
 const MAX_GENERATION_DIGITS: usize = 15;
+/// 开机标识的最大长度。
+pub const MAX_BOOT_SESSION_LEN: usize = 64;
 
 /// 平台层报告的错误（§8.7"失败与恢复"）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +37,8 @@ pub enum EnclaveError {
     Unavailable,
     /// 能确定材料本身已失效：blob 无法解析、密钥因指纹变化而失效。
     Unusable,
+    /// 用户在场验证未通过（指纹不匹配）。计入连续失败次数（`docs/security.md` §8）。
+    Failed,
 }
 
 /// 平台层新建的 Secure Enclave 密钥。
@@ -105,6 +109,7 @@ pub struct LocalKeys {
     enclave: Arc<dyn SecureEnclave>,
     current: Option<u64>,
     entries: BTreeMap<LocalPurpose, Entry>,
+    boot_session: Option<String>,
 }
 
 impl LocalKeys {
@@ -118,6 +123,7 @@ impl LocalKeys {
             enclave,
             current: None,
             entries: BTreeMap::new(),
+            boot_session: None,
         };
         let pointer = read_pointer(dir)?;
         let mut candidates = list_generations(dir)?;
@@ -134,6 +140,20 @@ impl LocalKeys {
             }
         }
         Ok(keys)
+    }
+
+    /// 设定本次开机的标识（macOS 上为 `kern.bootsessionuuid`），用于"重启后的首次解锁必须输入主密码"。
+    /// 不设定或为空时，视为每次都是重启之后。
+    #[must_use]
+    pub fn with_boot_session(mut self, boot_session: &str) -> Self {
+        self.boot_session = (!boot_session.is_empty()
+            && boot_session.len() <= MAX_BOOT_SESSION_LEN)
+            .then(|| boot_session.to_owned());
+        self
+    }
+
+    pub(crate) fn boot_session(&self) -> Option<&str> {
+        self.boot_session.as_deref()
     }
 
     /// 当前代次是否包含这个用途。
@@ -414,6 +434,7 @@ impl From<EnclaveError> for CoreError {
     fn from(e: EnclaveError) -> Self {
         match e {
             EnclaveError::Cancelled => Self::Cancelled,
+            EnclaveError::Failed => Self::AuthenticationFailed,
             EnclaveError::Unavailable | EnclaveError::Unusable => Self::EnclaveUnavailable,
         }
     }

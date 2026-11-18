@@ -18,6 +18,21 @@ use crate::local::{LocalKeys, Unwrapped};
 
 const META_DEVICE_ID: &str = "device_id";
 const META_HLC: &str = "hlc_last";
+/// 上次用主密码解锁的时间（Unix 毫秒，大端 u64）。
+const META_PASSWORD_MS: &str = "password_unlock_ms";
+/// 上次用主密码解锁时的开机标识。
+const META_PASSWORD_BOOT: &str = "password_unlock_boot";
+/// Touch ID 连续失败的次数（1 字节）。
+const META_TOUCH_ID_FAILURES: &str = "touch_id_failures";
+/// 必须重新输入主密码的间隔天数（1 字节）。
+const META_PASSWORD_INTERVAL: &str = "password_interval_days";
+/// 必须重新输入主密码的默认间隔（`docs/ux.md` §3.2）。
+pub const DEFAULT_PASSWORD_INTERVAL_DAYS: u8 = 14;
+/// 间隔的可选范围。
+pub const PASSWORD_INTERVAL_DAYS: core::ops::RangeInclusive<u8> = 1..=30;
+/// Touch ID 连续失败多少次后必须输入主密码。
+pub const MAX_TOUCH_ID_FAILURES: u8 = 3;
+const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 const DEFAULT_VAULT_NAME: &str = "个人";
 const FIRST_EPOCH: u64 = 1;
 /// 每个对象保留完整内容的修订数（`spec/revisions.md` §7）。
@@ -36,6 +51,21 @@ pub struct NewField {
     pub purpose: Option<Purpose>,
     /// 字段数据。
     pub data: FieldData,
+}
+
+/// 为什么这次不能用 Touch ID、必须输入主密码（`docs/security.md` §8、`docs/ux.md` §3.2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasswordReason {
+    /// 没有启用 Touch ID。
+    NotEnabled,
+    /// Touch ID 已失效（例如指纹有变化）；用主密码解锁后自动恢复。
+    Invalidated,
+    /// Mac 重启后的首次解锁。
+    Restarted,
+    /// 距上次输入主密码超过了设定的天数。
+    IntervalElapsed,
+    /// Touch ID 连续失败次数过多。
+    TooManyFailures,
 }
 
 /// 历史中的一个修订（[`Vault::history`]）。
@@ -232,6 +262,7 @@ impl Vault {
             verify_entry(keys, p, &account_id, &device_id)
         })?;
         vault.local = Some(local);
+        vault.record_password_unlock()?;
         Ok((vault, secret_key))
     }
 
@@ -398,8 +429,99 @@ impl Vault {
         }
         let auk = derive_account_unlock_key(password, secret_key, &account.id, &params)?;
         self.open_session(&account, &params, &auk)?;
+        self.record_password_unlock()?;
         self.after_password_unlock(&account.id, secret_key, &auk);
         Ok(())
+    }
+
+    /// 记下"刚刚输入过主密码"：时间、开机标识，并清零 Touch ID 的连续失败次数。
+    fn record_password_unlock(&mut self) -> Result<()> {
+        self.store
+            .set_meta(META_PASSWORD_MS, &now_ms().to_be_bytes())?;
+        let boot = self
+            .local
+            .as_ref()
+            .and_then(LocalKeys::boot_session)
+            .unwrap_or_default()
+            .to_owned();
+        self.store.set_meta(META_PASSWORD_BOOT, boot.as_bytes())?;
+        self.store.set_meta(META_TOUCH_ID_FAILURES, &[0])?;
+        Ok(())
+    }
+
+    /// 测试专用：改写元数据，模拟时间流逝或篡改。
+    #[cfg(test)]
+    pub(crate) fn set_meta_for_tests(&mut self, key: &str, value: &[u8]) {
+        self.store.set_meta(key, value).unwrap_or_default();
+    }
+
+    fn touch_id_failures(&self) -> Result<u8> {
+        Ok(match self.store.meta(META_TOUCH_ID_FAILURES)?.as_deref() {
+            Some([n]) => *n,
+            None => 0,
+            // 格式不对时按已达上限处理（保守）
+            Some(_) => MAX_TOUCH_ID_FAILURES,
+        })
+    }
+
+    /// 必须重新输入主密码的间隔天数。
+    ///
+    /// # Errors
+    /// SQLite 错误。
+    pub fn password_interval_days(&self) -> Result<u8> {
+        Ok(match self.store.meta(META_PASSWORD_INTERVAL)?.as_deref() {
+            Some([n]) if PASSWORD_INTERVAL_DAYS.contains(n) => *n,
+            _ => DEFAULT_PASSWORD_INTERVAL_DAYS,
+        })
+    }
+
+    /// 设定必须重新输入主密码的间隔天数（1–30）。
+    ///
+    /// # Errors
+    /// 超出范围返回 [`CoreError::OutOfRange`]；SQLite 错误。
+    pub fn set_password_interval_days(&mut self, days: u8) -> Result<()> {
+        if !PASSWORD_INTERVAL_DAYS.contains(&days) {
+            return Err(CoreError::OutOfRange);
+        }
+        self.store.set_meta(META_PASSWORD_INTERVAL, &[days])?;
+        Ok(())
+    }
+
+    /// 此时能否用 Touch ID 解锁；不能时返回原因，解锁界面据此说明为什么需要主密码。
+    ///
+    /// # Errors
+    /// SQLite 错误。
+    pub fn password_reason(&self) -> Result<Option<PasswordReason>> {
+        if !self
+            .local
+            .as_ref()
+            .is_some_and(|l| l.has(LocalPurpose::Auk))
+        {
+            return Ok(Some(PasswordReason::NotEnabled));
+        }
+        if self.touch_id_broken {
+            return Ok(Some(PasswordReason::Invalidated));
+        }
+        let boot_now = self.local.as_ref().and_then(LocalKeys::boot_session);
+        let boot_then = self.store.meta(META_PASSWORD_BOOT)?;
+        if boot_now.is_none() || boot_then.as_deref() != boot_now.map(str::as_bytes) {
+            return Ok(Some(PasswordReason::Restarted));
+        }
+        let then = self
+            .store
+            .meta(META_PASSWORD_MS)?
+            .and_then(|b| <[u8; 8]>::try_from(b.as_slice()).ok())
+            .map(u64::from_be_bytes);
+        let limit = u64::from(self.password_interval_days()?).saturating_mul(DAY_MS);
+        // 时钟倒退（现在早于上次）也按超期处理
+        let elapsed = then.and_then(|t| now_ms().checked_sub(t));
+        if elapsed.is_none_or(|e| e > limit) {
+            return Ok(Some(PasswordReason::IntervalElapsed));
+        }
+        if self.touch_id_failures()? >= MAX_TOUCH_ID_FAILURES {
+            return Ok(Some(PasswordReason::TooManyFailures));
+        }
+        Ok(None)
     }
 
     /// 用 AUK 打开密钥集与各保险库密钥，建立会话。AUK 不对时返回 [`CoreError::WrongCredentials`]。
@@ -583,6 +705,7 @@ impl Vault {
             verify_entry(keys, p, &account.id, &device_id)
         })?;
         self.touch_id_broken = false;
+        self.record_password_unlock()?;
         Ok(())
     }
 
@@ -611,16 +734,25 @@ impl Vault {
     /// 用 Touch ID 解锁：Secure Enclave 解开 AUK，直接打开密钥集，不执行 KDF。
     ///
     /// # Errors
-    /// 用户取消返回 [`CoreError::Cancelled`]；未启用或已失效返回 [`CoreError::TouchIdUnavailable`]，
-    /// 此时改用主密码，解锁成功后自动重新包裹。
+    /// [`Vault::password_reason`] 不为空时返回 [`CoreError::TouchIdUnavailable`]，不弹出 Touch ID；
+    /// 用户取消返回 [`CoreError::Cancelled`]；指纹不匹配返回 [`CoreError::AuthenticationFailed`]，
+    /// 计入连续失败次数；已失效返回 [`CoreError::TouchIdUnavailable`]，用主密码解锁后自动重新包裹。
     pub fn unlock_with_touch_id(&mut self) -> Result<()> {
-        if self.touch_id_broken {
+        if self.password_reason()?.is_some() {
             return Err(CoreError::TouchIdUnavailable);
         }
         let account = self.store.account()?.ok_or(CoreError::NoAccount)?;
         let params = KdfParams::decode(&account.kdf_params)?;
         let local = self.local.as_ref().ok_or(CoreError::TouchIdUnavailable)?;
-        let auk = match local.auk(&account.id, &self.device_id)? {
+        let unwrapped = match local.auk(&account.id, &self.device_id) {
+            Err(CoreError::AuthenticationFailed) => {
+                let n = self.touch_id_failures()?.saturating_add(1);
+                self.store.set_meta(META_TOUCH_ID_FAILURES, &[n])?;
+                return Err(CoreError::AuthenticationFailed);
+            }
+            other => other?,
+        };
+        let auk = match unwrapped {
             Unwrapped::Ok(auk) => auk,
             Unwrapped::Missing => return Err(CoreError::TouchIdUnavailable),
             Unwrapped::Unusable => {
@@ -630,6 +762,7 @@ impl Vault {
         };
         match self.open_session(&account, &params, &auk) {
             Ok(()) => {
+                self.store.set_meta(META_TOUCH_ID_FAILURES, &[0])?;
                 if let Some(local) = self.local.as_ref() {
                     let _ = local.cleanup();
                 }
@@ -1405,6 +1538,12 @@ fn apply(doc: &mut ItemDoc, edit: Edit, hlc: Hlc, rev: Id128) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// 测试专用：核心层使用的当前时间。
+#[cfg(test)]
+pub(crate) fn vault_now_ms_for_tests() -> u64 {
+    now_ms()
 }
 
 fn now_ms() -> u64 {

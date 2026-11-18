@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later（附加 App Store 许可，见仓库根目录 LICENSE）
 
 import AppKit
+import CoreGraphics
 import Foundation
 import KeevoKit
 import Observation
 
-/// 应用状态。所有耗时的 Rust 调用（Argon2id 约 1 秒）都放到后台执行，界面保持响应。
+/// 应用状态。所有耗时的 Rust 调用（Argon2id 约 1 秒、Touch ID 等待用户）都放到后台执行，界面保持响应。
 @MainActor
 @Observable
 final class AppModel {
@@ -22,21 +23,43 @@ final class AppModel {
     var errorMessage: String?
     /// 新建账户后只展示一次的账户密钥。
     var pendingSecretKey: String?
+    /// 解锁时发现 KDF 参数异常地高，等待用户确认（spec/crypto.md §5.3）。
+    var pendingKdf: KdfInfo?
     private(set) var vaults: [VaultEntry] = []
     private(set) var items: [ItemEntry] = []
+    /// 每次条目数据变化时加 1。详情等视图据此重新读取。
+    private(set) var dataVersion = 0
 
     /// 本机没有可用的账户密钥，解锁时需要用户从应急包输入。
     private(set) var needsSecretKey = false
     /// Touch ID 已启用且未失效。
     private(set) var touchIDEnabled = false
+    /// 此时不能用 Touch ID 的原因；为 `nil` 时可以用 Touch ID 解锁（docs/ux.md §3.2）。
+    private(set) var passwordReason: PasswordReasonKind? = .notEnabled
+    /// 必须重新输入主密码的间隔天数。
+    private(set) var passwordIntervalDays: UInt8 = 14
+
+    /// 闲置多少分钟后自动锁定（docs/ux.md §3.8）。
+    var autoLockMinutes: Int {
+        didSet { UserDefaults.standard.set(autoLockMinutes, forKey: Self.autoLockKey) }
+    }
+    static let autoLockChoices = [1, 2, 5, 10, 15, 30, 60]
+    private static let autoLockKey = "autoLockMinutes"
 
     private var vault: KeevoVault?
     private let dbPath: String
     private let localDir: String
     private let enclave = SecureEnclaveBridge(touchIDReason: "解锁 Keevo")
     private var observers: [NSObjectProtocol] = []
+    private var idleTimer: Timer?
+    /// 本次锁定期间是否已经自动弹出过 Touch ID。系统的 Touch ID 提示关闭时，应用会再次变为活跃；
+    /// 不加限制的话，用户点了取消就会再弹一次，没完没了。
+    private var autoPrompted = false
 
     init() {
+        let stored = UserDefaults.standard.integer(forKey: Self.autoLockKey)
+        autoLockMinutes = Self.autoLockChoices.contains(stored) ? stored : 10
+
         // 数据目录（ADR-0003）：数据库与本机密钥目录（spec/crypto.md §8.7）
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Keevo", isDirectory: true)
@@ -49,10 +72,16 @@ final class AppModel {
             open(reenrolling: false)
         }
         observeSystemLockEvents()
+        startIdleTimer()
     }
 
     /// Touch ID 在这台 Mac 上是否可用（登记了指纹）。
     var touchIDAvailable: Bool { SecureEnclaveBridge.touchIDAvailable }
+
+    /// 此时能否用 Touch ID 解锁。
+    var touchIDUsable: Bool { touchIDEnabled && passwordReason == nil }
+
+    private var environment: LocalEnvironment { .thisMac(localDir: localDir, enclave: enclave) }
 
     // MARK: - 打开
 
@@ -60,10 +89,9 @@ final class AppModel {
     func open(reenrolling: Bool) {
         errorMessage = nil
         do {
-            let opened = reenrolling
-                ? try openVaultReenrolling(path: dbPath, localDir: localDir, enclave: enclave)
-                : try openVault(path: dbPath, localDir: localDir, enclave: enclave)
-            vault = opened
+            vault = reenrolling
+                ? try openVaultReenrolling(path: dbPath, local: environment)
+                : try openVault(path: dbPath, local: environment)
             refreshLocalState()
             phase = .locked
         } catch KeevoError.EnclaveUnavailable {
@@ -74,19 +102,17 @@ final class AppModel {
         }
     }
 
-    // MARK: - 账户
+    // MARK: - 账户与解锁
 
     func createAccount(password: String) async {
         await run {
-            let (path, localDir, enclave) = (self.dbPath, self.localDir, self.enclave)
+            let (path, env) = (self.dbPath, self.environment)
             let account = try await Task.detached {
-                try KeevoKit.createAccount(path: path, password: password, localDir: localDir, enclave: enclave)
+                try KeevoKit.createAccount(path: path, password: password, local: env)
             }.value
             self.vault = account.vault
             self.pendingSecretKey = account.secretKey
-            self.refreshLocalState()
-            try self.reload()
-            self.phase = .unlocked
+            try self.didUnlock()
         }
     }
 
@@ -106,25 +132,50 @@ final class AppModel {
             } catch KeevoError.SecretKeyRequired {
                 self.needsSecretKey = true
                 throw KeevoError.SecretKeyRequired
+            } catch KeevoError.KdfNeedsConfirmation {
+                self.pendingKdf = try? vault.kdfParams()
+                return
             }
+            try self.didUnlock()
+        }
+    }
+
+    /// 用户确认了异常的 KDF 参数之后解锁。确认的必须正是此刻的参数，否则不执行派生。
+    func unlockConfirmingKdf(password: String, secretKey: String, confirmed: KdfInfo) async {
+        guard let vault else { return }
+        pendingKdf = nil
+        let manual = secretKey.trimmingCharacters(in: .whitespaces)
+        await run {
+            try await Task.detached {
+                try vault.unlockConfirmingKdf(
+                    password: password, secretKey: manual.isEmpty ? nil : manual, confirmed: confirmed
+                )
+            }.value
             try self.didUnlock()
         }
     }
 
     /// 用 Touch ID 解锁。用户取消时不显示错误。
     func unlockWithTouchID() async {
-        guard let vault, touchIDEnabled else { return }
+        guard let vault, touchIDUsable, !busy else { return }
         await run {
+            defer { self.refreshLocalState() }
             do {
                 try await Task.detached { try vault.unlockWithTouchId() }.value
             } catch KeevoError.Cancelled {
                 return
-            } catch KeevoError.TouchIdUnavailable {
-                self.refreshLocalState()
-                throw KeevoError.TouchIdUnavailable
             }
             try self.didUnlock()
         }
+    }
+
+    /// 应用回到前台时：锁定且可以用 Touch ID，就直接弹出 Touch ID（docs/ux.md §3.2"默认用 Touch ID"）。
+    func appDidBecomeActive() {
+        guard phase == .locked, !autoPrompted else { return }
+        refreshLocalState()
+        guard touchIDUsable else { return }
+        autoPrompted = true
+        Task { await unlockWithTouchID() }
     }
 
     /// 启用 Touch ID：需要再输入一次主密码。
@@ -147,14 +198,28 @@ final class AppModel {
         }
     }
 
+    func setPasswordInterval(days: UInt8) {
+        guard let vault else { return }
+        perform {
+            try vault.setPasswordIntervalDays(days: days)
+            self.refreshLocalState()
+        }
+    }
+
     /// 锁定：Rust 端清除全部密钥，界面同时丢弃所有已解密的数据。
     func lock() {
         vault?.lock()
         vaults = []
         items = []
         pendingSecretKey = nil
+        pendingKdf = nil
+        dataVersion &+= 1
         Clipboard.clearIfOwned()
-        if vault != nil { phase = .locked }
+        if vault != nil {
+            phase = .locked
+            autoPrompted = false
+            refreshLocalState()
+        }
     }
 
     private func didUnlock() throws {
@@ -167,45 +232,154 @@ final class AppModel {
         guard let vault else { return }
         needsSecretKey = !vault.hasLocalSecretKey()
         touchIDEnabled = vault.touchIdEnabled()
+        passwordReason = (try? vault.passwordReason()) ?? .restarted
+        passwordIntervalDays = (try? vault.passwordIntervalDays()) ?? 14
+    }
+
+    // MARK: - 自动锁定
+
+    /// 闲置检测：按整个系统的最后一次键盘、鼠标或触控板输入计时，而不只看 Keevo 的窗口。
+    private func startIdleTimer() {
+        idleTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.phase == .unlocked, !self.busy else { return }
+                if Self.systemIdleSeconds() >= TimeInterval(self.autoLockMinutes * 60) {
+                    self.lock()
+                }
+            }
+        }
+    }
+
+    static func systemIdleSeconds() -> TimeInterval {
+        guard let anyInput = CGEventType(rawValue: UInt32.max) else { return 0 }
+        return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput)
+    }
+
+    /// 系统睡眠、屏幕锁定、屏幕保护程序启动或切换用户时自动锁定（docs/ux.md §3.8）。
+    private func observeSystemLockEvents() {
+        let workspace = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification,
+                     NSWorkspace.sessionDidResignActiveNotification] {
+            observers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.lock() }
+            })
+        }
+        for name in ["com.apple.screenIsLocked", "com.apple.screensaver.didstart"] {
+            observers.append(DistributedNotificationCenter.default().addObserver(
+                forName: Notification.Name(name), object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.lock() }
+            })
+        }
+        observers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.appDidBecomeActive() }
+        })
     }
 
     // MARK: - 条目
 
-    func createLogin(vaultId: String, title: String, username: String, password: String, url: String) {
-        guard let vault else { return }
+    @discardableResult
+    func createLogin(vaultId: String, title: String, username: String, password: String, url: String) -> String? {
+        guard let vault else { return nil }
+        var id: String?
         perform {
-            _ = try vault.createLogin(
+            id = try vault.createLogin(
                 vaultId: vaultId,
                 input: LoginInput(title: title, username: username, password: password, url: url)
             )
             try self.reload()
         }
+        return id
     }
 
-    func fields(of itemId: String) -> [FieldEntry] {
+    func detail(of itemId: String) -> ItemDetail? {
+        guard let vault else { return nil }
+        do {
+            return try vault.item(itemId: itemId)
+        } catch KeevoError.NotFound {
+            return nil
+        } catch {
+            report(error)
+            return nil
+        }
+    }
+
+    /// 保存编辑。错误交给调用方展示（编辑界面需要区分"过大"与"需要重建"）。
+    /// `force` 时即使没有编辑也写入一个收敛修订，用于确认撤销删除等状态（spec/revisions.md §5.4）。
+    func update(itemId: String, edits: [ItemEdit], force: Bool = false) throws {
+        guard let vault, !edits.isEmpty || force else { return }
+        do {
+            try vault.updateItem(itemId: itemId, edits: edits)
+        } catch KeevoError.Locked {
+            lock()
+            throw KeevoError.Locked
+        }
+        try reload()
+    }
+
+    func setFavorite(itemId: String, _ favorite: Bool) {
+        mutate { try $0.updateItem(itemId: itemId, edits: [.setFavorite(favorite: favorite)]) }
+    }
+
+    func trash(itemId: String) {
+        mutate { try $0.trashItem(itemId: itemId) }
+    }
+
+    func restore(itemId: String) {
+        mutate { try $0.restoreItem(itemId: itemId) }
+    }
+
+    func purge(itemId: String) {
+        mutate { try $0.purgeItem(itemId: itemId) }
+    }
+
+    func history(of itemId: String) -> [HistoryItem] {
         guard let vault else { return [] }
         do {
-            return try vault.fields(itemId: itemId)
+            return try vault.history(itemId: itemId)
         } catch {
             report(error)
             return []
         }
     }
 
-    func trash(itemId: String) {
-        guard let vault else { return }
-        perform {
-            try vault.trashItem(itemId: itemId)
-            try self.reload()
-        }
+    func revisionFields(itemId: String, revId: String) -> [FieldEntry]? {
+        try? vault?.revisionFields(itemId: itemId, revId: revId)
+    }
+
+    func restoreVersion(itemId: String, revId: String) {
+        mutate { try $0.restoreVersion(itemId: itemId, revId: revId) }
+    }
+
+    func resolveConflict(itemId: String, key: String, revId: String) {
+        mutate { try $0.resolveConflict(itemId: itemId, key: key, revId: revId) }
+    }
+
+    /// 重建为新条目（spec/revisions.md §7.1），返回新条目的 ID。
+    func rebuild(itemId: String) throws -> String? {
+        guard let vault else { return nil }
+        let id = try vault.rebuildItem(itemId: itemId, drop: [])
+        try reload()
+        return id
     }
 
     // MARK: - 内部
+
+    private func mutate(_ body: (KeevoVault) throws -> Void) {
+        guard let vault else { return }
+        perform {
+            try body(vault)
+            try self.reload()
+        }
+    }
 
     private func reload() throws {
         guard let vault else { return }
         vaults = try vault.vaults()
         items = try vault.items()
+        dataVersion &+= 1
     }
 
     private func run(_ body: @escaping () async throws -> Void) async {
@@ -243,7 +417,9 @@ final class AppModel {
         case .SecretKeyRequired:
             return "这台 Mac 上没有可用的账户密钥（例如数据是从别处恢复的）。请从应急包中输入账户密钥，之后只需主密码。"
         case .TouchIdUnavailable:
-            return "Touch ID 已失效（例如指纹有变化）。请输入主密码解锁，Touch ID 会随后自动恢复。"
+            return "现在不能使用 Touch ID，请输入主密码。"
+        case .AuthenticationFailed:
+            return "Touch ID 未能识别指纹。"
         case .EnclaveUnavailable:
             return "Secure Enclave 暂时不可用，请稍后重试。"
         case .Cancelled:
@@ -253,7 +429,7 @@ final class AppModel {
         case .InvalidSecretKey:
             return "账户密钥格式不正确，应形如 K1-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX。"
         case .Tampered:
-            return "数据似乎被篡改或损坏了，Keevo 已阻止打开它。"
+            return "数据似乎被篡改或损坏了，Keevo 已阻止打开它。你可以从历史版本恢复。"
         case .Locked:
             return "保险库已锁定。"
         case .KdfNeedsConfirmation:
@@ -261,26 +437,24 @@ final class AppModel {
         case .ItemTooLarge:
             return "这个条目合并其他设备的内容后过大，无法保存。请先处理冲突或删除部分字段。"
         case .ItemNeedsRebuild:
-            return "这个条目合并其他设备的内容后超出了上限，只能查看和导出。可以把它重建为一个新条目后继续编辑。"
+            return "这个条目合并其他设备的内容后超出了上限，只能查看。可以把它重建为一个新条目后继续编辑。"
+        case .NotFound:
+            return "这个条目已不存在。"
         default:
             return "操作失败：\(error)"
         }
     }
 
-    /// 系统睡眠、屏幕锁定或切换用户时自动锁定（docs/ux.md §3.8）。
-    private func observeSystemLockEvents() {
-        let workspace = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification,
-                     NSWorkspace.sessionDidResignActiveNotification] {
-            observers.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.lock() }
-            })
+    /// 解锁界面说明为什么这次需要主密码（docs/ux.md §2"锁屏"）。没有启用 Touch ID 时不说明。
+    var passwordReasonText: String? {
+        guard touchIDEnabled || passwordReason == .invalidated else { return nil }
+        switch passwordReason {
+        case .restarted: return "Mac 重启后需要输入一次主密码。"
+        case .intervalElapsed: return "距上次输入主密码已超过 \(passwordIntervalDays) 天，请输入一次主密码。"
+        case .tooManyFailures: return "Touch ID 连续多次未能识别，请输入主密码。"
+        case .invalidated: return "Touch ID 已失效（例如指纹有变化）。输入主密码后会自动恢复。"
+        case .notEnabled, nil: return nil
         }
-        observers.append(DistributedNotificationCenter.default().addObserver(
-            forName: Notification.Name("com.apple.screenIsLocked"), object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.lock() }
-        })
     }
 }
 

@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use keevo_core::local::{EnclaveError, EnclaveKey, EphemeralAgreement, LocalKeys, SecureEnclave};
-use keevo_core::{LocalPurpose, Store};
+use keevo_core::{LocalPurpose, PasswordReason, Store};
 
 use keevo_core::{
     AccountSecretKey, CoreError, Edit, FieldData, FieldKind, Id128, ItemDoc, ItemType, KdfParams,
@@ -57,8 +57,10 @@ pub enum KeevoError {
     EnclaveUnavailable,
     /// 本机没有可用的账户密钥，需要用户从应急包输入，然后调用 [`KeevoVault::unlock`]。
     SecretKeyRequired,
-    /// Touch ID 未启用或已失效（如指纹变化），改用主密码；解锁成功后自动重新包裹。
+    /// 此时不能用 Touch ID（原因见 [`KeevoVault::password_reason`]），改用主密码。
     TouchIdUnavailable,
+    /// Touch ID 未能识别指纹。连续 3 次后必须输入主密码。
+    AuthenticationFailed,
     /// 输入不合法。
     InvalidInput {
         /// 说明。
@@ -88,6 +90,7 @@ impl fmt::Display for KeevoError {
             Self::EnclaveUnavailable => f.write_str("secure enclave unavailable"),
             Self::SecretKeyRequired => f.write_str("secret key required"),
             Self::TouchIdUnavailable => f.write_str("touch id unavailable"),
+            Self::AuthenticationFailed => f.write_str("touch id authentication failed"),
             Self::InvalidInput { message } => write!(f, "invalid input: {message}"),
             Self::Internal { message } => write!(f, "internal: {message}"),
         }
@@ -112,6 +115,10 @@ impl From<CoreError> for KeevoError {
             CoreError::EnclaveUnavailable => Self::EnclaveUnavailable,
             CoreError::SecretKeyRequired => Self::SecretKeyRequired,
             CoreError::TouchIdUnavailable => Self::TouchIdUnavailable,
+            CoreError::AuthenticationFailed => Self::AuthenticationFailed,
+            CoreError::OutOfRange => Self::InvalidInput {
+                message: "out of range".into(),
+            },
             other => Self::Internal {
                 message: other.to_string(),
             },
@@ -128,6 +135,8 @@ pub enum EnclaveFailure {
     Unavailable,
     /// 能确定材料本身已失效：blob 无法解析、密钥因指纹变化而失效。
     Unusable,
+    /// 用户在场验证未通过（指纹不匹配）。
+    Failed,
 }
 
 impl fmt::Display for EnclaveFailure {
@@ -136,6 +145,7 @@ impl fmt::Display for EnclaveFailure {
             Self::Cancelled => "cancelled",
             Self::Unavailable => "unavailable",
             Self::Unusable => "unusable",
+            Self::Failed => "failed",
         })
     }
 }
@@ -207,6 +217,7 @@ const fn enclave_error(e: &EnclaveFailure) -> EnclaveError {
         EnclaveFailure::Cancelled => EnclaveError::Cancelled,
         EnclaveFailure::Unavailable => EnclaveError::Unavailable,
         EnclaveFailure::Unusable => EnclaveError::Unusable,
+        EnclaveFailure::Failed => EnclaveError::Failed,
     }
 }
 
@@ -246,11 +257,49 @@ impl SecureEnclave for EnclaveAdapter {
     }
 }
 
-fn local_keys(dir: &str, enclave: Arc<dyn SecureEnclaveProvider>) -> Result<LocalKeys, KeevoError> {
+/// 这台 Mac 的本机环境：本机密钥目录、Secure Enclave，以及本次开机的标识。
+#[derive(uniffi::Record)]
+pub struct LocalEnvironment {
+    /// 本机密钥目录（`spec/crypto.md` §8.7）。
+    pub local_dir: String,
+    /// 本次开机的标识（`kern.bootsessionuuid`）。用于"重启后的首次解锁必须输入主密码"；
+    /// 取不到时传空字符串，Touch ID 就会一直要求先输入主密码。
+    pub boot_session: String,
+    /// Secure Enclave 的实现。
+    pub enclave: Arc<dyn SecureEnclaveProvider>,
+}
+
+fn local_keys(env: LocalEnvironment) -> Result<LocalKeys, KeevoError> {
     Ok(LocalKeys::load(
-        Path::new(dir),
-        Arc::new(EnclaveAdapter(enclave)),
-    )?)
+        Path::new(&env.local_dir),
+        Arc::new(EnclaveAdapter(env.enclave)),
+    )?
+    .with_boot_session(&env.boot_session))
+}
+
+/// 为什么此时不能用 Touch ID、必须输入主密码。解锁界面据此说明原因（`docs/ux.md` §3.2）。
+#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasswordReasonKind {
+    /// 没有启用 Touch ID。
+    NotEnabled,
+    /// Touch ID 已失效（例如指纹有变化）；用主密码解锁后自动恢复。
+    Invalidated,
+    /// Mac 重启后的首次解锁。
+    Restarted,
+    /// 距上次输入主密码超过了设定的天数。
+    IntervalElapsed,
+    /// Touch ID 连续失败次数过多。
+    TooManyFailures,
+}
+
+const fn reason_kind(r: PasswordReason) -> PasswordReasonKind {
+    match r {
+        PasswordReason::NotEnabled => PasswordReasonKind::NotEnabled,
+        PasswordReason::Invalidated => PasswordReasonKind::Invalidated,
+        PasswordReason::Restarted => PasswordReasonKind::Restarted,
+        PasswordReason::IntervalElapsed => PasswordReasonKind::IntervalElapsed,
+        PasswordReason::TooManyFailures => PasswordReasonKind::TooManyFailures,
+    }
 }
 
 /// 新建账户的结果。
@@ -288,6 +337,8 @@ pub struct ItemEntry {
     pub urls: Vec<String>,
     /// 是否收藏。
     pub favorite: bool,
+    /// 标签。
+    pub tags: Vec<String>,
     /// 是否在回收站。
     pub trashed: bool,
     /// 是否有未解决的并发冲突。
@@ -465,7 +516,7 @@ pub struct LoginInput {
 }
 
 /// 新建账户：在 `path` 创建数据库、账户与默认保险库，并把设备标记与账户密钥包裹到
-/// 本机密钥目录 `local_dir`（`spec/crypto.md` §8.7）。之后日常只需主密码。
+/// 本机密钥目录（`spec/crypto.md` §8.7）。之后日常只需主密码。
 ///
 /// # Errors
 /// 已有账户等情况返回对应错误；Secure Enclave 不可用时返回 [`KeevoError::EnclaveUnavailable`]。
@@ -473,11 +524,10 @@ pub struct LoginInput {
 pub fn create_account(
     path: String,
     password: String,
-    local_dir: String,
-    enclave: Arc<dyn SecureEnclaveProvider>,
+    local: LocalEnvironment,
 ) -> Result<NewAccount, KeevoError> {
     let params = KdfParams::generate_default().map_err(CoreError::from)?;
-    let local = local_keys(&local_dir, enclave)?;
+    let local = local_keys(local)?;
     let store = Store::open(Path::new(&path)).map_err(CoreError::from)?;
     let (vault, secret_key) = Vault::create_with_local(store, &password, params, local)?;
     Ok(NewAccount {
@@ -488,18 +538,14 @@ pub fn create_account(
     })
 }
 
-/// 打开已有的数据库（锁定状态），接入本机密钥目录 `local_dir`。
+/// 打开已有的数据库（锁定状态），接入这台 Mac 的本机环境。
 ///
 /// # Errors
 /// 没有账户时返回 [`KeevoError::NoAccount`]；Secure Enclave 暂时不可用时返回
 /// [`KeevoError::EnclaveUnavailable`]，此时什么都没有改变。
 #[uniffi::export]
-pub fn open_vault(
-    path: String,
-    local_dir: String,
-    enclave: Arc<dyn SecureEnclaveProvider>,
-) -> Result<Arc<KeevoVault>, KeevoError> {
-    let local = local_keys(&local_dir, enclave)?;
+pub fn open_vault(path: String, local: LocalEnvironment) -> Result<Arc<KeevoVault>, KeevoError> {
+    let local = local_keys(local)?;
     let store = Store::open(Path::new(&path)).map_err(CoreError::from)?;
     Ok(Arc::new(KeevoVault {
         inner: Mutex::new(Vault::open_with_local(store, local)?),
@@ -514,10 +560,9 @@ pub fn open_vault(
 #[uniffi::export]
 pub fn open_vault_reenrolling(
     path: String,
-    local_dir: String,
-    enclave: Arc<dyn SecureEnclaveProvider>,
+    local: LocalEnvironment,
 ) -> Result<Arc<KeevoVault>, KeevoError> {
-    let local = local_keys(&local_dir, enclave)?;
+    let local = local_keys(local)?;
     let store = Store::open(Path::new(&path)).map_err(CoreError::from)?;
     Ok(Arc::new(KeevoVault {
         inner: Mutex::new(Vault::open_reenrolling_local(store, local)?),
@@ -597,6 +642,30 @@ impl KeevoVault {
         self.vault().touch_id_enabled()
     }
 
+    /// 此时能否用 Touch ID 解锁；不能时返回原因。
+    ///
+    /// # Errors
+    /// SQLite 错误。
+    pub fn password_reason(&self) -> Result<Option<PasswordReasonKind>, KeevoError> {
+        Ok(self.vault().password_reason()?.map(reason_kind))
+    }
+
+    /// 必须重新输入主密码的间隔天数（默认 14）。
+    ///
+    /// # Errors
+    /// SQLite 错误。
+    pub fn password_interval_days(&self) -> Result<u8, KeevoError> {
+        Ok(self.vault().password_interval_days()?)
+    }
+
+    /// 设定必须重新输入主密码的间隔天数（1–30）。
+    ///
+    /// # Errors
+    /// 超出范围返回 [`KeevoError::InvalidInput`]。
+    pub fn set_password_interval_days(&self, days: u8) -> Result<(), KeevoError> {
+        Ok(self.vault().set_password_interval_days(days)?)
+    }
+
     /// 本机是否有可用的账户密钥；没有时解锁界面要询问账户密钥。
     pub fn has_local_secret_key(&self) -> bool {
         self.vault().has_local_secret_key()
@@ -640,6 +709,7 @@ impl KeevoVault {
                 subtitle: i.overview.subtitle,
                 urls: i.overview.urls,
                 favorite: i.overview.favorite,
+                tags: i.overview.tags,
                 trashed: i.overview.trashed_at.is_some(),
                 has_conflicts: i.has_conflicts,
             })

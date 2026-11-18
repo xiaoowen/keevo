@@ -10,7 +10,12 @@ mod vault;
 
 pub use error::{CoreError, Result};
 pub use local::{EnclaveError, EnclaveKey, EphemeralAgreement, LocalKeys, SecureEnclave};
-pub use vault::{Edit, HistoryEntry, ItemSummary, ItemView, NewField, Vault, VaultInfo};
+#[cfg(test)]
+pub(crate) use vault::vault_now_ms_for_tests;
+pub use vault::{
+    DEFAULT_PASSWORD_INTERVAL_DAYS, Edit, HistoryEntry, ItemSummary, ItemView,
+    MAX_TOUCH_ID_FAILURES, NewField, PASSWORD_INTERVAL_DAYS, PasswordReason, Vault, VaultInfo,
+};
 
 pub use keevo_crypto::{AccountSecretKey, Id128, KdfParams, LocalPurpose};
 pub use keevo_format::{

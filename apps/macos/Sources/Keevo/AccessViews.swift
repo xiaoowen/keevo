@@ -2,6 +2,7 @@
 //
 // 首次使用与解锁界面（docs/ux.md §3.1–§3.2）。
 
+import KeevoKit
 import SwiftUI
 
 struct OnboardingView: View {
@@ -53,11 +54,18 @@ struct LockView: View {
     @ViewState private var secretKey = ""
 
     var body: some View {
+        @Bindable var model = model
         VStack(spacing: 18) {
             Image(systemName: "lock.fill")
                 .font(.system(size: 44))
                 .foregroundStyle(.secondary)
             Text("Keevo 已锁定").font(.title2.weight(.semibold))
+            // 说明为什么这次需要主密码，避免用户困惑（docs/ux.md §3.2）
+            if let reason = model.passwordReasonText {
+                Text(reason)
+                    .font(KV.Typography.footnote)
+                    .foregroundStyle(KV.Colors.fgSecondary)
+            }
             Form {
                 SecureField("主密码", text: $password)
                 // 账户密钥平时取自本机的 Secure Enclave 包裹；只有本机没有可用的包裹时才询问
@@ -74,7 +82,7 @@ struct LockView: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(password.isEmpty || (model.needsSecretKey && secretKey.isEmpty) || model.busy)
-                if model.touchIDEnabled {
+                if model.touchIDUsable {
                     Button {
                         Task { await model.unlockWithTouchID() }
                     } label: {
@@ -89,6 +97,49 @@ struct LockView: View {
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: model.phase) { password = ""; secretKey = "" }
+        .sheet(item: $model.pendingKdf) { info in
+            KdfConfirmSheet(info: info) {
+                Task { await model.unlockConfirmingKdf(password: password, secretKey: secretKey, confirmed: info) }
+            }
+        }
+    }
+}
+
+extension KdfInfo: Identifiable {
+    public var id: String { "\(memoryKib)-\(iterations)-\(parallelism)" }
+}
+
+/// 解锁参数异常地高：说明可能的原因，由用户决定是否继续（spec/crypto.md §5.3）。
+struct KdfConfirmSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let info: KdfInfo
+    let confirm: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("解锁参数异常", systemImage: "exclamationmark.triangle.fill")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(KV.Colors.statusWarningFg)
+            Text("这个保险库要求的密钥派生强度远高于 Keevo 的默认值。这可能是你在别的设备上特意调高的，也可能是数据被人改过，目的是让解锁耗尽这台 Mac 的内存或时间。")
+                .fixedSize(horizontal: false, vertical: true)
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+                GridRow { Text("内存").foregroundStyle(.secondary); Text("\(info.memoryKib / 1024) MiB") }
+                GridRow { Text("迭代次数").foregroundStyle(.secondary); Text("\(info.iterations)") }
+                GridRow { Text("并行度").foregroundStyle(.secondary); Text("\(info.parallelism)") }
+            }
+            .font(KV.Typography.mono)
+            Text("如果你不确定，请选择取消。继续解锁可能需要较长时间。")
+                .font(KV.Typography.footnote)
+                .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("取消", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("仍然解锁") { dismiss(); confirm() }
+            }
+        }
+        .padding(24)
+        .frame(width: 460)
     }
 }
 

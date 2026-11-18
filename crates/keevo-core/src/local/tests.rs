@@ -145,7 +145,14 @@ impl Mac {
     }
 
     fn keys(&self) -> LocalKeys {
-        LocalKeys::load(&self.local_dir(), self.enclave.clone()).unwrap()
+        self.keys_booted("boot-1")
+    }
+
+    /// 模拟另一次开机。
+    fn keys_booted(&self, boot: &str) -> LocalKeys {
+        LocalKeys::load(&self.local_dir(), self.enclave.clone())
+            .unwrap()
+            .with_boot_session(boot)
     }
 
     fn create(&self) -> (Vault, AccountSecretKey) {
@@ -468,4 +475,134 @@ fn generation_numbers_are_strict() {
     for bad in ["", "0", "01", "1234567890123456", "+1", "-1", "1 ", "١"] {
         assert_eq!(parse_generation(bad), None, "{bad:?}");
     }
+}
+
+/// 必须输入主密码的情形（docs/security.md §8）：重启后、超过间隔天数、时钟倒退、连续失败 3 次。
+/// 这些情形下不弹出 Touch ID；用主密码解锁后恢复。
+#[test]
+fn password_is_required_after_restart_interval_and_failures() {
+    use crate::{MAX_TOUCH_ID_FAILURES, PasswordReason};
+
+    let mac = Mac::new();
+    let (mut vault, _) = mac.create();
+    assert_eq!(
+        vault.password_reason().unwrap(),
+        Some(PasswordReason::NotEnabled)
+    );
+    vault.enable_touch_id("pw").unwrap();
+    assert_eq!(vault.password_reason().unwrap(), None);
+    drop(vault);
+
+    // 重启：开机标识不同；没有开机标识时同样按重启处理
+    for boot in ["boot-2", ""] {
+        let mut vault =
+            Vault::open_with_local(Store::open(&mac.db()).unwrap(), mac.keys_booted(boot)).unwrap();
+        assert_eq!(
+            vault.password_reason().unwrap(),
+            Some(PasswordReason::Restarted),
+            "{boot:?}"
+        );
+        let prompts = mac.enclave.state().prompts;
+        assert_eq!(
+            vault.unlock_with_touch_id().err(),
+            Some(CoreError::TouchIdUnavailable)
+        );
+        assert_eq!(mac.enclave.state().prompts, prompts, "不弹出 Touch ID");
+    }
+    let mut vault =
+        Vault::open_with_local(Store::open(&mac.db()).unwrap(), mac.keys_booted("boot-2")).unwrap();
+    vault.unlock_with_password("pw").unwrap();
+    vault.lock();
+    assert_eq!(
+        vault.password_reason().unwrap(),
+        None,
+        "这次开机已输入过主密码"
+    );
+    vault.unlock_with_touch_id().unwrap();
+    vault.lock();
+
+    // 超过间隔天数；时钟倒退
+    let day = 24 * 60 * 60 * 1000u64;
+    let now = crate::vault_now_ms_for_tests();
+    vault.set_meta_for_tests("password_unlock_ms", &(now - 15 * day).to_be_bytes());
+    assert_eq!(
+        vault.password_reason().unwrap(),
+        Some(PasswordReason::IntervalElapsed)
+    );
+    vault.set_password_interval_days(30).unwrap();
+    assert_eq!(vault.password_reason().unwrap(), None);
+    assert_eq!(
+        vault.set_password_interval_days(0).err(),
+        Some(CoreError::OutOfRange)
+    );
+    assert_eq!(
+        vault.set_password_interval_days(31).err(),
+        Some(CoreError::OutOfRange)
+    );
+    assert_eq!(vault.password_interval_days().unwrap(), 30);
+    vault.set_meta_for_tests("password_unlock_ms", &(now + day).to_be_bytes());
+    assert_eq!(
+        vault.password_reason().unwrap(),
+        Some(PasswordReason::IntervalElapsed),
+        "时钟倒退按超期处理"
+    );
+    vault.set_meta_for_tests("password_unlock_ms", &now.to_be_bytes());
+    vault.set_meta_for_tests("password_interval_days", &[200]);
+    assert_eq!(
+        vault.password_interval_days().unwrap(),
+        14,
+        "格式不对时用默认值"
+    );
+
+    // 连续失败：指纹不匹配计数，成功清零，达到上限后必须输入主密码
+    for i in 1..=MAX_TOUCH_ID_FAILURES {
+        mac.enclave
+            .state()
+            .fail
+            .insert(LocalPurpose::Auk, EnclaveError::Failed);
+        assert_eq!(
+            vault.unlock_with_touch_id().err(),
+            Some(CoreError::AuthenticationFailed),
+            "第 {i} 次"
+        );
+        if i == 1 {
+            vault.unlock_with_touch_id().unwrap();
+            vault.lock();
+            mac.enclave
+                .state()
+                .fail
+                .insert(LocalPurpose::Auk, EnclaveError::Failed);
+            assert_eq!(
+                vault.unlock_with_touch_id().err(),
+                Some(CoreError::AuthenticationFailed)
+            );
+        }
+    }
+    assert_eq!(
+        vault.password_reason().unwrap(),
+        Some(PasswordReason::TooManyFailures)
+    );
+    assert!(vault.touch_id_enabled(), "失败次数过多不等于失效");
+    vault.unlock_with_password("pw").unwrap();
+    vault.lock();
+    assert_eq!(vault.password_reason().unwrap(), None);
+    vault.set_meta_for_tests("touch_id_failures", &[0, 0]);
+    assert_eq!(
+        vault.password_reason().unwrap(),
+        Some(PasswordReason::TooManyFailures),
+        "计数格式不对时按已达上限处理"
+    );
+
+    // 失效
+    vault.unlock_with_password("pw").unwrap();
+    vault.lock();
+    mac.enclave.invalidate(LocalPurpose::Auk);
+    assert_eq!(
+        vault.unlock_with_touch_id().err(),
+        Some(CoreError::TouchIdUnavailable)
+    );
+    assert_eq!(
+        vault.password_reason().unwrap(),
+        Some(PasswordReason::Invalidated)
+    );
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later（附加 App Store 许可，见仓库根目录 LICENSE）
 //
-// 设置窗口（⌘,）。M1.1 只有"安全"一页：Touch ID。
+// 设置窗口（⌘,）。M1.1 只有"安全"一页：自动锁定、Touch ID、必须输入主密码的间隔。
 
 import SwiftUI
 
@@ -19,7 +19,18 @@ private struct SecuritySettings: View {
     @ViewState private var askPassword = false
 
     var body: some View {
+        @Bindable var model = model
         Form {
+            Section("自动锁定") {
+                Picker("闲置后锁定", selection: $model.autoLockMinutes) {
+                    ForEach(AppModel.autoLockChoices, id: \.self) { minutes in
+                        Text(minutes < 60 ? "\(minutes) 分钟" : "1 小时").tag(minutes)
+                    }
+                }
+                Text("这台 Mac 在这段时间内没有任何键盘、鼠标或触控板操作时锁定。睡眠、锁定屏幕、启动屏幕保护程序或切换用户时会立即锁定。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
             Section("解锁") {
                 Toggle("使用 Touch ID 解锁", isOn: Binding(
                     get: { model.touchIDEnabled },
@@ -37,7 +48,16 @@ private struct SecuritySettings: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-                Text("指纹有变化时 Touch ID 会自动失效，需要输入一次主密码。主密码仍然是唯一能在任何情况下解锁的方式。")
+                Stepper(
+                    "每 \(model.passwordIntervalDays) 天至少输入一次主密码",
+                    value: Binding(
+                        get: { Int(model.passwordIntervalDays) },
+                        set: { model.setPasswordInterval(days: UInt8(clamping: $0)) }
+                    ),
+                    in: 1...30
+                )
+                .disabled(model.phase != .unlocked)
+                Text("以下情况必须输入主密码：Mac 重启后的首次解锁、超过上面的天数、Touch ID 连续 3 次未能识别、指纹有变化。这样你不会忘记主密码。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

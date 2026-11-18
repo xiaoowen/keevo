@@ -10,6 +10,10 @@ import CryptoKit
 import Foundation
 import KeevoKit
 
+if let code = runTouchIDCheckIfRequested() {
+    exit(code)
+}
+
 var failures = 0
 
 func check(_ condition: @autoclosure () throws -> Bool, _ message: String) {
@@ -80,7 +84,7 @@ print("Keevo 冒烟测试（Swift → UniFFI → Rust）")
 let secretKey: String
 let itemId: String
 do {
-    let created = try createAccount(path: db, password: password, localDir: localDir, enclave: enclave)
+    let created = try createAccount(path: db, password: password, local: .thisMac(localDir: localDir, enclave: enclave))
     let vault = created.vault
     check(vault.isUnlocked(), "创建账户后处于解锁状态")
     check(created.secretKey.hasPrefix("K1-") && created.secretKey.count == 34, "账户密钥为 K1- 显示格式")
@@ -106,7 +110,7 @@ do {
 }
 
 // 模拟应用重启：重新打开数据库文件，并用小写形式输入账户密钥
-let reopened = try openVault(path: db, localDir: localDir, enclave: enclave)
+let reopened = try openVault(path: db, local: .thisMac(localDir: localDir, enclave: enclave))
 check(!reopened.isUnlocked(), "重新打开后处于锁定状态")
 try reopened.unlock(password: password, secretKey: secretKey.lowercased())
 check(reopened.isUnlocked(), "用主密码与账户密钥解锁")
@@ -178,13 +182,13 @@ func corrupt(_ file: String) throws {
 
 let secretKey2: String
 do {
-    let created = try createAccount(path: db2, password: password, localDir: local2, enclave: enclave)
+    let created = try createAccount(path: db2, password: password, local: .thisMac(localDir: local2, enclave: enclave))
     secretKey2 = created.secretKey
     check(created.vault.hasLocalSecretKey(), "新建账户后账户密钥已包裹到本机")
     check(!created.vault.touchIdEnabled(), "Touch ID 默认未启用")
 }
 do {
-    let vault = try openVault(path: db2, localDir: local2, enclave: enclave)
+    let vault = try openVault(path: db2, local: .thisMac(localDir: local2, enclave: enclave))
     try vault.unlockWithPassword(password: password)
     check(vault.isUnlocked(), "重新打开后只用主密码解锁")
     vault.lock()
@@ -204,7 +208,7 @@ do {
 // 本机密钥目录丢失（相当于把数据库恢复到另一台 Mac）
 try fm.removeItem(atPath: local2)
 do {
-    let vault = try openVault(path: db2, localDir: local2, enclave: enclave)
+    let vault = try openVault(path: db2, local: .thisMac(localDir: local2, enclave: enclave))
     check(!vault.hasLocalSecretKey(), "本机密钥丢失后需要账户密钥")
     expectError("只用主密码时要求账户密钥", { try vault.unlockWithPassword(password: password) }) {
         if case .SecretKeyRequired = $0 { return true }; return false
@@ -213,7 +217,7 @@ do {
     check(vault.hasLocalSecretKey(), "输入账户密钥解锁后补登")
 }
 do {
-    let vault = try openVault(path: db2, localDir: local2, enclave: enclave)
+    let vault = try openVault(path: db2, local: .thisMac(localDir: local2, enclave: enclave))
     try vault.unlockWithPassword(password: password)
     check(vault.isUnlocked(), "补登之后只用主密码解锁")
 }
@@ -221,7 +225,7 @@ do {
 // 损坏的 blob：真实的 Secure Enclave 报告"失效"，而不是"暂时不可用"（软件实现中表现为解包认证失败）
 try corrupt("02.key")
 do {
-    let vault = try openVault(path: db2, localDir: local2, enclave: enclave)
+    let vault = try openVault(path: db2, local: .thisMac(localDir: local2, enclave: enclave))
     expectError("账户密钥的 blob 损坏时要求账户密钥", { try vault.unlockWithPassword(password: password) }) {
         if case .SecretKeyRequired = $0 { return true }; return false
     }
@@ -230,7 +234,7 @@ do {
 }
 try corrupt("04.key")
 do {
-    let vault = try openVault(path: db2, localDir: local2, enclave: enclave)
+    let vault = try openVault(path: db2, local: .thisMac(localDir: local2, enclave: enclave))
     check(!vault.hasLocalSecretKey(), "设备标记的 blob 损坏时重新登记本机，其余包裹随之作废")
     try vault.unlock(password: password, secretKey: secretKey2)
     check(vault.hasLocalSecretKey(), "重新登记后补登账户密钥")

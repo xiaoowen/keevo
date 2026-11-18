@@ -38,8 +38,12 @@ pub enum CoreError {
     EnclaveUnavailable,
     /// 本机没有可用的账户密钥，需要用户从应急包输入。
     SecretKeyRequired,
-    /// Touch ID 未启用或已失效（如指纹变化），需要用主密码解锁。
+    /// Touch ID 未启用、已失效，或此时必须输入主密码（[`crate::Vault::password_reason`]）。
     TouchIdUnavailable,
+    /// Touch ID 验证未通过（指纹不匹配）。连续 3 次后必须输入主密码。
+    AuthenticationFailed,
+    /// 设置值超出允许的范围。
+    OutOfRange,
     /// 本机密钥文件读写失败。
     Io(std::io::ErrorKind),
     /// 密码学错误。
@@ -66,6 +70,8 @@ impl fmt::Display for CoreError {
             Self::EnclaveUnavailable => f.write_str("secure enclave is temporarily unavailable"),
             Self::SecretKeyRequired => f.write_str("secret key is required"),
             Self::TouchIdUnavailable => f.write_str("touch id is not available"),
+            Self::AuthenticationFailed => f.write_str("touch id authentication failed"),
+            Self::OutOfRange => f.write_str("value out of range"),
             Self::Io(kind) => write!(f, "io: {kind}"),
             Self::Crypto(e) => write!(f, "crypto: {e}"),
             Self::Format(e) => write!(f, "format: {e}"),
