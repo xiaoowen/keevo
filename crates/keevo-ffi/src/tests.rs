@@ -413,3 +413,39 @@ fn generator() {
         Err(KeevoError::InvalidInput { .. })
     ));
 }
+
+/// 搜索：使用列表建立的索引；写入后重新列出即更新；锁定后不可用。
+#[test]
+fn search_uses_index_and_requires_unlock() {
+    let f = Fixture::new();
+    let github = f.login("GitHub");
+    let gitlab = f.login("GitLab");
+    f.login("Gmail");
+    assert_eq!(
+        f.vault.search("git".into()).unwrap(),
+        [github.clone(), gitlab.clone()],
+        "还没有索引时先建立"
+    );
+    f.vault
+        .update_item(
+            gitlab.clone(),
+            vec![
+                ItemEdit::AddTag { tag: "work".into() },
+                ItemEdit::SetFavorite { favorite: true },
+            ],
+        )
+        .unwrap();
+    f.vault.items().unwrap();
+    assert_eq!(f.vault.search("tag:work is:fav".into()).unwrap(), [gitlab]);
+    assert_eq!(
+        f.vault
+            .search("type:login -tag:work github".into())
+            .unwrap(),
+        [github]
+    );
+    f.vault.lock();
+    assert!(matches!(
+        f.vault.search("git".into()),
+        Err(KeevoError::Locked)
+    ));
+}

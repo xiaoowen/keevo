@@ -7,6 +7,7 @@ mod error;
 pub mod generator;
 pub mod local;
 pub mod otp;
+pub mod search;
 pub mod url_match;
 mod vault;
 

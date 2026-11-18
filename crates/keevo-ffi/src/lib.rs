@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use zeroize::Zeroizing;
 
 use keevo_core::local::{EnclaveError, EnclaveKey, EphemeralAgreement, LocalKeys, SecureEnclave};
+use keevo_core::search::{Query, SearchIndex};
 use keevo_core::{LocalPurpose, PasswordReason, Store};
 
 use keevo_core::{
@@ -793,6 +794,8 @@ pub fn open_vault_reenrolling(
 pub struct KeevoVault {
     inner: Mutex<Vault>,
     secrets: SecretRegistry,
+    /// 搜索索引（解密后的概要），锁定时丢弃。
+    search_index: Mutex<Option<SearchIndex>>,
 }
 
 impl KeevoVault {
@@ -800,7 +803,14 @@ impl KeevoVault {
         Self {
             inner: Mutex::new(vault),
             secrets: SecretRegistry::default(),
+            search_index: Mutex::new(None),
         }
+    }
+
+    fn index(&self) -> MutexGuard<'_, Option<SearchIndex>> {
+        self.search_index
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn vault(&self) -> MutexGuard<'_, Vault> {
@@ -907,6 +917,7 @@ impl KeevoVault {
     pub fn lock(&self) {
         self.vault().lock();
         self.secrets.wipe();
+        *self.index() = None;
     }
 
     /// 全部保险库。
@@ -930,9 +941,19 @@ impl KeevoVault {
     /// # Errors
     /// 已锁定时返回 [`KeevoError::Locked`]。
     pub fn items(&self) -> Result<Vec<ItemEntry>, KeevoError> {
-        Ok(self
-            .vault()
-            .items()?
+        let items = {
+            let vault = self.vault();
+            let items = vault.items()?;
+            let names = vault
+                .vaults()?
+                .into_iter()
+                .map(|v| (v.id, v.name))
+                .collect();
+            // 顺便建立搜索索引：之后每次按键只做比较（docs/product.md §6.1"搜索每次按键 < 16 ms"）
+            *self.index() = Some(SearchIndex::new(&items, &names));
+            items
+        };
+        Ok(items
             .into_iter()
             .map(|i| ItemEntry {
                 id: i.id.to_hex(),
@@ -947,6 +968,28 @@ impl KeevoVault {
                 has_conflicts: i.has_conflicts,
             })
             .collect())
+    }
+
+    /// 搜索条目（含回收站中的条目），返回按相关度排序的条目 ID。语法见 `keevo-core::search`：
+    /// 普通词、`"短语"`、`type:`、`tag:`、`vault:`、`url:`、`is:fav`、`is:conflict`，前加 `-` 表示排除。
+    ///
+    /// 使用最近一次 [`KeevoVault::items`] 建立的索引；还没有索引时先建立。
+    ///
+    /// # Errors
+    /// 已锁定时返回 [`KeevoError::Locked`]。
+    pub fn search(&self, query: String) -> Result<Vec<String>, KeevoError> {
+        if !self.vault().is_unlocked() {
+            return Err(KeevoError::Locked);
+        }
+        if self.index().is_none() {
+            self.items()?;
+        }
+        let query = Query::parse(&query);
+        Ok(self
+            .index()
+            .as_ref()
+            .map(|ix| ix.search(&query).iter().map(|h| h.id.to_hex()).collect())
+            .unwrap_or_default())
     }
 
     /// 新建登录条目，返回条目 ID。
