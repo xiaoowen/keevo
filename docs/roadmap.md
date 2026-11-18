@@ -34,7 +34,7 @@
 | ✅ | 治理文件 | 多许可证落地（App Store 附加许可为草案，待法律审阅）、`CONTRIBUTING.md`（DCO）、`SECURITY.md`、`CODE_OF_CONDUCT.md`、ADR 模板、CODEOWNERS、PR 模板 |
 
 **退出标准**：
-- 规范至少经过一位有密码学背景的外部人士评审。
+- 规范至少经过一位有密码学背景的外部人士评审（评审说明：[spec/REVIEW.md](../spec/REVIEW.md)）。
 - "创建 → 锁定 → 解锁 → 读写条目"的完整流程，在 Rust 测试和 macOS 空壳应用中都能跑通。
 
 ## 3. M1 本地保险库 MVP（4–5 个月）

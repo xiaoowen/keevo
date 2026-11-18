@@ -2,6 +2,8 @@
 
 这里是 Keevo 的**可审计规范**。任何人都应该能只凭这些文档，写出与 Keevo 互通的实现。
 
+**评审者请先读 [REVIEW.md](REVIEW.md)**：评审范围、阅读顺序、重点问题清单与反馈方式。
+
 | 规范 | 版本 | 状态 | 测试向量 |
 |---|---|---|---|
 | [crypto.md](crypto.md)：账户密钥、KDF、2SKD、密钥集、加密信封 | 0.1 | 草案，待外部评审 | [test-vectors/crypto-v1.json](test-vectors/crypto-v1.json) |
