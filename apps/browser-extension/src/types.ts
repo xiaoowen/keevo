@@ -70,7 +70,7 @@ export interface MenuInit {
   kind: "login" | "otp";
   candidates: Candidate[];
   /** 不能列出条目时的原因。 */
-  message?: "unpaired" | "locked" | "connecting" | "error" | "no_session";
+  message?: "unpaired" | "locked" | "connecting" | "error" | "no_session" | "limited";
 }
 
 /** 页内菜单（menu.html）发给 Service Worker 的消息。 */

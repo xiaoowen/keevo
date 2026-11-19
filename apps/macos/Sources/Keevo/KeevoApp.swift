@@ -64,6 +64,19 @@ struct RootView: View {
                             model.pairingNotice = nil
                         }
                 }
+                // 查询过于频繁（spec/ipc.md §5.2）：可能有人在冒用配对枚举账户，用户关闭前一直显示
+                if let warning = model.browserWarning {
+                    HStack(alignment: .top) {
+                        Banner(kind: .warning, message: warning)
+                        Button {
+                            model.browserWarning = nil
+                        } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(KV.Colors.fgTertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("关闭提示")
+                    }
+                }
                 // 浏览器保存了新登录（spec/ipc.md §5.5）：每次写入都对用户可见
                 if let notice = model.browserNotice {
                     Banner(kind: .success, message: notice)

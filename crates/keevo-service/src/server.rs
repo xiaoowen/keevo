@@ -67,6 +67,10 @@ pub trait PairingPrompt: Send + Sync {
         let _ = (request, changed, deadline);
         false
     }
+    /// 这个配对短时间内查询了太多不同的站点（`spec/ipc.md` §5.2）：在 Keevo.app 中提示，可能有人在冒用它枚举账户。
+    fn queries_limited(&self, extension_public: &[u8; 32], name: &str, browser: &str) {
+        let _ = (extension_public, name, browser);
+    }
     /// 协议 v2：扩展保存了新的登录。在 Keevo.app 中提示，让每次写入都对用户可见（`spec/ipc.md` §5.5）。
     fn saved(&self, pairing_name: &str, browser: &str, title: &str) {
         let _ = (pairing_name, browser, title);
@@ -371,6 +375,13 @@ impl VaultService {
                 } => self
                     .prompt
                     .fill_paused(&extension_public, &pairing_name, &browser),
+                Output::QueriesLimited {
+                    extension_public,
+                    pairing_name,
+                    browser,
+                } => self
+                    .prompt
+                    .queries_limited(&extension_public, &pairing_name, &browser),
                 Output::Write(request) => {
                     let result = self.write(&request);
                     let more = {

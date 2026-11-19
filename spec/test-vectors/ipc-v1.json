@@ -1,0 +1,241 @@
+{
+  "description": "Keevo IPC 跨实现测试向量（spec/ipc.md），由 spec/reference/ipc_vectors.py 生成，只依赖 Python 标准库。所有十六进制均为小写；Noise 消息是握手或传输层的原始字节（不含 base64 与控制层 JSON）。",
+  "commitments": [
+    {
+      "name": "xx-pair-v1",
+      "extension_static_public": "4b03d0ce13cf02e01f79036d1745468d6413ba4963ad27ecbef56e5cb17d3911",
+      "third": "5cae93e8c3f721aead8eccf12a6977cdcf5b379454132055b8413ccacaa3a1844368726f6d6520c2b720e4b8aae4baba",
+      "commitment": "fe4231a65ff74ed2fb138f19a018c7ad5006d8ddce9991331002d38694771c45"
+    },
+    {
+      "name": "xx-pair-v2",
+      "extension_static_public": "6e6a2619d2491c9106ba74d73d95ddd4214bf72433b88352e7ac46e3e8cfed50",
+      "third": "f555fb4898ccfb347b7c091f27a3794e7972a48929024843b788f586816e679c4368726f6d6520c2b720e5b7a5e4bd9c",
+      "commitment": "5de555120ac9f46d0246daebdf7df403df0a6d49e9cb6d44f2eaeb4072d5e1fb"
+    },
+    {
+      "name": "commitment-max-name",
+      "extension_static_public": "e68229fed4227627ae976ea7cbd154d8b8f2ed865143b087c5ef2b4ce10b0659",
+      "third": "cb4475c1b60edad14a49e9b126ecab037797b7866f874dbd4c4b89ff55e17c23e5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908de5908d78",
+      "commitment": "920fe74c2bae3a7224a3b0d516bd094c9404c078fa302f0f945fb0de2205b1ca"
+    }
+  ],
+  "handshakes": [
+    {
+      "name": "xx-pair-v1",
+      "pattern": "Noise_XX_25519_ChaChaPoly_SHA256",
+      "protocol_version": 1,
+      "extension_origin": "chrome-extension://boojggkmhkakoacccigoiibnlkffcpof/",
+      "prologue": "6b6565766f2f76312f6970630070616972006368726f6d652d657874656e73696f6e3a2f2f626f6f6a67676b6d686b616b6f6163636369676f6969626e6c6b666663706f662f",
+      "initiator_static_private": "7ad349a1a1481da9f1832bf3f3c9e85b3527244caeec6444ed3fee85d7971e05",
+      "initiator_static_public": "4b03d0ce13cf02e01f79036d1745468d6413ba4963ad27ecbef56e5cb17d3911",
+      "initiator_ephemeral_private": "799401cb5922aec0e9ab192470f0aa5532f427ed72ab0704ecb854b8169ce183",
+      "responder_static_private": "271c92bee4feec6cd4abd81adc6d5452bff87dc6773c41475730120b729ef420",
+      "responder_static_public": "dddc6054435ba52f6036b2e4d5c397bc8cf81a951c7ee374076e33473a6d8d3f",
+      "responder_ephemeral_private": "87291c023b177d612ac75c0d798c1858a335607bcc4d8e6ea709f35d29d12d91",
+      "messages": [
+        {
+          "sender": "initiator",
+          "payload": "fe4231a65ff74ed2fb138f19a018c7ad5006d8ddce9991331002d38694771c45",
+          "message": "d22c9a5fdd2ab37918b7304d0add45cab8010efd9e2cdee932d0341613c2b90cfe4231a65ff74ed2fb138f19a018c7ad5006d8ddce9991331002d38694771c45"
+        },
+        {
+          "sender": "responder",
+          "payload": "",
+          "message": "9eb8ae795dc40b9a5a4d99343e6501d25b054c53997b2003f44e7066e37d433cd5eb9027d71dfb6ddde12709eb8c36be666f86926155fa26b0f0a4dd3b04bb8e1f867ff0a7448edf2acfa24b77a6ee7f2f9a90db6ba7d1bb44dc71cabb942667"
+        },
+        {
+          "sender": "initiator",
+          "payload": "5cae93e8c3f721aead8eccf12a6977cdcf5b379454132055b8413ccacaa3a1844368726f6d6520c2b720e4b8aae4baba",
+          "message": "dc4b8e03230c3686920ecc552404dfb23d169079e4fcc3504e0613e1fa73ca10daa3b7901961bf5a0b23c98e332da54546de9e7131d718a5f00d2d79bc2c5d67f147afb33ebffb11c51186a6c511fc8a06371a9c5091b283b7591b53e453afb69da8287213bcfe70036cec9eaf4cd862"
+        }
+      ],
+      "handshake_hash": "08456331fea24b9d18701e3809a6b17dd84501833bfbaed93a790d239b0612d6",
+      "transport": [
+        {
+          "sender": "responder",
+          "plaintext": "{\"event\":\"paired\"}",
+          "message": "a7e59ac77da702310c881ea2b4ba8e74fd3175aa1550787fa81602e4a574ce2ca2b0"
+        },
+        {
+          "sender": "initiator",
+          "plaintext": "{\"id\":1,\"method\":\"status\"}",
+          "message": "fc02a838eb32aee6a258c44cc443ee5539a0c0176be9df08fe68215679d9fcff7e1432dd019aebec2f90"
+        }
+      ],
+      "sas": "4489f67deb7c",
+      "sas_words": [
+        {
+          "zh": "榴莲",
+          "en": "durian"
+        },
+        {
+          "zh": "旋律",
+          "en": "melody"
+        },
+        {
+          "zh": "麦穗",
+          "en": "wheat"
+        },
+        {
+          "zh": "蜥蜴",
+          "en": "lizard"
+        },
+        {
+          "zh": "树木",
+          "en": "tree"
+        },
+        {
+          "zh": "百合",
+          "en": "lily"
+        }
+      ]
+    },
+    {
+      "name": "xx-pair-v2",
+      "pattern": "Noise_XX_25519_ChaChaPoly_SHA256",
+      "protocol_version": 2,
+      "extension_origin": "chrome-extension://boojggkmhkakoacccigoiibnlkffcpof/",
+      "prologue": "6b6565766f2f76322f6970630070616972006368726f6d652d657874656e73696f6e3a2f2f626f6f6a67676b6d686b616b6f6163636369676f6969626e6c6b666663706f662f",
+      "initiator_static_private": "476ceddbb3372e6fa3345923bcec325c88ec123a02e718742b11bb6480a365e4",
+      "initiator_static_public": "6e6a2619d2491c9106ba74d73d95ddd4214bf72433b88352e7ac46e3e8cfed50",
+      "initiator_ephemeral_private": "cacbbe9969205ed1de24098970eb30d8744b995fc6acffe54dfa5334b5257132",
+      "responder_static_private": "914ebf086180d7a4e9cc41d1b0766c1b18c50eaf75c2cc257e89cbcd59e03bcb",
+      "responder_static_public": "557d055aefce6e47cd2c58d04e6fc32510c088bf7708f9344815c32307015a50",
+      "responder_ephemeral_private": "b70df307969a7e3a86b1d0e2ebbb055bd17c5a50a5d6c7a45e9b2ae449b212a6",
+      "messages": [
+        {
+          "sender": "initiator",
+          "payload": "5de555120ac9f46d0246daebdf7df403df0a6d49e9cb6d44f2eaeb4072d5e1fb",
+          "message": "c814e62704eb11a9c124dedc1e3956498f8ec1a6b8626acb59c77e0b6383350e5de555120ac9f46d0246daebdf7df403df0a6d49e9cb6d44f2eaeb4072d5e1fb"
+        },
+        {
+          "sender": "responder",
+          "payload": "",
+          "message": "d764ee7e383282120702617239586d4df6129967517107c7c2dfc8d36b8e7953a617ac0cece03b6c60de0f4749c555df5ee34b4849972503b8dcc893a6dbd8fb3514985e4393d162e3d588fcc898785b3d363ef6e8449481d5c7128c57d949d9"
+        },
+        {
+          "sender": "initiator",
+          "payload": "f555fb4898ccfb347b7c091f27a3794e7972a48929024843b788f586816e679c4368726f6d6520c2b720e5b7a5e4bd9c",
+          "message": "119e50b880a50e5bca133bee97db66a1e094e94eb44d21a4bd24ab8fa772bf707f445596b346a455c3bd342895eab093c963a9e41bae06bced567956b64d0e2e794d4c84199c8667f35db91acff19ad4b5d8dad598f3d8f4fbd33285e89ad7de900caad3276bdafd8c6d012e8c5ef229"
+        }
+      ],
+      "handshake_hash": "a9e6db24a012fe7a8ea9d8061f337c0d2474e070cea8cc2815688309ed8abf93",
+      "transport": [
+        {
+          "sender": "responder",
+          "plaintext": "{\"event\":\"paired\"}",
+          "message": "1283384f0fd24d381cd3807779f02e8d876816799d9b1ec5b4d1663e98350de9edea"
+        },
+        {
+          "sender": "initiator",
+          "plaintext": "{\"id\":1,\"method\":\"status\"}",
+          "message": "c00b1c04e71a648f88fac1fae480830e84d2e52ceca941b94a9dddcd7ac7eb6f592f221a89d4a8e351a5"
+        }
+      ],
+      "sas": "25ff52bd80c2",
+      "sas_words": [
+        {
+          "zh": "城堡",
+          "en": "castle"
+        },
+        {
+          "zh": "斑马",
+          "en": "zebra"
+        },
+        {
+          "zh": "火焰",
+          "en": "fire"
+        },
+        {
+          "zh": "公鸡",
+          "en": "rooster"
+        },
+        {
+          "zh": "桂圆",
+          "en": "longan"
+        },
+        {
+          "zh": "学校",
+          "en": "school"
+        }
+      ]
+    },
+    {
+      "name": "ik-session-v1",
+      "pattern": "Noise_IK_25519_ChaChaPoly_SHA256",
+      "protocol_version": 1,
+      "extension_origin": "chrome-extension://boojggkmhkakoacccigoiibnlkffcpof/",
+      "prologue": "6b6565766f2f76312f6970630073657373696f6e006368726f6d652d657874656e73696f6e3a2f2f626f6f6a67676b6d686b616b6f6163636369676f6969626e6c6b666663706f662f",
+      "initiator_static_private": "5ed65dcdf3de5470eb0b88dcfc5b249c9d2f02a898394d794a10b46c08573169",
+      "initiator_static_public": "5a992fa084950aeb81a7aec1ecbc393c5d075e4b5eea425646d3172c1a581f45",
+      "initiator_ephemeral_private": "f94bd72cdfb8abfb411a3af341bdce45fad807aa181d0145dc30ddff368da3fd",
+      "responder_static_private": "a6bc6ea1ebc180b2a91fd8916360b9f83823b505daf28437508ca74d6e220a05",
+      "responder_static_public": "504244b04727948d8b39b1087e27049c84930c48d7a4be5a98bbdfb25dcbb139",
+      "responder_ephemeral_private": "e17c736f07d3534fcfa015913e17fdd366be3e287bc08b15ac38b508da9e24f7",
+      "messages": [
+        {
+          "sender": "initiator",
+          "payload": "",
+          "message": "e3ff9478831b01ed9fd64fa98d3d9ed4249fff141929fc4b7e629fdb9187b54b93cff8dbfb43ededc27a18682bfa37630d83cc0559d6773a0260cfa38e6a458c6e38ce18793994df94c018db3166d1eb1228da5b46903ea92c4b863e86b167e3"
+        },
+        {
+          "sender": "responder",
+          "payload": "",
+          "message": "9d47e4841c5d6a67061be0fd9f7410969043d8336b50eb57925b2cfa833a362213c89f2f772a3609d6b8e1ad577cebbe"
+        }
+      ],
+      "handshake_hash": "4bf151abca0c355b2e12996f4639155b0d6ce8ca4449fe2f9bcd709565673106",
+      "transport": [
+        {
+          "sender": "initiator",
+          "plaintext": "{\"id\":1,\"method\":\"candidates\",\"params\":{\"url\":\"https://github.com/login\"}}",
+          "message": "81c84990367768586474101cfe3b88415656ca579d1abf0691f860033e3b39312105e73d9bf9fde8c784db304262b444c6825134c3e049343ec1209ac661a559934500234874cc7681403fb811ee458bad0961ce2e087fd06b95"
+        },
+        {
+          "sender": "responder",
+          "plaintext": "{\"id\":1,\"result\":{\"items\":[{\"item_id\":\"00112233445566778899aabbccddeeff\",\"title\":\"GitHub\",\"subtitle\":\"octocat\"}]}}",
+          "message": "20ea02170d7ecb3b12750a9d5665462fd1be7f3cf2fb3e18e3dacb10c301f1642498aa2e9d0001188a587646644200f0d4d609b93087d20a1712958af2d87b3a13b7bebd70ae96a51cad2928439b51c607667e27e30d69ba2bd9378a5f15ce0d262b87df63383183e889a5c5e6e39da06d196aef1e0d638081dcc6932c7703cbb609"
+        }
+      ]
+    },
+    {
+      "name": "ik-session-v2",
+      "pattern": "Noise_IK_25519_ChaChaPoly_SHA256",
+      "protocol_version": 2,
+      "extension_origin": "chrome-extension://boojggkmhkakoacccigoiibnlkffcpof/",
+      "prologue": "6b6565766f2f76322f6970630073657373696f6e006368726f6d652d657874656e73696f6e3a2f2f626f6f6a67676b6d686b616b6f6163636369676f6969626e6c6b666663706f662f",
+      "initiator_static_private": "5eb99f13fb7ba8b1873c00b97029404546c09928b3f2b1c789b004e29a91c8b9",
+      "initiator_static_public": "c4f06fda6f7906f29514f09c0519795cdd07f76bdc8c88b43ce4736bd8803d2b",
+      "initiator_ephemeral_private": "3139a0631cc5543dba8e34d99fc4a1170e61c910883d4f6aabba962b721599e5",
+      "responder_static_private": "6036e672b423c0eeb00e004d37d5013e64ef89c670c2cab2e6fac1af6b2127e6",
+      "responder_static_public": "8ad583a9fb7f985b1a2bec04449cada3a255533e4d72b34cf691df6458a56e35",
+      "responder_ephemeral_private": "f28ff74f9291724b2f2f9e69faa0f886a3141f936e75b0a13e2a5ef9193c2f88",
+      "messages": [
+        {
+          "sender": "initiator",
+          "payload": "",
+          "message": "b474bd1c16456f66e3a17851549945a470c0f3aaf24121457ff2fc21865e6218dad4cd4b72db42f4048dd8292956ce8d0ef986d618a168c2a958fd0f6f9b3002be1650980988f6b49fd63f78ed3bcdf7cc6072fcc205f4641e4297c534747066"
+        },
+        {
+          "sender": "responder",
+          "payload": "",
+          "message": "af96ebd898b67b145963ecdaad309cf2d28d7dd667f60dec5b1f4d66f1acf3376c96b1255a5e7d90ca719bfc6eabd0f5"
+        }
+      ],
+      "handshake_hash": "b570b85925494ded364f4cf825a0cb9e02d4033e5c21c88526d1162fce209303",
+      "transport": [
+        {
+          "sender": "initiator",
+          "plaintext": "{\"id\":1,\"method\":\"save\",\"params\":{\"url\":\"https://news.example/login\",\"username\":\"reader\",\"password\":\"p\"}}",
+          "message": "a15366cef57ed10529e59021829dc62f29f213048565063eedcd57d0743cd571bebf5202c7ed68bd68f55e35a2a934861e2854ab484ef2c2aa5b2ee573d4eabe702ba4ee805153637ae341edb13bed1254782b0c4af5fdfa2efbae0d1cb18d28e9cb42729401d3c8d32cfd23106793ae3b5a2bfae97afbcc72"
+        },
+        {
+          "sender": "responder",
+          "plaintext": "{\"id\":1,\"result\":{\"item_id\":\"00112233445566778899aabbccddeeff\"}}",
+          "message": "96006a86ff551a14bbcb2cb3794779c48d8fdead59cd92bb368feca2c5a0bfd4f7edde061ac47c889050d2a313e490fac2235729a4d8e6d96a02a06f21af5ba161ebba79fda9968813c746b07dd9b4d1"
+        }
+      ]
+    }
+  ]
+}

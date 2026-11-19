@@ -67,6 +67,7 @@ const ERRORS: Record<string, string> = {
   url_mismatch: "这个条目与当前网站不匹配，已拒绝。",
   response_too_large: "这个条目的内容太长，无法自动填充。请在 Keevo 中复制。",
   no_tab: "没有找到当前标签页。",
+  queries_limited: "这个浏览器短时间内查询了太多网站，Keevo 暂时停止回答。请在 Keevo 中查看。",
   bad_request: "通信出错，请重试。",
   protocol: "通信出错，请重试。",
   failed: "操作没有完成，请重试。",
@@ -217,7 +218,13 @@ function renderSas(words: SasWord[]): void {
   });
   root.append(grid);
   if (view.name) root.append(el("p", `这个浏览器在 Keevo 中显示为「${view.name}」。`, "note"));
-  root.append(el("p", "如果 Keevo 中没有出现配对请求，或者词不一致，请不要确认。", "note"));
+  root.append(
+    el(
+      "p",
+      "Keevo 中会弹出确认窗口。如果没有出现，说明有程序在冒充 Keevo，请关闭这个弹窗，不要继续；如果词不一致，请在 Keevo 中选择「不一致」。",
+      "note",
+    ),
+  );
 }
 
 function renderItems(refocus: boolean): void {
@@ -447,6 +454,7 @@ async function loadCandidates(): Promise<void> {
   const r = await ask({ type: "candidates" });
   view.candidates = r.candidates ?? [];
   view.origin = r.origin ?? "";
+  if (r.error) setNote("warning", ERRORS[r.error] ?? r.error);
   view.selected = Math.min(view.selected, Math.max(0, view.candidates.length - 1));
   view.state = r.state;
   render();

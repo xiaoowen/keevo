@@ -37,6 +37,7 @@ const MESSAGES: Record<string, string> = {
   connecting: "正在连接 Keevo…",
   error: "暂时无法连接 Keevo。请点击工具栏中的 Keevo 图标查看。",
   no_session: "菜单已过期，请重新点击输入框旁的图标。",
+  limited: "这个浏览器短时间内查询了太多网站，Keevo 暂时停止回答。请在 Keevo 中查看。",
 };
 
 const ERRORS: Record<string, string> = {

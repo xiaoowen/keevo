@@ -23,6 +23,8 @@ pub const FILL_WINDOW: Duration = Duration::from_secs(10 * 60);
 pub const FILL_DISTINCT_LIMIT: usize = 5;
 /// 协议 v2 `save` 的频率限制（`spec/ipc.md` §5.5）：同一配对在任意 10 分钟内最多保存这么多条目。
 pub const SAVE_LIMIT: usize = 5;
+/// `candidates` 的频率限制（`spec/ipc.md` §5.2）：同一配对在任意 10 分钟内最多查询这么多不同的站点。
+pub const QUERY_DISTINCT_LIMIT: usize = 60;
 
 /// 一项站点授权：某个配对可以为某个条目在某个站点取用凭据（`spec/ipc.md` §5.2）。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -63,6 +65,14 @@ pub struct PairingCache {
     usage: HashMap<[u8; 32], VecDeque<(Instant, String)>>,
     paused: HashSet<[u8; 32]>,
     saves: HashMap<[u8; 32], VecDeque<Instant>>,
+    queries: HashMap<[u8; 32], QueryWindow>,
+}
+
+/// 一个配对最近查询过的站点，以及本时间窗内是否已经提示过。
+#[derive(Debug, Default)]
+struct QueryWindow {
+    sites: VecDeque<(Instant, String)>,
+    notified: bool,
 }
 
 /// 读入时的情况。
@@ -215,6 +225,39 @@ impl PairingCache {
         FillGate::Allowed
     }
 
+    /// `candidates` 的频率限制：任意 10 分钟内最多 [`QUERY_DISTINCT_LIMIT`] 个不同站点，重复查询同一站点不计数。
+    /// 计数只在内存中。超过时只在本时间窗内第一次被拒时要求提示。
+    fn query_gate(
+        &mut self,
+        pk: &[u8; 32],
+        site: &str,
+        now: Instant,
+    ) -> keevo_ipc::service::QueryGate {
+        use keevo_ipc::service::QueryGate;
+        let w = self.queries.entry(*pk).or_default();
+        while w
+            .sites
+            .front()
+            .is_some_and(|(t, _)| now.saturating_duration_since(*t) > FILL_WINDOW)
+        {
+            w.sites.pop_front();
+        }
+        if w.sites.iter().any(|(_, s)| s == site) {
+            return QueryGate::Allowed;
+        }
+        let distinct: HashSet<&str> = w.sites.iter().map(|(_, s)| s.as_str()).collect();
+        if distinct.len() >= QUERY_DISTINCT_LIMIT {
+            let first = !w.notified;
+            w.notified = true;
+            return QueryGate::Limited { first };
+        }
+        if distinct.is_empty() {
+            w.notified = false;
+        }
+        w.sites.push_back((now, site.to_owned()));
+        QueryGate::Allowed
+    }
+
     /// `save` 的频率限制：任意 10 分钟内最多 [`SAVE_LIMIT`] 次。允许时记下这次保存。计数只在内存中。
     fn save_gate(&mut self, pk: &[u8; 32], now: Instant) -> bool {
         let window = self.saves.entry(*pk).or_default();
@@ -258,6 +301,15 @@ impl PairingStore for Live<'_> {
 
     fn save_gate(&mut self, pk: &[u8; 32], now: Instant) -> bool {
         self.0.save_gate(pk, now)
+    }
+
+    fn candidates_gate(
+        &mut self,
+        pk: &[u8; 32],
+        site: &str,
+        now: Instant,
+    ) -> keevo_ipc::service::QueryGate {
+        self.0.query_gate(pk, site, now)
     }
 }
 
@@ -414,6 +466,7 @@ impl PairingStore for Bound<'_> {
         self.cache.usage.remove(extension_public);
         self.cache.paused.remove(extension_public);
         self.cache.saves.remove(extension_public);
+        self.cache.queries.remove(extension_public);
         let _ = self
             .vault
             .delete_local_record(AUTHORIZATION_KIND, extension_public);
@@ -694,5 +747,46 @@ mod tests {
         assert!(Live(&mut cache).save_gate(&[8; 32], t0), "按配对分别计数");
         let later = t0 + FILL_WINDOW + Duration::from_secs(1);
         assert!(Live(&mut cache).save_gate(&pk, later), "时间窗过后恢复");
+    }
+
+    #[test]
+    fn candidate_queries_are_rate_limited() {
+        use keevo_ipc::service::QueryGate;
+        let mut cache = PairingCache::default();
+        let pk = [7u8; 32];
+        let t0 = Instant::now();
+        let site = |i: usize| format!("https://site{i}.example");
+        for i in 0..QUERY_DISTINCT_LIMIT {
+            assert_eq!(
+                Live(&mut cache).candidates_gate(&pk, &site(i), t0),
+                QueryGate::Allowed
+            );
+            assert_eq!(
+                Live(&mut cache).candidates_gate(&pk, &site(i), t0),
+                QueryGate::Allowed,
+                "重复查询不计数"
+            );
+        }
+        let over = site(QUERY_DISTINCT_LIMIT);
+        assert_eq!(
+            Live(&mut cache).candidates_gate(&pk, &over, t0),
+            QueryGate::Limited { first: true }
+        );
+        assert_eq!(
+            Live(&mut cache).candidates_gate(&pk, &over, t0),
+            QueryGate::Limited { first: false },
+            "只提示一次"
+        );
+        assert_eq!(
+            Live(&mut cache).candidates_gate(&pk, &site(0), t0),
+            QueryGate::Allowed,
+            "查过的站点仍可查询"
+        );
+        let later = t0 + FILL_WINDOW + Duration::from_secs(1);
+        assert_eq!(
+            Live(&mut cache).candidates_gate(&pk, &over, later),
+            QueryGate::Allowed,
+            "时间窗过后恢复"
+        );
     }
 }

@@ -1729,6 +1729,8 @@ pub trait BrowserPrompt: Send + Sync {
     -> bool;
     /// 协议 v2：扩展保存了新的登录（§5.5）。提示用户，不需要确认。
     fn login_saved(&self, pairing_name: String, browser: String, title: String);
+    /// 这个配对短时间内查询了太多不同的网站（§5.2）：提示用户，可能有人在冒用它枚举账户。
+    fn queries_limited(&self, pairing_id: String, name: String, browser: String);
 }
 
 /// 一次等待确认的密码更新（`spec/ipc.md` §5.5）。不含密码本身。
@@ -1887,6 +1889,11 @@ impl keevo_service::PairingPrompt for PromptAdapter {
             browser.to_owned(),
             title.to_owned(),
         );
+    }
+
+    fn queries_limited(&self, extension_public: &[u8; 32], name: &str, browser: &str) {
+        self.0
+            .queries_limited(hex(extension_public), name.to_owned(), browser.to_owned());
     }
 }
 

@@ -230,6 +230,50 @@ impl Handshake {
         Ok(Self { state })
     }
 
+    /// 测试向量用：固定临时密钥（`spec/test-vectors/ipc-v1.json`）。`xx` 为配对（XX），否则为会话（IK）。
+    #[cfg(test)]
+    pub(crate) fn for_vector(
+        xx: bool,
+        local: &StaticKeypair,
+        remote: Option<&[u8; 32]>,
+        extension_origin: &str,
+        version: u32,
+        initiator: bool,
+        ephemeral: &[u8; 32],
+    ) -> Result<Self> {
+        let purpose = if xx {
+            HandshakePurpose::Pair
+        } else {
+            HandshakePurpose::Session
+        };
+        let params = (if xx { PATTERN_XX } else { PATTERN_IK })
+            .parse()
+            .map_err(builder_error)?;
+        let prologue = prologue(version, purpose, extension_origin);
+        let mut builder = snow::Builder::new(params)
+            .local_private_key(local.private.as_ref())
+            .map_err(builder_error)?
+            .prologue(&prologue)
+            .map_err(builder_error)?
+            .fixed_ephemeral_key_for_testing_only(ephemeral);
+        if let Some(remote) = remote {
+            builder = builder.remote_public_key(remote).map_err(builder_error)?;
+        }
+        let state = if initiator {
+            builder.build_initiator()
+        } else {
+            builder.build_responder()
+        }
+        .map_err(builder_error)?;
+        Ok(Self { state })
+    }
+
+    /// 测试向量用：当前的握手哈希。
+    #[cfg(test)]
+    pub(crate) fn handshake_hash(&self) -> Vec<u8> {
+        self.state.get_handshake_hash().to_vec()
+    }
+
     /// 写出下一条握手消息。
     ///
     /// # Errors

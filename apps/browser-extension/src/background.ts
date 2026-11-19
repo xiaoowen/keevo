@@ -289,7 +289,9 @@ async function handle(req: PopupRequest): Promise<PopupResponse> {
       const candidates: Candidate[] = m && "result" in m && "items" in m.result ? m.result.items : [];
       const error = m && "error" in m ? m.error.code : undefined;
       if (error === "locked") state = { status: "connected", locked: true };
-      return { state, candidates, origin: new URL(tab.url).origin };
+      // 查询过于频繁时 Keevo 拒绝回答（spec/ipc.md §5.2）：如实告诉用户，不显示成"没有匹配"
+      const limited = error === "not_authorized" ? "queries_limited" : undefined;
+      return { state, candidates, origin: new URL(tab.url).origin, ...(limited ? { error: limited } : {}) };
     }
     case "fill": {
       const tab = await activeTab();
@@ -530,6 +532,7 @@ async function menuInit(session: InlineSession | undefined): Promise<MenuInit> {
   if (state.locked) return { ...base, message: "locked" };
   const m = await request({ method: "candidates", params: { url: session.url } });
   if (m && "error" in m && m.error.code === "locked") return { ...base, message: "locked" };
+  if (m && "error" in m && m.error.code === "not_authorized") return { ...base, message: "limited" };
   const candidates: Candidate[] = m && "result" in m && "items" in m.result ? m.result.items : [];
   return { ...base, candidates };
 }

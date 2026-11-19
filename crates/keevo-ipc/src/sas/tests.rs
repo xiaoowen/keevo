@@ -86,3 +86,29 @@ fn bytes_map_to_fixed_words() {
     );
     assert_eq!(WORDLIST_VERSION, 1);
 }
+
+/// 跨实现向量（spec/test-vectors/ipc-v1.json）中的 SAS 与词表映射：由 Python 参考实现直接读取发布的词表生成。
+#[test]
+fn matches_the_ipc_vectors() {
+    let doc: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../spec/test-vectors/ipc-v1.json")).unwrap();
+    let mut checked = 0;
+    for h in doc["handshakes"].as_array().unwrap() {
+        let Some(sas) = h["sas"].as_str() else {
+            continue;
+        };
+        let bytes: Vec<u8> = (0..6)
+            .map(|i| u8::from_str_radix(&sas[i * 2..i * 2 + 2], 16).unwrap())
+            .collect();
+        let got = sas_words(&bytes.try_into().unwrap());
+        let want = h["sas_words"].as_array().unwrap();
+        for (g, w) in got.iter().zip(want) {
+            assert_eq!(
+                (g.zh, g.en),
+                (w["zh"].as_str().unwrap(), w["en"].as_str().unwrap())
+            );
+        }
+        checked += 1;
+    }
+    assert_eq!(checked, 2);
+}

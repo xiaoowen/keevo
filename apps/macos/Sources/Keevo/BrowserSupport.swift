@@ -105,6 +105,14 @@ final class BrowserPromptBridge: BrowserPrompt, @unchecked Sendable {
         return accepted
     }
 
+    func queriesLimited(pairingId: String, name: String, browser: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.model?.browserWarning =
+                "「\(name)」（\(browserName(browser))）在 10 分钟内查询了太多不同的网站，已暂时停止回答它的查询。如果不是你在操作，请在「设置 → 浏览器」中解除配对。"
+            NSApp.requestUserAttention(.criticalRequest)
+        }
+    }
+
     func loginSaved(pairingName: String, browser: String, title: String) {
         DispatchQueue.main.async { [weak self] in
             self?.model?.browserNotice = "「\(pairingName)」（\(browserName(browser))）保存了新的登录「\(title)」。"

@@ -94,6 +94,18 @@ pub enum FillGate {
     Paused,
 }
 
+/// `candidates` 的频率限制结果（`spec/ipc.md` §5.2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryGate {
+    /// 允许，这个站点已记下。
+    Allowed,
+    /// 超过限制。`first` 为 `true` 表示这是本时间窗内第一次被拒，应在 Keevo.app 中提示。
+    Limited {
+        /// 是否第一次被拒。
+        first: bool,
+    },
+}
+
 /// 配对记录的存储。正式实现保存在加密数据库中；撤销配对即删除记录。
 pub trait PairingStore {
     /// 配对记录是否已读入。记录存在加密数据库中，进程启动后、首次解锁前不可读，此时 IK 握手一律返回
@@ -124,6 +136,17 @@ pub trait PairingStore {
     ) -> FillGate {
         let _ = (extension_public, item_id, site, now);
         FillGate::NeedsAuthorization
+    }
+    /// `candidates` 的频率限制（§5.2）：同一配对短时间内查询太多不同站点时拒绝，防止冒充者静默地枚举用户在哪些网站
+    /// 有账户。允许时记下这个站点。默认允许；正式实现见 `keevo-service`。
+    fn candidates_gate(
+        &mut self,
+        extension_public: &[u8; 32],
+        site: &str,
+        now: Instant,
+    ) -> QueryGate {
+        let _ = (extension_public, site, now);
+        QueryGate::Allowed
     }
     /// v2 `save` 的频率限制（§5.5）：允许时记下这次保存。默认拒绝（失败安全的方向）；正式实现见 `keevo-service`。
     fn save_gate(&mut self, extension_public: &[u8; 32], now: Instant) -> bool {
@@ -333,6 +356,15 @@ pub enum Output {
     /// 按拒绝处理，等待期间不得持有任何锁），再在持有保险库锁的情况下执行，最后调用
     /// [`ServiceConnection::resolve_write`]。
     Write(WriteRequest),
+    /// 这个配对查询了太多不同的站点（§5.2）：在 Keevo.app 中提示，可能有人在冒用这个配对枚举账户。
+    QueriesLimited {
+        /// 配对（扩展静态公钥）。
+        extension_public: [u8; 32],
+        /// 配对的显示名。
+        pairing_name: String,
+        /// 浏览器标识。
+        browser: String,
+    },
     /// 这个配对因频率限制被暂停（§5.2 第 3 条）：在 Keevo.app 中提示，用户确认后恢复。
     FillPaused {
         /// 配对（扩展静态公钥）。
@@ -742,6 +774,29 @@ impl ServiceConnection {
                                 };
                                 return Ok(vec![Output::AuthorizeFill(req)]);
                             }
+                        }
+                    }
+                    Call::Candidates { url } if !backend.is_locked() => {
+                        let gate = backend.site(url).map(|site| {
+                            store.candidates_gate(&record.extension_public, &site, Instant::now())
+                        });
+                        match gate {
+                            Some(QueryGate::Limited { first }) => {
+                                if first {
+                                    extra.push(Output::QueriesLimited {
+                                        extension_public: record.extension_public,
+                                        pairing_name: record.name.clone(),
+                                        browser: record.browser.clone(),
+                                    });
+                                }
+                                ServerMessage::Err {
+                                    id: request.id,
+                                    error: ErrorBody {
+                                        code: ErrorCode::NotAuthorized,
+                                    },
+                                }
+                            }
+                            _ => handle(&request, backend),
                         }
                     }
                     Call::Save { .. } | Call::Update { .. } if !backend.is_locked() => {

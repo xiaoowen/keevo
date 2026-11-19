@@ -15,6 +15,6 @@ mod write;
 pub use backend::CoreBackend;
 pub use pairing::{
     AUTHORIZATION_KIND, Authorization, FILL_DISTINCT_LIMIT, FILL_WINDOW, LoadReport, PAIRING_KIND,
-    PairingCache, SAVE_LIMIT,
+    PairingCache, QUERY_DISTINCT_LIMIT, SAVE_LIMIT,
 };
 pub use server::{PairingPrompt, PeerPolicy, VaultService, bind};

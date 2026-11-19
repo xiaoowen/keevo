@@ -67,6 +67,8 @@ jobs:
         run: .venv/bin/python -I spec/reference/generate_vectors.py --check
       - name: 重新生成并比对明文格式与合并向量（含随机多设备自检）
         run: python -I spec/reference/format_vectors.py --check --self-test
+      - name: IPC 测试向量（独立参考实现，只用标准库）
+        run: python -I spec/reference/ipc_vectors.py --check
 
   cargo-deny:
     name: 依赖审查（cargo-deny）
@@ -100,6 +102,8 @@ jobs:
           persist-credentials: false
       - name: 安装 rust-toolchain.toml 指定的工具链
         run: rustup toolchain install
+      - name: SAS 词表的拼音检查（系统的汉字转拼音）
+        run: swift scripts/check-sas-wordlist.swift
       - name: 构建并运行冒烟测试
         run: scripts/build-macos.sh --smoke
       - name: 打包 Keevo.app 并实测进程加固（临时签名、Hardened Runtime、Library Validation）

@@ -105,6 +105,7 @@ struct Delivered {
     authorize: Option<crate::service::FillRequest>,
     write: Option<crate::service::WriteRequest>,
     paused: bool,
+    limited: bool,
 }
 
 fn deliver(svc: &Service, conn: &mut ServiceConnection, frame: &[u8]) -> Delivered {
@@ -120,6 +121,7 @@ fn collect(outputs: Vec<Output>) -> Delivered {
             Output::PairingStarted { .. } => d.started = true,
             Output::AuthorizeFill(req) => d.authorize = Some(req),
             Output::Write(req) => d.write = Some(req),
+            Output::QueriesLimited { .. } => d.limited = true,
             Output::FillPaused { .. } => d.paused = true,
             Output::Close => d.closed = true,
         }
@@ -1402,4 +1404,77 @@ fn reply_of(client: &mut ExtensionClient, d: &Delivered) -> ServerMessage {
         ClientEvent::Message(m) => m,
         other => panic!("{other:?}"),
     }
+}
+
+/// candidates 的频率限制（§5.2）：存储拒绝时返回 not_authorized，只在第一次被拒时通知 Keevo.app；
+/// 非 http(s) 网址不计数（本来就没有候选）。
+#[test]
+fn candidate_queries_can_be_limited() {
+    use crate::message::ErrorCode;
+    use crate::service::{PairingRecord, QueryGate};
+    struct Limited<'a>(&'a mut MemoryPairingStore, &'a mut Vec<String>);
+    impl PairingStore for Limited<'_> {
+        fn find(&self, pk: &[u8; 32]) -> Option<PairingRecord> {
+            self.0.find(pk)
+        }
+        fn save(&mut self, r: PairingRecord) -> std::io::Result<()> {
+            self.0.save(r)
+        }
+        fn revoke(&mut self, pk: &[u8; 32]) -> std::io::Result<()> {
+            self.0.revoke(pk)
+        }
+        fn candidates_gate(
+            &mut self,
+            _: &[u8; 32],
+            site: &str,
+            _: std::time::Instant,
+        ) -> QueryGate {
+            self.1.push(site.to_owned());
+            if self.1.len() <= 1 {
+                QueryGate::Allowed
+            } else {
+                QueryGate::Limited {
+                    first: self.1.len() == 2,
+                }
+            }
+        }
+    }
+    let mut svc = Service::new();
+    let (mut client, _, mut conn) = pair(&mut svc, true);
+    let mut seen = Vec::new();
+    let ask = |client: &mut ExtensionClient,
+               conn: &mut ServiceConnection,
+               url: &str,
+               seen: &mut Vec<String>| {
+        let (_, frame) = client
+            .request(Call::Candidates { url: url.into() })
+            .unwrap();
+        let d = collect(conn.on_frame(
+            &frame,
+            &mut Limited(&mut svc.store.borrow_mut(), seen),
+            &svc.backend,
+        ));
+        let limited = d.limited;
+        (reply_of(client, &d), limited)
+    };
+    let (m, limited) = ask(
+        &mut client,
+        &mut conn,
+        "https://GitHub.com/login",
+        &mut seen,
+    );
+    assert!(matches!(m, ServerMessage::Ok { .. }) && !limited);
+    assert_eq!(seen, ["https://github.com"], "按规范化后的站点计数");
+    let (m, limited) = ask(&mut client, &mut conn, "https://a.example/", &mut seen);
+    assert_eq!(error_code(&m), Some(ErrorCode::NotAuthorized));
+    assert!(limited, "第一次被拒时通知");
+    let (m, limited) = ask(&mut client, &mut conn, "https://b.example/", &mut seen);
+    assert_eq!(error_code(&m), Some(ErrorCode::NotAuthorized));
+    assert!(!limited, "只通知一次");
+    let (m, _) = ask(&mut client, &mut conn, "about:blank", &mut seen);
+    assert!(
+        matches!(m, ServerMessage::Ok { .. }),
+        "非 http(s) 网址不计数"
+    );
+    assert_eq!(seen.len(), 3);
 }

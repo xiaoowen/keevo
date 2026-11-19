@@ -689,6 +689,9 @@ fn browser_service_pairs_lists_and_revokes() {
         fn login_saved(&self, name: String, _: String, title: String) {
             self.0.lock().unwrap().push(format!("saved {name} {title}"));
         }
+        fn queries_limited(&self, _: String, name: String, _: String) {
+            self.0.lock().unwrap().push(format!("limited {name}"));
+        }
     }
 
     let f = Fixture::new();

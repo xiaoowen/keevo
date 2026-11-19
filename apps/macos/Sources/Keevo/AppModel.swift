@@ -34,6 +34,8 @@ final class AppModel {
     var pairingNotice: String?
     /// 浏览器写入保险库的提示（spec/ipc.md §5.5：每次保存都对用户可见）。
     var browserNotice: String?
+    /// 浏览器的异常行为（spec/ipc.md §5.2：查询过于频繁）。用户关闭前一直显示。
+    var browserWarning: String?
     /// 当前显示的浏览器确认界面（配对或填充授权）。
     var browserDialog: BrowserPromptItem?
     /// 因频率限制被暂停、等待用户处理的配对（spec/ipc.md §5.2 第 3 条）。

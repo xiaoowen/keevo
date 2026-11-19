@@ -37,6 +37,8 @@ mod totp;
 mod two_skd;
 
 #[cfg(test)]
+mod ipc_vectors;
+#[cfg(test)]
 mod kat;
 #[cfg(test)]
 mod vectors;

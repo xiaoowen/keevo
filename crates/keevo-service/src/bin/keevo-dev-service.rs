@@ -131,6 +131,10 @@ impl PairingPrompt for TerminalPrompt {
     fn saved(&self, name: &str, _: &str, title: &str) {
         eprintln!("\n「{name}」保存了新的登录「{title}」。");
     }
+
+    fn queries_limited(&self, _: &[u8; 32], name: &str, _: &str) {
+        eprintln!("\n「{name}」短时间内查询了太多网站，已暂时停止回答它的查询。");
+    }
 }
 
 /// 在另一个线程读终端，到截止时间仍未回答即按拒绝处理。
