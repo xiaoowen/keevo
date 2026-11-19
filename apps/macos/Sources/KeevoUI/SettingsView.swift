@@ -6,11 +6,12 @@ import SwiftUI
 
 struct SettingsView: View {
     enum Page: Int, CaseIterable, Identifiable {
-        case security, backup, browser, developer
+        case general, security, backup, browser, developer
         var id: Int { rawValue }
 
         var title: String {
             switch self {
+            case .general: "通用"
             case .security: "安全"
             case .backup: "备份"
             case .browser: "浏览器"
@@ -20,6 +21,7 @@ struct SettingsView: View {
 
         var symbol: String {
             switch self {
+            case .general: "gearshape"
             case .security: "lock.shield"
             case .backup: "archivebox"
             case .browser: "puzzlepiece.extension"
@@ -30,7 +32,7 @@ struct SettingsView: View {
 
     @ViewState private var page: Page
 
-    init(initialPage: Page = .security) {
+    init(initialPage: Page = .general) {
         _page = ViewState(initialValue: initialPage)
     }
 
@@ -57,6 +59,7 @@ struct SettingsView: View {
                         .font(KV.Typography.title)
                         .foregroundStyle(KV.Colors.fgPrimary)
                     switch page {
+                    case .general: GeneralSettings()
                     case .security: SecuritySettings()
                     case .backup: BackupSettings()
                     case .browser: BrowserSettings()
@@ -68,7 +71,7 @@ struct SettingsView: View {
             }
             .background(KV.Colors.bgCanvas)
         }
-        .frame(width: 720, height: 560)
+        .frame(width: 720, height: 620)
         .onAppear(perform: showRequestedPage)
         .onChange(of: model.requestedSettingsPage) { showRequestedPage() }
     }

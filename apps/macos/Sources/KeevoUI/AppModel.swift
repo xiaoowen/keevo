@@ -69,6 +69,16 @@ final class AppModel {
     var requestedSettingsPage: SettingsView.Page?
     /// 主密码练习（docs/ux.md §3.1 第 8 条）。
     var showingPractice = false
+    /// 在菜单栏显示 Keevo（默认开启）。
+    static let menuBarKey = "menuBar.enabled"
+    var menuBarEnabled = UserDefaults.standard.object(forKey: AppModel.menuBarKey) as? Bool ?? true {
+        didSet { UserDefaults.standard.set(menuBarEnabled, forKey: Self.menuBarKey) }
+    }
+    /// 快速访问：每次打开加 1（重置搜索）；快捷键被其他应用占用。
+    var quickAccessSession = 0
+    var quickAccessShortcutTaken = false
+    /// 打开主窗口（主窗口关闭后由快速访问与菜单栏使用）。
+    @ObservationIgnored var openMainWindow: (() -> Void)?
     /// 导入向导与导出（「文件 → 导入…」「文件 → 导出…」）。
     var showingImport = false
     var showingExport = false
@@ -205,6 +215,7 @@ final class AppModel {
         if background {
             observeSystemLockEvents()
             startIdleTimer()
+            registerQuickAccessShortcut()
         }
     }
 

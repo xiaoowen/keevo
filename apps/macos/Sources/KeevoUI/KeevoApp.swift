@@ -16,10 +16,11 @@ public struct KeevoApp: App {
     public init() {}
 
     public var body: some Scene {
-        WindowGroup("Keevo") {
+        WindowGroup("Keevo", id: "main") {
             RootView().tinted
                 .environment(model)
                 .frame(minWidth: 960, minHeight: 600)
+                .background(MainWindowOpener())
         }
         // 设计稿：没有标题栏与工具栏，各栏自己的顶部区域放搜索与操作
         .windowStyle(.hiddenTitleBar)
@@ -63,6 +64,76 @@ public struct KeevoApp: App {
             SettingsView().tinted
                 .environment(model)
         }
+        // 独立的生成器：锁定时也可以使用（菜单栏"生成密码…"）
+        Window("生成密码", id: "generator") {
+            GeneratorView().tinted
+                .environment(model)
+                .frame(width: 460)
+        }
+        .windowResizability(.contentSize)
+        // 菜单栏（设计稿"菜单栏 · 已解锁 / 已锁定"）
+        MenuBarExtra(isInserted: Binding(get: { model.menuBarEnabled }, set: { model.menuBarEnabled = $0 })) {
+            MenuBarContent().environment(model)
+        } label: {
+            MenuBarLabel().environment(model)
+        }
+    }
+}
+
+/// 记下"打开主窗口"的动作，供快速访问与菜单栏在主窗口关闭后使用。
+private struct MainWindowOpener: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Color.clear.onAppear { model.openMainWindow = { openWindow(id: "main") } }
+    }
+}
+
+private struct MenuBarLabel: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Image(systemName: model.phase == .unlocked ? "checkmark.shield" : "lock.shield")
+            .accessibilityLabel(model.phase == .unlocked ? "Keevo 已解锁" : "Keevo 已锁定")
+            .onAppear { model.openMainWindow = { openWindow(id: "main") } }
+    }
+}
+
+private struct MenuBarContent: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        let unlocked = model.phase == .unlocked
+        if unlocked {
+            Text("Keevo 已解锁")
+            Text("闲置 \(model.autoLockMinutes) 分钟后自动锁定")
+        } else {
+            Text("Keevo 已锁定")
+        }
+        Divider()
+        if !unlocked, model.phase == .locked, model.touchIDUsable {
+            Button("用 Touch ID 解锁…") { Task { await model.unlockWithTouchID() } }
+        }
+        Button("快速访问…") { QuickAccessController.shared.show(model: model) }
+            .keyboardShortcut(KeyEquivalent(Character(Shortcut.saved.key.lowercased())), modifiers: Shortcut.saved.eventModifiers)
+            .disabled(!unlocked)
+        Button("生成密码…") {
+            NSApp.activate()
+            openWindow(id: "generator")
+        }
+        Divider()
+        Button("打开 Keevo") { model.showMainWindow() }
+        if unlocked {
+            Button("立即锁定") { model.lock() }
+        }
+        Divider()
+        SettingsLink { Text("设置…") }
+            .keyboardShortcut(",")
+        Button("退出 Keevo") { NSApp.terminate(nil) }
+            .keyboardShortcut("q")
     }
 }
 
@@ -73,7 +144,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate()
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    /// 菜单栏中显示 Keevo 时，关闭窗口后继续运行（快速访问与菜单栏仍可用）。
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        !(UserDefaults.standard.object(forKey: AppModel.menuBarKey) as? Bool ?? true)
+    }
 }
 
 struct RootView: View {

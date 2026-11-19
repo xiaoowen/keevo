@@ -145,7 +145,11 @@ public enum Snapshots {
         await shooter.shoot("kdf-confirm", sheet: true) {
             KdfConfirmSheet(info: KdfInfo(memoryKib: 4 * 1024 * 1024, iterations: 12, parallelism: 4)) {}
         }
+        await shooter.shoot("settings-general", sheet: true) { SettingsView(initialPage: .general) }
         await shooter.shoot("settings-security", sheet: true) { SettingsView(initialPage: .security) }
+        await shooter.shoot("quick-access", size: CGSize(width: 680, height: 420)) {
+            QuickAccessPreview(model: model, query: "git").padding(20).frame(width: 680, height: 420, alignment: .top)
+        }
         // 备份：三份不同原因的备份
         for kind in ["auto", "import", "manual"] { await model.backupNow(kind: kind) }
         await shooter.shoot("settings-backup", sheet: true) { SettingsView(initialPage: .backup) }
