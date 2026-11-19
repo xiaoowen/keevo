@@ -71,6 +71,11 @@ python3 -m venv .venv
   - 新增任何网络请求，都必须在 [docs/governance.md §5](docs/governance.md#5-隐私承诺产品层面) 的清单中登记。
   - 默认关闭。
 
+## 界面文字
+
+- 新增或修改界面文字时，用 `tr("…")`（macOS）或 `t("…")`（扩展）包起来，并在英文表中加上翻译（见 [docs/ux.md](docs/ux.md) §6"界面语言"）。
+- 提交前运行 `python3 -I scripts/i18n.py check` 与 `python3 -I scripts/i18n.py gen`；CI 同样检查。
+
 ## 提交信息
 
 使用 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/)：

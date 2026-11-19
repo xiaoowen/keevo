@@ -16,9 +16,9 @@ enum UnlockWaiter {
 
     var text: String {
         switch self {
-        case .cli: "命令行工具正在等待解锁。解锁后会继续执行。"
-        case .ssh: "SSH 正在等待解锁。解锁后会继续连接。"
-        case .browser(let name, let bundleID, _): "「\(name)」正在等待解锁。解锁后会回到 \(browserName(bundleID))。"
+        case .cli: tr("命令行工具正在等待解锁。解锁后会继续执行。")
+        case .ssh: tr("SSH 正在等待解锁。解锁后会继续连接。")
+        case .browser(let name, let bundleID, _): tr("「{}」正在等待解锁。解锁后会回到 {}。", "\(name)", "\(browserName(bundleID))")
         }
     }
 }
@@ -92,7 +92,7 @@ final class DeveloperPromptBridge: DeveloperPrompt, @unchecked Sendable {
             if model.recentSshUse.count > 20 { model.recentSshUse.removeLast(model.recentSshUse.count - 20) }
             // 解锁期间自动签名的密钥：给出一个短暂提示，让每次使用都可见
             if request.policy == "unlocked" {
-                model.showToast("已用「\(request.keyTitle)」签名（\(request.origin.app ?? request.origin.parentName)）")
+                model.showToast(tr("已用「{}」签名（{}）", "\(request.keyTitle)", "\(request.origin.app ?? request.origin.parentName)"))
             }
         }
     }
@@ -161,7 +161,7 @@ extension AppModel {
             let fingerprint = try vault.generateSshKey(itemId: itemId)
             reloadAfterBrowserWrite()
             refreshDeveloper()
-            showToast("已生成 Ed25519 密钥 \(fingerprint.prefix(16))…")
+            showToast(tr("已生成 Ed25519 密钥 {}…", "\(fingerprint.prefix(16))"))
         } catch {
             report(error)
         }
@@ -178,7 +178,7 @@ extension AppModel {
 
     /// 导入私钥。口令只用于这一次解密，不保存（spec/ssh-agent.md §3）。
     func importSshKey(itemId: String, text: String, passphrase: String?) -> SshImportOutcome {
-        guard let vault else { return .problem(.danger, "Keevo 已锁定") }
+        guard let vault else { return .problem(.danger, tr("Keevo 已锁定")) }
         do {
             _ = try vault.importSshPrivateKey(itemId: itemId, text: text, passphrase: passphrase)
             reloadAfterBrowserWrite()
@@ -202,22 +202,22 @@ extension AppModel {
         case "ssh-rsa": "RSA"
         case "ssh-dss": "DSA"
         case let a where a.hasPrefix("ecdsa"): "ECDSA"
-        case let a where a.hasPrefix("sk-"): "安全密钥（\(a)）"
-        case "": "这种"
-        default: "「\(alg)」"
+        case let a where a.hasPrefix("sk-"): tr("安全密钥（{}）", "\(a)")
+        case "": tr("这种")
+        default: tr("「{}」", "\(alg)")
         }
     }
 
     static func sshKeyProblem(code: String, detail: String = "") -> String {
         switch code {
-        case "encrypted": "这把私钥有口令保护。输入口令后导入：口令只用于这一次解密，不会保存。"
-        case "wrong_passphrase": "口令不对，请重新输入。"
-        case "pem": "请在终端运行 ssh-keygen -p -f <私钥文件> 转换为 OpenSSH 格式（可以保留口令），再导入。"
-        case "cipher": "暂不支持这种加密方式\(detail.isEmpty ? "" : "（\(detail)）")。请在终端运行 ssh-keygen -p -Z aes256-ctr -f <私钥文件> 改用 aes256-ctr，再导入。"
-        case "unsupported": "暂不支持 \(algorithmName(detail)) 私钥：目前 SSH Agent 只支持 Ed25519。ECDSA 与 RSA 所需的密码学库通过供应链审计后加入。可以在终端运行 ssh-keygen -t ed25519 生成新的 Ed25519 密钥，或在这里直接生成。"
-        case "missing": "还没有私钥：生成新的密钥或导入现有私钥。"
-        case "multiple": "这个条目中有多个私钥字段，Agent 不知道用哪一个。请删除多余的。"
-        default: "无法识别的私钥。请粘贴以 -----BEGIN OPENSSH PRIVATE KEY----- 开头的完整内容。"
+        case "encrypted": tr("这把私钥有口令保护。输入口令后导入：口令只用于这一次解密，不会保存。")
+        case "wrong_passphrase": tr("口令不对，请重新输入。")
+        case "pem": tr("请在终端运行 ssh-keygen -p -f <私钥文件> 转换为 OpenSSH 格式（可以保留口令），再导入。")
+        case "cipher": tr("暂不支持这种加密方式{}。请在终端运行 ssh-keygen -p -Z aes256-ctr -f <私钥文件> 改用 aes256-ctr，再导入。", "\(detail.isEmpty ? "" : tr("（{}）", "\(detail)"))")
+        case "unsupported": tr("暂不支持 {} 私钥：目前 SSH Agent 只支持 Ed25519。ECDSA 与 RSA 所需的密码学库通过供应链审计后加入。可以在终端运行 ssh-keygen -t ed25519 生成新的 Ed25519 密钥，或在这里直接生成。", "\(algorithmName(detail))")
+        case "missing": tr("还没有私钥：生成新的密钥或导入现有私钥。")
+        case "multiple": tr("这个条目中有多个私钥字段，Agent 不知道用哪一个。请删除多余的。")
+        default: tr("无法识别的私钥。请粘贴以 -----BEGIN OPENSSH PRIVATE KEY----- 开头的完整内容。")
         }
     }
 
@@ -229,7 +229,7 @@ extension AppModel {
             let pb = NSPasteboard.general
             pb.clearContents()
             pb.setString(reference, forType: .string)
-            showToast("已复制引用")
+            showToast(tr("已复制引用"))
         } catch {
             report(error)
         }
@@ -238,7 +238,7 @@ extension AppModel {
     /// 在确认界面中验证身份：Touch ID（`password` 为 `nil`）或主密码。成功时返回 `nil`，否则返回给人看的原因
     /// （用户取消时为空字符串）。
     func verifyIdentity(password: String?) async -> String? {
-        guard let vault else { return "Keevo 已锁定" }
+        guard let vault else { return tr("Keevo 已锁定") }
         do {
             try await Task.detached { try vault.reverify(password: password) }.value
             return nil
@@ -267,7 +267,7 @@ private struct IdentityCheck: View {
     var body: some View {
         VStack(alignment: .leading, spacing: KV.Space.s2) {
             if !model.touchIDUsable {
-                LabeledInput(label: "主密码", hint: "确认是你本人") {
+                LabeledInput(label: tr("主密码"), hint: tr("确认是你本人")) {
                     SecureField("", text: $password)
                 }
             }
@@ -287,14 +287,14 @@ private struct AuthorizeButtons: View {
     let allow: () -> Void
 
     var body: some View {
-        Button("拒绝", action: deny)
+        Button(tr("拒绝"), action: deny)
             .buttonStyle(.kvSecondary)
             .keyboardShortcut(.cancelAction)
         Button(action: allow) {
             if model.touchIDUsable {
-                Label("用 Touch ID 允许", systemImage: "touchid")
+                Label(tr("用 Touch ID 允许"), systemImage: "touchid")
             } else {
-                Text("允许")
+                Text(tr("允许"))
             }
         }
         .buttonStyle(.kvSecondary)
@@ -305,18 +305,18 @@ private struct AuthorizeButtons: View {
 private func originRows(_ origin: RequestOrigin) -> some View {
     Group {
         if let app = origin.app {
-            CardRow(label: "应用") { Text(app).font(KV.Typography.body) } actions: {}
+            CardRow(label: tr("应用")) { Text(app).font(KV.Typography.body) } actions: {}
             CardRowDivider()
         }
-        CardRow(label: "命令", multiline: true) {
+        CardRow(label: tr("命令"), multiline: true) {
             Text(origin.command)
                 .font(KV.Typography.mono)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         } actions: {}
         CardRowDivider()
-        CardRow(label: "启动者", multiline: true) {
-            Text(origin.parentCommand.map { "\(origin.parentName)（\($0)）" } ?? origin.parentName)
+        CardRow(label: tr("启动者"), multiline: true) {
+            Text(origin.parentCommand.map { tr("{}（{}）", "\(origin.parentName)", "\($0)") } ?? origin.parentName)
                 .font(KV.Typography.body)
                 .fixedSize(horizontal: false, vertical: true)
         } actions: {}
@@ -335,17 +335,17 @@ struct CliAuthorizationSheet: View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let left = max(0, Int(request.deadline.timeIntervalSince(context.date).rounded(.up)))
             SheetScaffold(
-                title: "允许命令行工具访问 Keevo？",
+                title: tr("允许命令行工具访问 Keevo？"),
                 subtitle: request.origin.inTerminal
-                    ? "「\(request.origin.app ?? "终端")」中的一个终端会话请求读取保险库。"
-                    : "「\(request.origin.app ?? request.origin.parentName)」请求读取保险库。",
+                    ? tr("「{}」中的一个终端会话请求读取保险库。", "\(request.origin.app ?? tr("终端"))")
+                    : tr("「{}」请求读取保险库。", "\(request.origin.app ?? request.origin.parentName)"),
                 systemImage: "terminal",
                 width: 520,
-                note: "\(left) 秒后自动拒绝"
+                note: tr("{} 秒后自动拒绝", "\(left)")
             ) {
                 VStack(alignment: .leading, spacing: KV.Space.s3) {
                     KVCard { originRows(request.origin) }
-                    Text("允许后，这个终端会话闲置 10 分钟内不再询问（最长 12 小时），锁定 Keevo 时失效，也可以在「设置 → 开发者」中撤销。如果你没有运行 keevo，请选择「拒绝」。")
+                    Text(tr("允许后，这个终端会话闲置 10 分钟内不再询问（最长 12 小时），锁定 Keevo 时失效，也可以在「设置 → 开发者」中撤销。如果你没有运行 keevo，请选择「拒绝」。"))
                         .font(KV.Typography.footnote)
                         .foregroundStyle(KV.Colors.fgSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -391,19 +391,19 @@ struct SshSignSheet: View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let left = max(0, Int(request.deadline.timeIntervalSince(context.date).rounded(.up)))
             SheetScaffold(
-                title: "允许使用 SSH 密钥「\(r.keyTitle)」？",
-                subtitle: "「\(r.origin.app ?? r.origin.parentName)」中的 ssh 请求用这把密钥签名。",
+                title: tr("允许使用 SSH 密钥「{}」？", "\(r.keyTitle)"),
+                subtitle: tr("「{}」中的 ssh 请求用这把密钥签名。", "\(r.origin.app ?? r.origin.parentName)"),
                 systemImage: "key.horizontal",
                 tint: r.forwarded ? KV.Colors.statusDangerFg : KV.Colors.accentFg,
                 width: 540,
-                note: "\(left) 秒后自动拒绝"
+                note: tr("{} 秒后自动拒绝", "\(left)")
             ) {
                 VStack(alignment: .leading, spacing: KV.Space.s3) {
                     if r.forwarded {
-                        Banner(kind: .danger, message: "这个请求来自转发的 agent：一台远程主机正在使用你的密钥登录别处。除非你刚刚在远程主机上运行了 ssh 或 git，否则请拒绝。")
+                        Banner(kind: .danger, message: tr("这个请求来自转发的 agent：一台远程主机正在使用你的密钥登录别处。除非你刚刚在远程主机上运行了 ssh 或 git，否则请拒绝。"))
                     }
                     KVCard {
-                        CardRow(label: "密钥", multiline: true) {
+                        CardRow(label: tr("密钥"), multiline: true) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(r.keyTitle).font(KV.Typography.bodyStrong)
                                 Text(r.fingerprint).font(KV.Typography.mono).foregroundStyle(KV.Colors.fgSecondary)
@@ -413,10 +413,10 @@ struct SshSignSheet: View {
                         originRows(r.origin)
                         if let host = r.hostFingerprint {
                             CardRowDivider()
-                            CardRow(label: "目标主机", multiline: true) {
+                            CardRow(label: tr("目标主机"), multiline: true) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(host).font(KV.Typography.mono)
-                                    Text(r.hostVerified ? "主机密钥已验证" : "主机密钥的算法无法验证，仅供参考")
+                                    Text(r.hostVerified ? tr("主机密钥已验证") : tr("主机密钥的算法无法验证，仅供参考"))
                                         .font(KV.Typography.caption)
                                         .foregroundStyle(r.hostVerified ? KV.Colors.statusSuccessFg : KV.Colors.fgSecondary)
                                 }
@@ -424,8 +424,8 @@ struct SshSignSheet: View {
                         }
                     }
                     Text(r.policy == "session" && !r.forwarded
-                        ? "允许后，同一会话闲置 10 分钟内使用这把密钥不再询问，锁定时失效。"
-                        : "这把密钥设置为每次使用都确认。可以在「设置 → 开发者」中修改。")
+                        ? tr("允许后，同一会话闲置 10 分钟内使用这把密钥不再询问，锁定时失效。")
+                        : tr("这把密钥设置为每次使用都确认。可以在「设置 → 开发者」中修改。"))
                         .font(KV.Typography.footnote)
                         .foregroundStyle(KV.Colors.fgSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -466,10 +466,10 @@ enum AgentPolicyChoice: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .off: "不在 Agent 中提供"
-        case .ask: "每次使用都确认"
-        case .session: "每个会话确认一次"
-        case .unlocked: "解锁期间自动使用"
+        case .off: tr("不在 Agent 中提供")
+        case .ask: tr("每次使用都确认")
+        case .session: tr("每个会话确认一次")
+        case .unlocked: tr("解锁期间自动使用")
         }
     }
 
@@ -514,7 +514,7 @@ struct SshKeyAgentCard: View {
             GroupTitle(text: "SSH Agent")
             KVCard {
                 if let key {
-                    CardRow(label: "使用方式") {
+                    CardRow(label: tr("使用方式")) {
                         if let problem = key.problem {
                             Text(AppModel.sshKeyProblem(code: problem))
                                 .font(KV.Typography.footnote)
@@ -527,7 +527,7 @@ struct SshKeyAgentCard: View {
                     if key.problem == nil, !(model.sshAgent?.running ?? false) {
                         CardRowDivider()
                         CardRow(label: "") {
-                            Text("SSH Agent 没有开启。在「设置 → 开发者」中开启后，ssh 与 git 才能使用这把密钥。")
+                            Text(tr("SSH Agent 没有开启。在「设置 → 开发者」中开启后，ssh 与 git 才能使用这把密钥。"))
                                 .font(KV.Typography.footnote)
                                 .foregroundStyle(KV.Colors.fgSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -538,21 +538,21 @@ struct SshKeyAgentCard: View {
                 HStack(spacing: KV.Space.s4) {
                     if key?.problem == "missing" {
                         Button { model.generateSshKey(itemId: itemId) } label: {
-                            Label("生成新的 Ed25519 密钥", systemImage: "wand.and.stars")
+                            Label(tr("生成新的 Ed25519 密钥"), systemImage: "wand.and.stars")
                         }
                     } else {
                         Button { confirmRegenerate = true } label: {
-                            Label("重新生成…", systemImage: "arrow.triangle.2.circlepath")
+                            Label(tr("重新生成…"), systemImage: "arrow.triangle.2.circlepath")
                         }
                     }
-                    Button { importing = true } label: { Label("导入私钥…", systemImage: "square.and.arrow.down") }
+                    Button { importing = true } label: { Label(tr("导入私钥…"), systemImage: "square.and.arrow.down") }
                     if let line = key?.publicKey {
                         Button {
                             let pb = NSPasteboard.general
                             pb.clearContents()
                             pb.setString(line, forType: .string)
-                            model.showToast("已复制公钥")
-                        } label: { Label("复制公钥", systemImage: "doc.on.doc") }
+                            model.showToast(tr("已复制公钥"))
+                        } label: { Label(tr("复制公钥"), systemImage: "doc.on.doc") }
                     }
                     Spacer(minLength: 0)
                 }
@@ -564,11 +564,11 @@ struct SshKeyAgentCard: View {
         .onAppear { model.refreshDeveloper() }
         .onChange(of: model.dataVersion) { model.refreshDeveloper() }
         .sheet(isPresented: $importing) { ImportSshKeySheet(itemId: itemId) }
-        .confirmationDialog("生成新的密钥替换现在的私钥？", isPresented: $confirmRegenerate) {
-            Button("生成并替换", role: .destructive) { model.generateSshKey(itemId: itemId) }
-            Button("取消", role: .cancel) {}
+        .confirmationDialog(tr("生成新的密钥替换现在的私钥？"), isPresented: $confirmRegenerate) {
+            Button(tr("生成并替换"), role: .destructive) { model.generateSshKey(itemId: itemId) }
+            Button(tr("取消"), role: .cancel) {}
         } message: {
-            Text("旧的私钥会留在这个条目的历史中。已添加了旧公钥的服务器（如 GitHub）需要换成新的公钥。")
+            Text(tr("旧的私钥会留在这个条目的历史中。已添加了旧公钥的服务器（如 GitHub）需要换成新的公钥。"))
         }
     }
 }
@@ -604,8 +604,8 @@ struct ImportSshKeySheet: View {
 
     var body: some View {
         SheetScaffold(
-            title: "导入 SSH 私钥",
-            subtitle: "粘贴私钥文件的内容，或从文件读取。支持 OpenSSH 格式（可以有口令保护）与 Ed25519 的 PKCS#8 PEM。导入后私钥由保险库加密保存，原文件可以删除。",
+            title: tr("导入 SSH 私钥"),
+            subtitle: tr("粘贴私钥文件的内容，或从文件读取。支持 OpenSSH 格式（可以有口令保护）与 Ed25519 的 PKCS#8 PEM。导入后私钥由保险库加密保存，原文件可以删除。"),
             systemImage: "square.and.arrow.down",
             width: 560
         ) {
@@ -616,19 +616,19 @@ struct ImportSshKeySheet: View {
                     .scrollContentBackground(.hidden)
                     .padding(KV.Space.s2)
                     .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .accessibilityLabel("私钥")
+                    .accessibilityLabel(tr("私钥"))
                     .onChange(of: text) {
                         needsPassphrase = false
                         passphrase = ""
                         problem = nil
                     }
-                Button { chooseFile() } label: { Label("从文件读取…", systemImage: "folder") }
+                Button { chooseFile() } label: { Label(tr("从文件读取…"), systemImage: "folder") }
                     .buttonStyle(.kvLink)
                 if needsPassphrase {
                     if problem == nil {
                         Banner(kind: .info, message: AppModel.sshKeyProblem(code: "encrypted"))
                     }
-                    LabeledInput(label: "私钥口令") {
+                    LabeledInput(label: tr("私钥口令")) {
                         SecureField("", text: $passphrase)
                             .focused($passphraseFocused)
                             .onSubmit { if !importDisabled { submit() } }
@@ -639,10 +639,10 @@ struct ImportSshKeySheet: View {
                 }
             }
         } footer: {
-            Button("取消") { dismiss() }
+            Button(tr("取消")) { dismiss() }
                 .buttonStyle(.kvSecondary)
                 .keyboardShortcut(.cancelAction)
-            Button("导入") { submit() }
+            Button(tr("导入")) { submit() }
                 .buttonStyle(.kvPrimary)
                 .disabled(importDisabled)
         }
@@ -698,15 +698,15 @@ struct DeveloperSettings: View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: KV.Space.s5) {
             SettingsSection(
-                title: "命令行工具",
-                footer: "keevo 不保存任何密钥，每次都向 Keevo 请求。第一次在某个终端会话中使用时，需要在 Keevo 中确认。"
+                title: tr("命令行工具"),
+                footer: tr("keevo 不保存任何密钥，每次都向 Keevo 请求。第一次在某个终端会话中使用时，需要在 Keevo 中确认。")
             ) {
                 SettingsRow(
                     title: "keevo",
-                    detail: model.bundledCliURL.map { "安装后可在终端中运行 keevo read、keevo run 等命令。位于 \($0.path)" }
-                        ?? "从打包的 Keevo.app 运行时可用（scripts/package-macos.sh）。"
+                    detail: model.bundledCliURL.map { tr("安装后可在终端中运行 keevo read、keevo run 等命令。位于 {}", "\($0.path)") }
+                        ?? tr("从打包的 Keevo.app 运行时可用（scripts/package-macos.sh）。")
                 ) {
-                    Button("安装到 ~/.local/bin") { installCli() }
+                    Button(tr("安装到 ~/.local/bin")) { installCli() }
                         .buttonStyle(.kvBordered)
                         .disabled(model.bundledCliURL == nil)
                 }
@@ -715,19 +715,19 @@ struct DeveloperSettings: View {
                 Banner(kind: .info, message: installMessage)
             }
             if let error = model.developerServiceError {
-                Banner(kind: .warning, message: "命令行工具的服务没有启动：\(error)")
+                Banner(kind: .warning, message: tr("命令行工具的服务没有启动：{}", "\(error)"))
             }
-            SettingsSection(title: "已授权的终端会话") {
+            SettingsSection(title: tr("已授权的终端会话")) {
                 if model.cliSessions.isEmpty {
-                    SettingsRow(title: "没有已授权的终端会话", detail: "授权在闲置 10 分钟后或锁定时失效。") { EmptyView() }
+                    SettingsRow(title: tr("没有已授权的终端会话"), detail: tr("授权在闲置 10 分钟后或锁定时失效。")) { EmptyView() }
                 } else {
                     ForEach(Array(model.cliSessions.enumerated()), id: \.element.id) { index, s in
                         if index > 0 { CardRowDivider() }
                         SettingsRow(
                             title: "\(s.origin.app ?? s.origin.parentName) · \(s.origin.command)",
-                            detail: "授权于 \(Self.minutes(s.ageSecs)) 前 · 闲置 \(Self.minutes(s.idleSecs))"
+                            detail: tr("授权于 {} 前 · 闲置 {}", "\(Self.minutes(s.ageSecs))", "\(Self.minutes(s.idleSecs))")
                         ) {
-                            Button("撤销") { model.revokeCliSession(s.id) }
+                            Button(tr("撤销")) { model.revokeCliSession(s.id) }
                                 .buttonStyle(.kvBordered)
                         }
                     }
@@ -735,44 +735,44 @@ struct DeveloperSettings: View {
             }
             SettingsSection(
                 title: "SSH Agent",
-                footer: "开启后，ssh 与 git 可以使用保险库中的 SSH 密钥签名，私钥不离开 Keevo。只提供在下面开启了的密钥，不接受 ssh-add 添加的外部密钥。"
+                footer: tr("开启后，ssh 与 git 可以使用保险库中的 SSH 密钥签名，私钥不离开 Keevo。只提供在下面开启了的密钥，不接受 ssh-add 添加的外部密钥。")
             ) {
                 SettingsRow(
-                    title: "开启 SSH Agent",
-                    detail: model.sshAgent?.running == true ? model.sshAgent?.socketPath : "关闭时不监听任何 socket。"
+                    title: tr("开启 SSH Agent"),
+                    detail: model.sshAgent?.running == true ? model.sshAgent?.socketPath : tr("关闭时不监听任何 socket。")
                 ) {
-                    Toggle("开启 SSH Agent", isOn: Binding(
+                    Toggle(tr("开启 SSH Agent"), isOn: Binding(
                         get: { model.sshAgentEnabled },
                         set: { on in
                             model.sshAgentEnabled = on
                             model.applySshAgent(enabled: on)
                         }
                     ))
-                    .kvSwitch("开启 SSH Agent")
+                    .kvSwitch(tr("开启 SSH Agent"))
                     .disabled(model.developerServiceError != nil)
                 }
                 if model.sshAgent?.running == true {
                     CardRowDivider()
                     SettingsRow(
-                        title: "SSH 配置",
-                        detail: "在 ~/.ssh/config 中把 IdentityAgent 指向 \(Self.tilde(model.sshAgent?.linkPath ?? ""))"
+                        title: tr("SSH 配置"),
+                        detail: tr("在 ~/.ssh/config 中把 IdentityAgent 指向 {}", "\(Self.tilde(model.sshAgent?.linkPath ?? ""))")
                     ) {
-                        Button("配置…") { configuringSsh = true }.buttonStyle(.kvBordered)
+                        Button(tr("配置…")) { configuringSsh = true }.buttonStyle(.kvBordered)
                     }
                     CardRowDivider()
-                    SettingsRow(title: "Git 提交签名", detail: "用保险库中的 SSH 密钥签名提交（gpg.format = ssh）。") {
-                        Button("配置…") { configuringGit = true }.buttonStyle(.kvBordered)
+                    SettingsRow(title: tr("Git 提交签名"), detail: tr("用保险库中的 SSH 密钥签名提交（gpg.format = ssh）。")) {
+                        Button(tr("配置…")) { configuringGit = true }.buttonStyle(.kvBordered)
                     }
                 }
             }
             if let error = model.sshAgentError {
-                Banner(kind: .danger, message: "SSH Agent 无法启动：\(error)")
+                Banner(kind: .danger, message: tr("SSH Agent 无法启动：{}", "\(error)"))
             }
             if let problem = model.sshAgent?.linkProblem {
-                Banner(kind: .warning, message: "便捷路径没有创建：\(problem)。可以直接使用 \(model.sshAgent?.socketPath ?? "")。")
+                Banner(kind: .warning, message: tr("便捷路径没有创建：{}。可以直接使用 {}。", "\(problem)", "\(model.sshAgent?.socketPath ?? "")"))
             }
             if !model.recentSshUse.isEmpty {
-                SettingsSection(title: "最近使用（SSH）", footer: "只记在内存中，锁定时清空。") {
+                SettingsSection(title: tr("最近使用（SSH）"), footer: tr("只记在内存中，锁定时清空。")) {
                     ForEach(Array(model.recentSshUse.prefix(10).enumerated()), id: \.element.id) { index, use in
                         if index > 0 { CardRowDivider() }
                         SettingsRow(title: use.keyTitle, detail: use.source) {
@@ -783,11 +783,11 @@ struct DeveloperSettings: View {
                     }
                 }
             }
-            SettingsSection(title: "SSH 密钥") {
+            SettingsSection(title: tr("SSH 密钥")) {
                 if model.phase != .unlocked {
-                    SettingsRow(title: "解锁 Keevo 之后才能查看。") { EmptyView() }
+                    SettingsRow(title: tr("解锁 Keevo 之后才能查看。")) { EmptyView() }
                 } else if model.sshKeys.isEmpty {
-                    SettingsRow(title: "还没有 SSH 密钥", detail: "新建一个「SSH 密钥」条目即可生成 Ed25519 密钥。") { EmptyView() }
+                    SettingsRow(title: tr("还没有 SSH 密钥"), detail: tr("新建一个「SSH 密钥」条目即可生成 Ed25519 密钥。")) { EmptyView() }
                 } else {
                     ForEach(Array(model.sshKeys.enumerated()), id: \.element.itemId) { index, key in
                         if index > 0 { CardRowDivider() }
@@ -807,7 +807,7 @@ struct DeveloperSettings: View {
     }
 
     static func minutes(_ secs: UInt64) -> String {
-        secs < 60 ? "不到 1 分钟" : "\(secs / 60) 分钟"
+        secs < 60 ? tr("不到 1 分钟") : tr("{} 分钟", "\(secs / 60)")
     }
 
     static func tilde(_ path: String) -> String {
@@ -831,14 +831,14 @@ struct DeveloperSettings: View {
                     if existing == cli.path { continue }
                     try fm.removeItem(at: link)
                 } else if fm.fileExists(atPath: link.path) {
-                    installMessage = "\(link.path) 已存在且不是软链，没有改动。"
+                    installMessage = tr("{} 已存在且不是软链，没有改动。", "\(link.path)")
                     return
                 }
                 try fm.createSymbolicLink(at: link, withDestinationURL: cli)
             }
-            installMessage = "已安装到 ~/.local/bin。如果终端找不到 keevo，把 export PATH=\"$HOME/.local/bin:$PATH\" 加到 ~/.zshrc。"
+            installMessage = tr("已安装到 ~/.local/bin。如果终端找不到 keevo，把 export PATH=\"$HOME/.local/bin:$PATH\" 加到 ~/.zshrc。")
         } catch {
-            installMessage = "安装失败：\(error.localizedDescription)"
+            installMessage = tr("安装失败：{}", "\(error.localizedDescription)")
         }
     }
 }
@@ -856,7 +856,7 @@ struct SshConfigSheet: View {
     private var agentPath: String { DeveloperSettings.tilde(model.sshAgent?.linkPath ?? sshAgentLinkPath()) }
 
     private var addition: String {
-        "# Keevo SSH Agent（由 Keevo 添加）\nHost *\n  IdentityAgent \"\(agentPath)\"\n"
+        tr("# Keevo SSH Agent（由 Keevo 添加）\nHost *\n  IdentityAgent \"{}\"\n", "\(agentPath)")
     }
 
     private var existing: String { (try? String(contentsOf: configURL, encoding: .utf8)) ?? "" }
@@ -865,14 +865,14 @@ struct SshConfigSheet: View {
 
     var body: some View {
         SheetScaffold(
-            title: "配置 ~/.ssh/config",
-            subtitle: "在文件开头加入下面几行，让 ssh 经 Keevo 的 Agent 使用密钥。原文件会备份为 config.keevo-backup。",
+            title: tr("配置 ~/.ssh/config"),
+            subtitle: tr("在文件开头加入下面几行，让 ssh 经 Keevo 的 Agent 使用密钥。原文件会备份为 config.keevo-backup。"),
             systemImage: "doc.badge.gearshape",
             width: 560
         ) {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
                 if alreadyConfigured {
-                    Banner(kind: .success, message: "已经配置好了。")
+                    Banner(kind: .success, message: tr("已经配置好了。"))
                 }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
@@ -897,10 +897,10 @@ struct SshConfigSheet: View {
                 }
             }
         } footer: {
-            Button("取消") { dismiss() }
+            Button(tr("取消")) { dismiss() }
                 .buttonStyle(.kvSecondary)
                 .keyboardShortcut(.cancelAction)
-            Button("写入") { write() }
+            Button(tr("写入")) { write() }
                 .buttonStyle(.kvPrimary)
                 .disabled(alreadyConfigured)
         }
@@ -919,10 +919,10 @@ struct SshConfigSheet: View {
             }
             try (addition + "\n" + old).write(to: configURL, atomically: true, encoding: .utf8)
             try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configURL.path)
-            model.showToast("已写入 ~/.ssh/config")
+            model.showToast(tr("已写入 ~/.ssh/config"))
             dismiss()
         } catch {
-            message = "写入失败：\(error.localizedDescription)"
+            message = tr("写入失败：{}", "\(error.localizedDescription)")
         }
     }
 }
@@ -951,16 +951,16 @@ struct GitSigningSheet: View {
 
     var body: some View {
         SheetScaffold(
-            title: "配置 Git 提交签名",
-            subtitle: "Git 会经 Keevo 的 SSH Agent 用所选的密钥签名提交。将运行下面的命令（修改 ~/.gitconfig）。",
+            title: tr("配置 Git 提交签名"),
+            subtitle: tr("Git 会经 Keevo 的 SSH Agent 用所选的密钥签名提交。将运行下面的命令（修改 ~/.gitconfig）。"),
             systemImage: "signature",
             width: 600
         ) {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
                 if usable.isEmpty {
-                    Banner(kind: .warning, message: "还没有在 Agent 中开启的 SSH 密钥。先在「设置 → 开发者 → SSH 密钥」中为一把密钥选择使用方式。")
+                    Banner(kind: .warning, message: tr("还没有在 Agent 中开启的 SSH 密钥。先在「设置 → 开发者 → SSH 密钥」中为一把密钥选择使用方式。"))
                 } else {
-                    Picker("密钥", selection: Binding(get: { key?.itemId }, set: { selected = $0 })) {
+                    Picker(tr("密钥"), selection: Binding(get: { key?.itemId }, set: { selected = $0 })) {
                         ForEach(usable, id: \.itemId) { Text($0.title).tag(String?.some($0.itemId)) }
                     }
                     .pickerStyle(.menu)
@@ -978,7 +978,7 @@ struct GitSigningSheet: View {
                     .padding(KV.Space.s3)
                     .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     if !signerInstalled {
-                        Banner(kind: .warning, message: "还没有安装命令行工具：先在「设置 → 开发者 → 命令行工具」中安装，签名程序 keevo-ssh-sign 随之安装。")
+                        Banner(kind: .warning, message: tr("还没有安装命令行工具：先在「设置 → 开发者 → 命令行工具」中安装，签名程序 keevo-ssh-sign 随之安装。"))
                     }
                 }
                 if let output {
@@ -986,10 +986,10 @@ struct GitSigningSheet: View {
                 }
             }
         } footer: {
-            Button("取消") { dismiss() }
+            Button(tr("取消")) { dismiss() }
                 .buttonStyle(.kvSecondary)
                 .keyboardShortcut(.cancelAction)
-            Button("运行") { run() }
+            Button(tr("运行")) { run() }
                 .buttonStyle(.kvPrimary)
                 .disabled(commands.isEmpty || !signerInstalled)
         }
@@ -1006,16 +1006,16 @@ struct GitSigningSheet: View {
                 try p.run()
                 p.waitUntilExit()
             } catch {
-                output = "无法运行 git：\(error.localizedDescription)"
+                output = tr("无法运行 git：{}", "\(error.localizedDescription)")
                 return
             }
             if p.terminationStatus != 0 {
                 let text = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                output = "git \(args.joined(separator: " ")) 失败：\(text)"
+                output = tr("git {} 失败：{}", "\(args.joined(separator: " "))", "\(text)")
                 return
             }
         }
-        model.showToast("已配置 Git 提交签名")
+        model.showToast(tr("已配置 Git 提交签名"))
         dismiss()
     }
 }

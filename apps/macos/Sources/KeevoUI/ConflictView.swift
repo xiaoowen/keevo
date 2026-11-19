@@ -16,10 +16,10 @@ struct ConflictPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: KV.Space.s3) {
             if detail.resurrected {
-                Banner(kind: .warning, message: "这个条目在另一台设备上被删除，但这里有新的修改，已为你保留。保存即确认恢复这个条目。")
+                Banner(kind: .warning, message: tr("这个条目在另一台设备上被删除，但这里有新的修改，已为你保留。保存即确认恢复这个条目。"))
             }
             if detail.integrityIssues > 0 {
-                Banner(kind: .danger, message: "合并时发现 \(detail.integrityIssues) 处来源不一致的内容，可能来自损坏的数据或异常的设备。请在历史版本中核对；保存即表示你已知晓。")
+                Banner(kind: .danger, message: tr("合并时发现 {} 处来源不一致的内容，可能来自损坏的数据或异常的设备。请在历史版本中核对；保存即表示你已知晓。", "\(detail.integrityIssues)"))
             }
             ForEach(detail.conflicts, id: \.key) { conflict in
                 KVCard {
@@ -31,7 +31,7 @@ struct ConflictPanel: View {
                             .font(KV.Typography.bodyStrong)
                             .foregroundStyle(KV.Colors.fgPrimary)
                         Spacer()
-                        Text("\(conflict.others.count + 1) 个版本")
+                        Text(tr("{} 个版本", "\(conflict.others.count + 1)"))
                             .font(KV.Typography.caption)
                             .foregroundStyle(KV.Colors.fgSecondary)
                     }
@@ -53,13 +53,13 @@ struct ConflictPanel: View {
         let revealKey = conflict.key + "/" + version.revId
         let shown = revealed.contains(revealKey)
         return HStack(spacing: KV.Space.s2) {
-            Text(current ? "这台 Mac" : "另一版本")
+            Text(current ? tr("这台 Mac") : tr("另一版本"))
                 .font(KV.Typography.footnote)
                 .foregroundStyle(KV.Colors.fgSecondary)
                 .frame(width: 72, alignment: .leading)
             if version.concealed, let secret = version.value {
                 SecretText(secret: secret, revealed: shown)
-                Button(shown ? "隐藏" : "显示") {
+                Button(shown ? tr("隐藏") : tr("显示")) {
                     if shown { revealed.remove(revealKey) } else { revealed.insert(revealKey) }
                 }
                 .buttonStyle(.kvLink)
@@ -70,7 +70,7 @@ struct ConflictPanel: View {
                     .lineLimit(3)
             }
             Spacer(minLength: KV.Space.s2)
-            Button("保留这个") {
+            Button(tr("保留这个")) {
                 model.resolveConflict(itemId: detail.id, key: conflict.key, revId: version.revId)
                 resolved()
             }
@@ -92,8 +92,8 @@ struct ConflictSheet: View {
     var body: some View {
         let shown = current ?? detail
         SheetScaffold(
-            title: "处理冲突",
-            subtitle: "其他设备对这个条目做了不同的修改。为每一处选择要保留的版本；没有处理的冲突会一直保留，不会丢失。",
+            title: tr("处理冲突"),
+            subtitle: tr("其他设备对这个条目做了不同的修改。为每一处选择要保留的版本；没有处理的冲突会一直保留，不会丢失。"),
             systemImage: "arrow.triangle.branch",
             tint: KV.Colors.statusWarningFg,
             width: 580
@@ -104,13 +104,13 @@ struct ConflictSheet: View {
                 }
                 .frame(maxHeight: 360)
                 if shown.conflicts.isEmpty && (shown.resurrected || shown.integrityIssues > 0) {
-                    Text("剩下的提示会在下一次保存这个条目时确认。")
+                    Text(tr("剩下的提示会在下一次保存这个条目时确认。"))
                         .font(KV.Typography.footnote)
                         .foregroundStyle(KV.Colors.fgSecondary)
                 }
             }
         } footer: {
-            Button("完成") { dismiss() }
+            Button(tr("完成")) { dismiss() }
                 .buttonStyle(.kvPrimary)
                 .keyboardShortcut(.defaultAction)
         }

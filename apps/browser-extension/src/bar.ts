@@ -7,6 +7,7 @@
 // - 点击劫持防护与页内菜单相同（guard.ts）；
 // - 更新会覆盖已有数据，Keevo.app 还会再请用户确认一次。
 
+import { t } from "./i18n.js";
 import { createGuard } from "./guard.js";
 import type { BarInit, BarRequest, BarResponse } from "./types.js";
 
@@ -26,13 +27,13 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, cls?: 
 const guard = createGuard(document.body, () => void ask({ type: "bar_close" }));
 
 const ERRORS: Record<string, string> = {
-  not_authorized: "没有保存：在 Keevo 中被拒绝或超时，或者短时间内保存了太多条目。",
-  locked: "Keevo 已锁定，请解锁后再试。",
-  url_mismatch: "这个条目与当前网站不匹配，没有更新。",
-  not_found: "这个条目已不存在。",
-  expired: "这次提交已过期。",
-  unsupported: "这个版本的 Keevo 还不能从浏览器保存，请更新 Keevo。",
-  failed: "没有保存成功，请重试。",
+  not_authorized: t("没有保存：在 Keevo 中被拒绝或超时，或者短时间内保存了太多条目。"),
+  locked: t("Keevo 已锁定，请解锁后再试。"),
+  url_mismatch: t("这个条目与当前网站不匹配，没有更新。"),
+  not_found: t("这个条目已不存在。"),
+  expired: t("这次提交已过期。"),
+  unsupported: t("这个版本的 Keevo 还不能从浏览器保存，请更新 Keevo。"),
+  failed: t("没有保存成功，请重试。"),
 };
 
 let init: BarInit | null = null;
@@ -56,17 +57,17 @@ function render(note?: { kind: "info" | "danger" | "success"; text: string }): v
     return;
   }
   const text = el("div", undefined, "text");
-  const what = init.kind === "update" ? `更新 Keevo 中「${init.title}」的密码？` : "保存这个登录到 Keevo？";
+  const what = init.kind === "update" ? t("更新 Keevo 中「{}」的密码？", String(init.title)) : t("保存这个登录到 Keevo？");
   const detail = [init.host, init.username].filter(Boolean).join(" · ");
   text.append(el("div", what, "title"), el("div", note?.text ?? detail, note ? `subtitle ${note.kind}` : "subtitle"));
   const buttons = el("div", undefined, "buttons");
   if (note?.kind !== "success") {
     buttons.append(
-      action(init.kind === "update" ? "更新" : "保存", "primary", () => void save()),
-      action(init.kind === "update" ? "不更新" : "不保存", "secondary", () => void ask({ type: "bar_dismiss" })),
+      action(init.kind === "update" ? t("更新") : t("保存"), "primary", () => void save()),
+      action(init.kind === "update" ? t("不更新") : t("不保存"), "secondary", () => void ask({ type: "bar_dismiss" })),
     );
     if (init.kind === "save") {
-      buttons.append(action("此网站不再提示", "link", () => void ask({ type: "bar_never" })));
+      buttons.append(action(t("此网站不再提示"), "link", () => void ask({ type: "bar_never" })));
     }
   }
   root.append(text, buttons);
@@ -78,12 +79,12 @@ async function save(): Promise<void> {
   busy = true;
   render({
     kind: "info",
-    text: init.kind === "update" ? "请在 Keevo 中确认更新…" : "正在保存…",
+    text: init.kind === "update" ? t("请在 Keevo 中确认更新…") : t("正在保存…"),
   });
   const r = await ask({ type: "bar_save" });
   busy = false;
   if (r.ok) {
-    render({ kind: "success", text: init.kind === "update" ? "密码已更新。" : "已保存到 Keevo。" });
+    render({ kind: "success", text: init.kind === "update" ? t("密码已更新。") : t("已保存到 Keevo。") });
     setTimeout(() => void ask({ type: "bar_close" }), 2000);
   } else {
     render({ kind: "danger", text: ERRORS[r.error ?? "failed"] ?? ERRORS.failed ?? "" });

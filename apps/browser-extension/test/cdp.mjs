@@ -7,7 +7,9 @@
 import { spawn } from "node:child_process";
 
 export async function launchChrome(chrome, args, env) {
-  const proc = spawn(chrome, [...args, "--remote-debugging-pipe", "--enable-unsafe-extension-debugging"], {
+  // 界面语言固定为中文：测试按中文文字断言（扩展按浏览器的界面语言选择中文或英文）
+  const lang = ["--lang=zh-CN"];
+  const proc = spawn(chrome, [...args, ...lang, "--remote-debugging-pipe", "--enable-unsafe-extension-debugging"], {
     env,
     stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
   });

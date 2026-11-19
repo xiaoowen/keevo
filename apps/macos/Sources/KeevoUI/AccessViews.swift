@@ -22,7 +22,7 @@ struct LockView: View {
         @Bindable var model = model
         VStack(spacing: KV.Space.s4) {
             HeroIcon(systemImage: "lock")
-            Text("Keevo 已锁定")
+            Text(tr("Keevo 已锁定"))
                 .font(KV.Typography.largeTitle)
                 .foregroundStyle(KV.Colors.fgPrimary)
             if let notice = model.lockNotice {
@@ -37,14 +37,14 @@ struct LockView: View {
                 Banner(kind: .info, message: reason)
             }
             VStack(spacing: KV.Space.s3) {
-                LabeledInput(label: "主密码", focused: focus == .password) {
+                LabeledInput(label: tr("主密码"), focused: focus == .password) {
                     SecureField("", text: $password)
                         .focused($focus, equals: .password)
                         .onSubmit { unlock() }
                 }
                 // 账户密钥平时取自本机的 Secure Enclave 包裹；只有本机没有可用的包裹时才询问
                 if model.needsSecretKey {
-                    LabeledInput(label: "账户密钥", hint: "见应急包，以 K1- 开头", focused: focus == .secretKey) {
+                    LabeledInput(label: tr("账户密钥"), hint: tr("见应急包，以 K1- 开头"), focused: focus == .secretKey) {
                         TextField("K1-", text: $secretKey)
                             .font(KV.Typography.mono)
                             .focused($focus, equals: .secretKey)
@@ -54,19 +54,19 @@ struct LockView: View {
                 Button { unlock() } label: {
                     HStack(spacing: KV.Space.s2) {
                         if model.busy { ProgressView().controlSize(.small).tint(.white) }
-                        Text("解锁")
+                        Text(tr("解锁"))
                     }
                 }
                 .buttonStyle(KVButtonStyle(kind: .primary, fullWidth: true))
                 .keyboardShortcut(.defaultAction)
                 .disabled(!canUnlock)
                 if model.touchIDEnabled {
-                    TextDivider(text: "或").padding(.vertical, KV.Space.s1)
+                    TextDivider(text: tr("或")).padding(.vertical, KV.Space.s1)
                     Button {
                         Task { await model.unlockWithTouchID() }
                     } label: {
                         Label(
-                            model.touchIDUsable ? "使用 Touch ID" : "使用 Touch ID（输入一次主密码后可用）",
+                            model.touchIDUsable ? tr("使用 Touch ID") : tr("使用 Touch ID（输入一次主密码后可用）"),
                             systemImage: "touchid"
                         )
                     }
@@ -96,8 +96,8 @@ struct LockView: View {
 
     private var autoLockText: String {
         let minutes = model.autoLockMinutes
-        let idle = minutes < 60 ? "闲置 \(minutes) 分钟" : "闲置 1 小时"
-        return "自动锁定：\(idle)、睡眠或锁屏时"
+        let idle = minutes < 60 ? tr("闲置 {} 分钟", "\(minutes)") : tr("闲置 1 小时")
+        return tr("自动锁定：{}、睡眠或锁屏时", "\(idle)")
     }
 
     private func unlock() {
@@ -118,32 +118,32 @@ struct KdfConfirmSheet: View {
 
     var body: some View {
         SheetScaffold(
-            title: "解锁参数异常",
-            subtitle: "这个保险库要求的密钥派生强度远高于 Keevo 的默认值。",
+            title: tr("解锁参数异常"),
+            subtitle: tr("这个保险库要求的密钥派生强度远高于 Keevo 的默认值。"),
             systemImage: "exclamationmark.triangle.fill",
             tint: KV.Colors.statusWarningFg,
             width: 460
         ) {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
-                Text("这可能是你在别的设备上特意调高的，也可能是数据被人改过，目的是让解锁耗尽这台 Mac 的内存或时间。")
+                Text(tr("这可能是你在别的设备上特意调高的，也可能是数据被人改过，目的是让解锁耗尽这台 Mac 的内存或时间。"))
                     .font(KV.Typography.body)
                     .fixedSize(horizontal: false, vertical: true)
                 KVCard {
-                    CardRow(label: "内存") { Text("\(info.memoryKib / 1024) MiB").font(KV.Typography.mono) } actions: {}
+                    CardRow(label: tr("内存")) { Text("\(info.memoryKib / 1024) MiB").font(KV.Typography.mono) } actions: {}
                     CardRowDivider()
-                    CardRow(label: "迭代次数") { Text("\(info.iterations)").font(KV.Typography.mono) } actions: {}
+                    CardRow(label: tr("迭代次数")) { Text("\(info.iterations)").font(KV.Typography.mono) } actions: {}
                     CardRowDivider()
-                    CardRow(label: "并行度") { Text("\(info.parallelism)").font(KV.Typography.mono) } actions: {}
+                    CardRow(label: tr("并行度")) { Text("\(info.parallelism)").font(KV.Typography.mono) } actions: {}
                 }
-                Text("如果你不确定，请选择取消。继续解锁可能需要较长时间。")
+                Text(tr("如果你不确定，请选择取消。继续解锁可能需要较长时间。"))
                     .font(KV.Typography.footnote)
                     .foregroundStyle(KV.Colors.fgSecondary)
             }
         } footer: {
             // 安全的选择（取消）是默认按钮；有风险的选择不加强调
-            Button("仍然解锁") { dismiss(); confirm() }
+            Button(tr("仍然解锁")) { dismiss(); confirm() }
                 .buttonStyle(.kvSecondary)
-            Button("取消") { dismiss() }
+            Button(tr("取消")) { dismiss() }
                 .buttonStyle(.kvPrimary)
                 .keyboardShortcut(.defaultAction)
         }
@@ -158,19 +158,19 @@ struct EnclaveUnavailableView: View {
     var body: some View {
         VStack(spacing: KV.Space.s4) {
             HeroIcon(systemImage: "exclamationmark.lock", tint: KV.Colors.statusWarningFg, background: KV.Colors.statusWarningBg)
-            Text("暂时无法打开 Keevo")
+            Text(tr("暂时无法打开 Keevo"))
                 .font(KV.Typography.largeTitle)
                 .foregroundStyle(KV.Colors.fgPrimary)
-            Text("这台 Mac 的 Secure Enclave 暂时不可用，Keevo 没有做任何改动。请确认屏幕已解锁，然后重试。")
+            Text(tr("这台 Mac 的 Secure Enclave 暂时不可用，Keevo 没有做任何改动。请确认屏幕已解锁，然后重试。"))
                 .font(KV.Typography.body)
                 .foregroundStyle(KV.Colors.fgSecondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 400)
             VStack(spacing: KV.Space.s2) {
-                Button("重试") { model.open(reenrolling: false) }
+                Button(tr("重试")) { model.open(reenrolling: false) }
                     .buttonStyle(KVButtonStyle(kind: .primary, fullWidth: true))
                     .keyboardShortcut(.defaultAction)
-                Button("重新登记这台 Mac…") { confirmReenroll = true }
+                Button(tr("重新登记这台 Mac…")) { confirmReenroll = true }
                     .buttonStyle(KVButtonStyle(kind: .secondary, fullWidth: true))
             }
             .frame(width: 360)
@@ -179,11 +179,11 @@ struct EnclaveUnavailableView: View {
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(KV.Colors.bgCanvas)
-        .confirmationDialog("重新登记这台 Mac？", isPresented: $confirmReenroll) {
-            Button("重新登记") { model.open(reenrolling: true) }
-            Button("取消", role: .cancel) {}
+        .confirmationDialog(tr("重新登记这台 Mac？"), isPresented: $confirmReenroll) {
+            Button(tr("重新登记")) { model.open(reenrolling: true) }
+            Button(tr("取消"), role: .cancel) {}
         } message: {
-            Text("Keevo 会丢弃这台 Mac 上保存的账户密钥与 Touch ID 设置。保险库中的数据不受影响，但下次解锁需要从应急包输入账户密钥。")
+            Text(tr("Keevo 会丢弃这台 Mac 上保存的账户密钥与 Touch ID 设置。保险库中的数据不受影响，但下次解锁需要从应急包输入账户密钥。"))
         }
     }
 }

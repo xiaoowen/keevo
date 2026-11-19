@@ -115,7 +115,7 @@ struct StepDots: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("第 \(active + 1) 步，共 \(total) 步")
+        .accessibilityLabel(tr("第 {} 步，共 {} 步", "\(active + 1)", "\(total)"))
     }
 }
 
@@ -145,30 +145,30 @@ private struct WelcomeStep: View {
 
     var body: some View {
         HeroIcon(systemImage: "key.horizontal.fill", tint: KV.Colors.fgOnAccent, background: KV.Colors.accentFill)
-        Headline(title: "欢迎使用 Keevo", subtitle: "开源、只在你的设备上的密码管理器。")
+        Headline(title: tr("欢迎使用 Keevo"), subtitle: tr("开源、只在你的设备上的密码管理器。"))
         VStack(alignment: .leading, spacing: 12) {
-            promise("internaldrive", "数据只保存在这台 Mac 上", "加密后存放在本机，Keevo 没有服务器。")
-            promise("eye.slash", "没有人能读取，包括我们", "只有你的主密码与这台 Mac 上的账户密钥能解开它。")
-            promise("chevron.left.forwardslash.chevron.right", "代码完全开源", "任何人都可以检查 Keevo 是否如实做到这些。")
+            promise("internaldrive", tr("数据只保存在这台 Mac 上"), tr("加密后存放在本机，Keevo 没有服务器。"))
+            promise("eye.slash", tr("没有人能读取，包括我们"), tr("只有你的主密码与这台 Mac 上的账户密钥能解开它。"))
+            promise("chevron.left.forwardslash.chevron.right", tr("代码完全开源"), tr("任何人都可以检查 Keevo 是否如实做到这些。"))
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(KV.Colors.bgSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         VStack(spacing: 8) {
-            Button("创建新的保险库") {
+            Button(tr("创建新的保险库")) {
                 model.importAfterOnboarding = false
                 model.goToOnboarding(.password)
             }
             .buttonStyle(KVButtonStyle(kind: .primary, fullWidth: true))
             .keyboardShortcut(.defaultAction)
-            Button("从其他密码管理器导入") {
+            Button(tr("从其他密码管理器导入")) {
                 // 导入需要先有保险库：设置主密码后，完成页直接打开导入
                 model.importAfterOnboarding = true
                 model.goToOnboarding(.password)
             }
             .buttonStyle(KVButtonStyle(kind: .secondary, fullWidth: true))
         }
-        Text("加入已有账户（在多台设备间同步）将在后续版本提供。")
+        Text(tr("加入已有账户（在多台设备间同步）将在后续版本提供。"))
             .font(KV.Typography.footnote)
             .foregroundStyle(KV.Colors.fgTertiary)
     }
@@ -195,9 +195,9 @@ enum MasterPasswordRule {
     static let minLength = 10
 
     static func problem(_ password: String, strength: PasswordStrengthInfo?) -> String? {
-        if password.count < minLength { return "至少 \(minLength) 个字符" }
+        if password.count < minLength { return tr("至少 {} 个字符", "\(minLength)") }
         if let s = strength, s.score < 2 {
-            return SecurityText.warning(s.warning, s.warningDetail).map { "太容易猜到：\($0)" } ?? "太容易猜到，换一个更长、更随机的"
+            return SecurityText.warning(s.warning, s.warningDetail).map { tr("太容易猜到：{}", "\($0)") } ?? tr("太容易猜到，换一个更长、更随机的")
         }
         return nil
     }
@@ -219,7 +219,7 @@ struct MasterStrengthMeter: View {
                 .frame(minWidth: 28, alignment: .trailing)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(label.isEmpty ? "强度：未输入" : "强度：\(label)")
+        .accessibilityLabel(label.isEmpty ? tr("强度：未输入") : tr("强度：{}", "\(label)"))
     }
 }
 
@@ -240,9 +240,9 @@ private struct PasswordStep: View {
     private var canContinue: Bool { problem == nil && confirm == password && !model.busy }
 
     var body: some View {
-        Headline(title: "设置主密码", subtitle: "它是打开保险库的唯一钥匙。建议用几个随机的词组成一句话。")
+        Headline(title: tr("设置主密码"), subtitle: tr("它是打开保险库的唯一钥匙。建议用几个随机的词组成一句话。"))
         VStack(alignment: .leading, spacing: 10) {
-            LabeledInput(label: "主密码", focused: focus == .password) {
+            LabeledInput(label: tr("主密码"), focused: focus == .password) {
                 HStack {
                     Group {
                         if reveal {
@@ -257,33 +257,33 @@ private struct PasswordStep: View {
                         Image(systemName: reveal ? "eye.slash" : "eye").foregroundStyle(KV.Colors.fgSecondary)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(reveal ? "隐藏主密码" : "显示主密码")
+                    .accessibilityLabel(reveal ? tr("隐藏主密码") : tr("显示主密码"))
                 }
             }
             MasterStrengthMeter(strength: strength)
             Text(detail)
                 .font(KV.Typography.caption)
                 .foregroundStyle(problem != nil && !password.isEmpty ? KV.Colors.statusWarningFg : KV.Colors.fgSecondary)
-            Button { generate() } label: { Label("换一个生成的口令短语", systemImage: "wand.and.stars") }
+            Button { generate() } label: { Label(tr("换一个生成的口令短语"), systemImage: "wand.and.stars") }
                 .buttonStyle(.kvLink)
-            LabeledInput(label: "再输入一次", hint: confirm.isEmpty || confirm == password ? nil : "两次输入不一致", focused: focus == .confirm) {
+            LabeledInput(label: tr("再输入一次"), hint: confirm.isEmpty || confirm == password ? nil : tr("两次输入不一致"), focused: focus == .confirm) {
                 SecureField("", text: $confirm)
                     .focused($focus, equals: .confirm)
                     .onSubmit(create)
             }
         }
-        Banner(kind: .warning, message: "忘记主密码、同时丢失应急包时，数据将无法恢复。没有人能帮你重置，包括 Keevo。")
+        Banner(kind: .warning, message: tr("忘记主密码、同时丢失应急包时，数据将无法恢复。没有人能帮你重置，包括 Keevo。"))
         Button(action: create) {
             HStack(spacing: KV.Space.s2) {
                 if model.busy { ProgressView().controlSize(.small).tint(.white) }
-                Text(model.busy ? "正在创建保险库…" : "继续")
+                Text(model.busy ? tr("正在创建保险库…") : tr("继续"))
             }
         }
         .buttonStyle(KVButtonStyle(kind: .primary, fullWidth: true))
         .keyboardShortcut(.defaultAction)
         .disabled(!canContinue)
         HStack {
-            Button("返回") { model.goToOnboarding(.welcome) }.buttonStyle(.kvLink)
+            Button(tr("返回")) { model.goToOnboarding(.welcome) }.buttonStyle(.kvLink)
         }
         ErrorText()
             .onAppear { focus = .password }
@@ -291,10 +291,10 @@ private struct PasswordStep: View {
     }
 
     private var detail: String {
-        if password.isEmpty { return "至少 \(MasterPasswordRule.minLength) 个字符；推荐使用生成的口令短语。" }
-        if let bits = generatedBits { return "约 \(Int(bits.rounded())) 比特熵 · 4 个随机单词" }
+        if password.isEmpty { return tr("至少 {} 个字符；推荐使用生成的口令短语。", "\(MasterPasswordRule.minLength)") }
+        if let bits = generatedBits { return tr("约 {} 比特熵 · 4 个随机单词", "\(Int(bits.rounded()))") }
         if let problem { return problem }
-        return "约 \(Int((strength?.bits ?? 0).rounded())) 比特熵"
+        return tr("约 {} 比特熵", "\(Int((strength?.bits ?? 0).rounded()))")
     }
 
     private func generate() {
@@ -324,32 +324,32 @@ private struct KitStep: View {
     @ViewState private var asking = false
 
     var body: some View {
-        Headline(title: "保存你的应急包", subtitle: "在新设备上登录、或从备份恢复时，需要主密码和账户密钥。")
+        Headline(title: tr("保存你的应急包"), subtitle: tr("在新设备上登录、或从备份恢复时，需要主密码和账户密钥。"))
         if let key = model.pendingSecretKey {
             KitPreview(secretKey: key.expose())
             KitActions(secretKey: key, accountId: model.accountId)
         } else {
             // 中途锁定或退出过：内存中的账户密钥已清除，验证后重新取出
-            Banner(kind: .info, message: "为了安全，Keevo 锁定时清除了内存中的账户密钥。验证身份后重新显示。")
-            Button("显示应急包…") { asking = true }
+            Banner(kind: .info, message: tr("为了安全，Keevo 锁定时清除了内存中的账户密钥。验证身份后重新显示。"))
+            Button(tr("显示应急包…")) { asking = true }
                 .buttonStyle(KVButtonStyle(kind: .secondary, fullWidth: true))
         }
         VStack(alignment: .leading, spacing: 8) {
-            NumberedStep(n: 1, text: "打印出来，或抄写账户密钥。")
-            NumberedStep(n: 2, text: "和主密码分开存放在安全的地方。")
-            NumberedStep(n: 3, text: "不要存进其他云端笔记或截图。保存的 PDF 打印后请删除。")
+            NumberedStep(n: 1, text: tr("打印出来，或抄写账户密钥。"))
+            NumberedStep(n: 2, text: tr("和主密码分开存放在安全的地方。"))
+            NumberedStep(n: 3, text: tr("不要存进其他云端笔记或截图。保存的 PDF 打印后请删除。"))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        Toggle("我已妥善保存应急包", isOn: $saved)
+        Toggle(tr("我已妥善保存应急包"), isOn: $saved)
             .toggleStyle(.checkbox)
             .font(KV.Typography.body)
             .frame(maxWidth: .infinity, alignment: .leading)
-        Button("继续") { model.goToOnboarding(model.touchIDAvailable ? .touchID : .browser) }
+        Button(tr("继续")) { model.goToOnboarding(model.touchIDAvailable ? .touchID : .browser) }
             .buttonStyle(KVButtonStyle(kind: .primary, fullWidth: true))
             .keyboardShortcut(.defaultAction)
             .disabled(!saved || model.pendingSecretKey == nil)
             .sheet(isPresented: $asking) {
-                ReverifySheet(title: "显示应急包", message: "请先确认是你本人。", confirmTitle: "显示") { password in
+                ReverifySheet(title: tr("显示应急包"), message: tr("请先确认是你本人。"), confirmTitle: tr("显示")) { password in
                     await model.revealEmergencyKit(password: password)
                 }
             }
@@ -386,8 +386,8 @@ struct KitPreview: View {
                     .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text("Keevo 应急包 · PDF").font(KV.Typography.bodyStrong)
-                Text("账户密钥、二维码、账户 ID 与主密码书写处")
+                Text(tr("Keevo 应急包 · PDF")).font(KV.Typography.bodyStrong)
+                Text(tr("账户密钥、二维码、账户 ID 与主密码书写处"))
                     .font(KV.Typography.footnote)
                     .foregroundStyle(KV.Colors.fgSecondary)
                 // 数字与字母分色，便于抄写（docs/ux.md §5）
@@ -413,9 +413,9 @@ struct KitActions: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Button { save() } label: { Label("保存 PDF…", systemImage: "arrow.down.doc") }
+            Button { save() } label: { Label(tr("保存 PDF…"), systemImage: "arrow.down.doc") }
                 .buttonStyle(KVButtonStyle(kind: .secondary, fullWidth: true))
-            Button { print() } label: { Label("打印…", systemImage: "printer") }
+            Button { print() } label: { Label(tr("打印…"), systemImage: "printer") }
                 .buttonStyle(KVButtonStyle(kind: .secondary, fullWidth: true))
         }
     }
@@ -426,16 +426,16 @@ struct KitActions: View {
 
     private func save() {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "Keevo 应急包.pdf"
+        panel.nameFieldStringValue = tr("Keevo 应急包.pdf")
         panel.allowedContentTypes = [.pdf]
-        panel.message = "PDF 中有账户密钥。打印或存到 U 盘后，请删除电脑上的这份。"
+        panel.message = tr("PDF 中有账户密钥。打印或存到 U 盘后，请删除电脑上的这份。")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try pdf.write(to: url, options: [.atomic, .completeFileProtection])
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-            model.showToast("已保存应急包")
+            model.showToast(tr("已保存应急包"))
         } catch {
-            model.errorMessage = "无法保存：\(error.localizedDescription)"
+            model.errorMessage = tr("无法保存：{}", "\(error.localizedDescription)")
         }
     }
 
@@ -444,7 +444,7 @@ struct KitActions: View {
         let info = NSPrintInfo.shared.copy() as? NSPrintInfo ?? NSPrintInfo.shared
         info.jobDisposition = .spool
         guard let op = doc.printOperation(for: info, scalingMode: .pageScaleToFit, autoRotate: true) else { return }
-        op.jobTitle = "Keevo 应急包"
+        op.jobTitle = tr("Keevo 应急包")
         op.run()
     }
 }
@@ -457,13 +457,13 @@ private struct TouchIDStep: View {
 
     var body: some View {
         HeroIcon(systemImage: "touchid")
-        Headline(title: "用 Touch ID 解锁", subtitle: "平时用指纹解锁，不必每次输入主密码。")
+        Headline(title: tr("用 Touch ID 解锁"), subtitle: tr("平时用指纹解锁，不必每次输入主密码。"))
         VStack(alignment: .leading, spacing: 8) {
-            Text("以下情况仍需输入主密码：").font(KV.Typography.footnote.weight(.semibold))
+            Text(tr("以下情况仍需输入主密码：")).font(KV.Typography.footnote.weight(.semibold))
             Group {
-                Text("· Mac 重启后的第一次解锁")
-                Text("· 超过 \(model.passwordIntervalDays) 天没有输入过主密码")
-                Text("· 指纹有变化，或连续 3 次未能识别")
+                Text(tr("· Mac 重启后的第一次解锁"))
+                Text(tr("· 超过 {} 天没有输入过主密码", "\(model.passwordIntervalDays)"))
+                Text(tr("· 指纹有变化，或连续 3 次未能识别"))
             }
             .font(KV.Typography.footnote)
             .foregroundStyle(KV.Colors.fgSecondary)
@@ -473,15 +473,15 @@ private struct TouchIDStep: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(KV.Colors.bgSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         VStack(spacing: 8) {
-            Button { enable() } label: { Label("开启 Touch ID", systemImage: "touchid") }
+            Button { enable() } label: { Label(tr("开启 Touch ID"), systemImage: "touchid") }
                 .buttonStyle(KVButtonStyle(kind: .primary, fullWidth: true))
                 .keyboardShortcut(.defaultAction)
                 .disabled(model.busy || password.isEmpty)
-            Button("以后再说") { model.goToOnboarding(.browser) }
+            Button(tr("以后再说")) { model.goToOnboarding(.browser) }
                 .buttonStyle(KVButtonStyle(kind: .secondary, fullWidth: true))
         }
         if password.isEmpty {
-            Text("可以在「设置 → 安全」中开启。").font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
+            Text(tr("可以在「设置 → 安全」中开启。")).font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
         }
         ErrorText()
     }
@@ -521,9 +521,9 @@ private struct BrowserStep: View {
 
     var body: some View {
         HeroIcon(systemImage: "puzzlepiece.extension")
-        Headline(title: "连接浏览器", subtitle: "安装 Keevo 扩展后，在网页上一键填充、保存新的登录。")
+        Headline(title: tr("连接浏览器"), subtitle: tr("安装 Keevo 扩展后，在网页上一键填充、保存新的登录。"))
         if installed.isEmpty {
-            Banner(kind: .info, message: "这台 Mac 上没有找到 Chrome。安装 Chrome 后，可以在「设置 → 浏览器」中连接。")
+            Banner(kind: .info, message: tr("这台 Mac 上没有找到 Chrome。安装 Chrome 后，可以在「设置 → 浏览器」中连接。"))
         } else {
             KVCard {
                 ForEach(Array(installed.enumerated()), id: \.element.id) { index, b in
@@ -533,14 +533,14 @@ private struct BrowserStep: View {
             }
         }
         if let message { Banner(kind: .warning, message: message) }
-        Text("扩展装好后会请求与 Keevo 配对：核对 6 个词即可。")
+        Text(tr("扩展装好后会请求与 Keevo 配对：核对 6 个词即可。"))
             .font(KV.Typography.footnote)
             .foregroundStyle(KV.Colors.fgSecondary)
         VStack(spacing: 8) {
-            Button("继续") { model.goToOnboarding(.done) }
+            Button(tr("继续")) { model.goToOnboarding(.done) }
                 .buttonStyle(KVButtonStyle(kind: .primary, fullWidth: true))
                 .keyboardShortcut(.defaultAction)
-            Button("跳过") { model.goToOnboarding(.done) }.buttonStyle(.kvLink)
+            Button(tr("跳过")) { model.goToOnboarding(.done) }.buttonStyle(.kvLink)
         }
         // 扩展装好后会自动发起配对：每两秒刷新一次连接状态
         .task {
@@ -553,7 +553,7 @@ private struct BrowserStep: View {
 
     private func row(_ b: Browser) -> some View {
         let connected = model.browserPairings.contains { $0.browser == b.id }
-        let state = !b.supported ? "已安装 · 稍后支持" : (connected ? "已安装 · 扩展已连接" : "已安装 · 扩展未连接")
+        let state = !b.supported ? tr("已安装 · 稍后支持") : (connected ? tr("已安装 · 扩展已连接") : tr("已安装 · 扩展未连接"))
         return HStack(spacing: 10) {
             Image(systemName: "globe").font(.system(size: 16)).foregroundStyle(KV.Colors.fgSecondary)
             VStack(alignment: .leading, spacing: 1) {
@@ -562,7 +562,7 @@ private struct BrowserStep: View {
             }
             Spacer()
             if b.supported, !connected {
-                Button("安装扩展") { install() }.buttonStyle(.kvBordered)
+                Button(tr("安装扩展")) { install() }.buttonStyle(.kvBordered)
             }
         }
         .padding(.horizontal, 14)
@@ -573,7 +573,7 @@ private struct BrowserStep: View {
         do {
             try NativeHostManifest.install()
         } catch {
-            message = "这个构建无法连接浏览器（需要打包后的 Keevo.app）。可以稍后在「设置 → 浏览器」中连接。"
+            message = tr("这个构建无法连接浏览器（需要打包后的 Keevo.app）。可以稍后在「设置 → 浏览器」中连接。")
             return
         }
         if let id = browserExtensionId(), let url = URL(string: "https://chromewebstore.google.com/detail/\(id)") {
@@ -589,15 +589,15 @@ private struct DoneStep: View {
 
     var body: some View {
         HeroIcon(systemImage: "checkmark", tint: KV.Colors.fgOnAccent, background: KV.Colors.statusSuccessFg)
-        Headline(title: "一切就绪", subtitle: "保险库已经准备好。接下来可以：")
+        Headline(title: tr("一切就绪"), subtitle: tr("保险库已经准备好。接下来可以："))
         KVCard {
-            next("square.and.arrow.down", "导入其他密码管理器的数据", "1Password、Bitwarden、浏览器导出的文件", .importData)
+            next("square.and.arrow.down", tr("导入其他密码管理器的数据"), tr("1Password、Bitwarden、浏览器导出的文件"), .importData)
             CardRowDivider()
-            next("puzzlepiece.extension", "在浏览器中使用", "填充、保存与生成密码", .browser)
+            next("puzzlepiece.extension", tr("在浏览器中使用"), tr("填充、保存与生成密码"), .browser)
             CardRowDivider()
-            next("terminal", "设置 SSH Agent", "让 ssh 与 git 使用保险库中的密钥", .sshAgent)
+            next("terminal", tr("设置 SSH Agent"), tr("让 ssh 与 git 使用保险库中的密钥"), .sshAgent)
         }
-        Button("开始使用") { model.finishOnboarding(then: model.importAfterOnboarding ? .importData : nil) }
+        Button(tr("开始使用")) { model.finishOnboarding(then: model.importAfterOnboarding ? .importData : nil) }
             .buttonStyle(KVButtonStyle(kind: .primary, fullWidth: true))
             .keyboardShortcut(.defaultAction)
     }
@@ -653,7 +653,7 @@ enum EmergencyKit {
             var box = CGRect(origin: .zero, size: size)
             guard let consumer = CGDataConsumer(data: data as CFMutableData),
                   let ctx = CGContext(consumer: consumer, mediaBox: &box, [
-                      kCGPDFContextTitle as String: "Keevo 应急包",
+                      kCGPDFContextTitle as String: tr("Keevo 应急包"),
                       kCGPDFContextCreator as String: "Keevo",
                   ] as CFDictionary)
             else { return }
@@ -679,17 +679,19 @@ private struct KitPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Keevo 应急包").font(.system(size: 26, weight: .bold))
-                Text("Emergency Kit").font(.system(size: 14)).foregroundStyle(gray)
+                Text(tr("Keevo 应急包")).font(.system(size: 26, weight: .bold))
+                if UILanguage.current == .zh {
+                    Text("Emergency Kit").font(.system(size: 14)).foregroundStyle(gray)
+                }
                 Spacer()
-                Text("创建于 \(created.formatted(.dateTime.year().month().day()))").font(.system(size: 11)).foregroundStyle(gray)
+                Text(tr("创建于 {}", "\(created.formatted(.dateTime.year().month().day()))")).font(.system(size: 11)).foregroundStyle(gray)
             }
-            Text("在新设备上登录、或从备份恢复时，需要下面的账户密钥和你的主密码。打印出来，和主密码分开存放在安全的地方。Keevo 不保存它们，丢失后没有人能帮你恢复数据。")
+            Text(tr("在新设备上登录、或从备份恢复时，需要下面的账户密钥和你的主密码。打印出来，和主密码分开存放在安全的地方。Keevo 不保存它们，丢失后没有人能帮你恢复数据。"))
                 .font(.system(size: 12))
                 .fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: 16) {
                 // 账户密钥独占一行，绝不截断
-                field("账户密钥（Secret Key）") {
+                field(tr("账户密钥（Secret Key）")) {
                     Text(secretKey)
                         .font(.system(size: 18, weight: .semibold, design: .monospaced))
                         .lineLimit(1)
@@ -697,10 +699,10 @@ private struct KitPage: View {
                 }
                 HStack(alignment: .bottom, spacing: 20) {
                     VStack(alignment: .leading, spacing: 14) {
-                        field("账户 ID") {
+                        field(tr("账户 ID")) {
                             Text(accountId).font(.system(size: 10, design: .monospaced)).foregroundStyle(gray).fixedSize()
                         }
-                        Text("账户密钥中没有字母 I、L、O、U：看起来像 0 或 1 的字符都是数字。")
+                        Text(tr("账户密钥中没有字母 I、L、O、U：看起来像 0 或 1 的字符都是数字。"))
                             .font(.system(size: 10))
                             .foregroundStyle(gray)
                             .fixedSize(horizontal: false, vertical: true)
@@ -709,31 +711,31 @@ private struct KitPage: View {
                     if let qr = EmergencyKit.qrImage(secretKey, scale: 10) {
                         VStack(spacing: 4) {
                             Image(nsImage: qr).interpolation(.none).resizable().frame(width: 110, height: 110)
-                            Text("扫描以输入账户密钥").font(.system(size: 9)).foregroundStyle(gray)
+                            Text(tr("扫描以输入账户密钥")).font(.system(size: 9)).foregroundStyle(gray)
                         }
                     }
                 }
             }
             .padding(18)
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(ink, lineWidth: 1.5))
-            field("主密码（可选，自己决定是否写在这里）") {
+            field(tr("主密码（可选，自己决定是否写在这里）")) {
                 VStack(spacing: 26) {
                     Rectangle().fill(line).frame(height: 1)
                     Rectangle().fill(line).frame(height: 1)
                 }
                 .padding(.top, 22)
             }
-            Text("如果把主密码写在这页纸上，请把它当作保险库本身来保管。")
+            Text(tr("如果把主密码写在这页纸上，请把它当作保险库本身来保管。"))
                 .font(.system(size: 10))
                 .foregroundStyle(gray)
             VStack(alignment: .leading, spacing: 8) {
-                Text("怎样保管").font(.system(size: 13, weight: .semibold))
-                ForEach(Array(["打印出来，或抄写账户密钥。", "和主密码分开存放在安全的地方，例如家里的抽屉。", "不要存进其他云端笔记或截图；保存的 PDF 打印后请删除。"].enumerated()), id: \.offset) { i, s in
+                Text(tr("怎样保管")).font(.system(size: 13, weight: .semibold))
+                ForEach(Array([tr("打印出来，或抄写账户密钥。"), tr("和主密码分开存放在安全的地方，例如家里的抽屉。"), tr("不要存进其他云端笔记或截图；保存的 PDF 打印后请删除。")].enumerated()), id: \.offset) { i, s in
                     Text("\(i + 1). \(s)").font(.system(size: 11))
                 }
             }
             Spacer()
-            Text("Keevo · 开源、只在你的设备上的密码管理器").font(.system(size: 9)).foregroundStyle(gray)
+            Text(tr("Keevo · 开源、只在你的设备上的密码管理器")).font(.system(size: 9)).foregroundStyle(gray)
         }
         .foregroundStyle(ink)
         .padding(48)
@@ -776,8 +778,8 @@ struct EmergencyKitSheet: View {
 
     var body: some View {
         SheetScaffold(
-            title: "应急包",
-            subtitle: "在新设备上登录、或从备份恢复时，需要主密码和账户密钥。",
+            title: tr("应急包"),
+            subtitle: tr("在新设备上登录、或从备份恢复时，需要主密码和账户密钥。"),
             systemImage: "lifepreserver",
             width: 500
         ) {
@@ -786,13 +788,13 @@ struct EmergencyKitSheet: View {
                     KitPreview(secretKey: key.expose())
                     KitActions(secretKey: key, accountId: model.accountId)
                 }
-                Text("保存的 PDF 中有账户密钥：打印或存到 U 盘后，请删除电脑上的这份。")
+                Text(tr("保存的 PDF 中有账户密钥：打印或存到 U 盘后，请删除电脑上的这份。"))
                     .font(KV.Typography.footnote)
                     .foregroundStyle(KV.Colors.fgSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         } footer: {
-            Button("完成") { dismiss() }
+            Button(tr("完成")) { dismiss() }
                 .buttonStyle(.kvPrimary)
                 .keyboardShortcut(.defaultAction)
         }
@@ -862,10 +864,10 @@ extension AppModel {
             try await Task.detached { try vault.reverify(password: password) }.value
             errorMessage = nil
             PracticeSchedule.record()
-            showToast("主密码正确")
+            showToast(tr("主密码正确"))
             return true
         } catch KeevoError.WrongCredentials {
-            errorMessage = "主密码不正确，再试一次。如果想不起来，请用应急包中的信息，并尽快在「设置 → 安全」中修改主密码。"
+            errorMessage = tr("主密码不正确，再试一次。如果想不起来，请用应急包中的信息，并尽快在「设置 → 安全」中修改主密码。")
             return false
         } catch {
             errorMessage = Self.describe(error)
@@ -882,34 +884,34 @@ struct PracticeSheet: View {
 
     var body: some View {
         SheetScaffold(
-            title: "练习一次主密码",
-            subtitle: "你最近一直用 Touch ID 解锁。输入一次主密码，确认自己还记得它。",
+            title: tr("练习一次主密码"),
+            subtitle: tr("你最近一直用 Touch ID 解锁。输入一次主密码，确认自己还记得它。"),
             systemImage: "key",
             width: 460
         ) {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
-                LabeledInput(label: "主密码", focused: true) {
+                LabeledInput(label: tr("主密码"), focused: true) {
                     SecureField("", text: $password).onSubmit(check)
                 }
-                Text("只在这台 Mac 上核对，不会保存。第 3 天、第 7 天，之后每月提醒一次。")
+                Text(tr("只在这台 Mac 上核对，不会保存。第 3 天、第 7 天，之后每月提醒一次。"))
                     .font(KV.Typography.footnote)
                     .foregroundStyle(KV.Colors.fgSecondary)
                 ErrorText()
-                Button("不再提醒") {
+                Button(tr("不再提醒")) {
                     PracticeSchedule.enabled = false
                     dismiss()
                 }
                 .buttonStyle(.kvLink)
             }
         } footer: {
-            Button("跳过") {
+            Button(tr("跳过")) {
                 PracticeSchedule.record()
                 dismiss()
             }
             .buttonStyle(.kvSecondary)
             .keyboardShortcut(.cancelAction)
             if working { ProgressView().controlSize(.small) }
-            Button("核对", action: check)
+            Button(tr("核对"), action: check)
                 .buttonStyle(.kvPrimary)
                 .keyboardShortcut(.defaultAction)
                 .disabled(password.isEmpty || working)

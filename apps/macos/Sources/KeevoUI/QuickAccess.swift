@@ -216,7 +216,7 @@ struct QuickAccessView: View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").font(.system(size: 18)).foregroundStyle(KV.Colors.fgSecondary)
-                TextField("搜索 Keevo", text: $query)
+                TextField(tr("搜索 Keevo"), text: $query)
                     .textFieldStyle(.plain)
                     .font(.system(size: 20))
                     .focused($focused)
@@ -224,7 +224,7 @@ struct QuickAccessView: View {
                 Image(systemName: model.phase == .unlocked ? "checkmark.shield" : "lock")
                     .font(.system(size: 15))
                     .foregroundStyle(KV.Colors.accentFg)
-                    .accessibilityLabel(model.phase == .unlocked ? "已解锁" : "已锁定")
+                    .accessibilityLabel(model.phase == .unlocked ? tr("已解锁") : tr("已锁定"))
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
@@ -255,7 +255,7 @@ struct QuickAccessView: View {
                 hints
             } else if !query.isEmpty {
                 Divider()
-                Text("没有找到「\(query)」").font(KV.Typography.body).foregroundStyle(KV.Colors.fgSecondary).padding(16)
+                Text(tr("没有找到「{}」", "\(query)")).font(KV.Typography.body).foregroundStyle(KV.Colors.fgSecondary).padding(16)
             }
         }
         .frame(width: QuickAccessController.width)
@@ -283,18 +283,18 @@ struct QuickAccessView: View {
     private var locked: some View {
         VStack(spacing: 10) {
             Image(systemName: "lock").font(.system(size: 26)).foregroundStyle(KV.Colors.accentFg)
-            Text("Keevo 已锁定").font(KV.Typography.headline)
+            Text(tr("Keevo 已锁定")).font(KV.Typography.headline)
             if model.touchIDUsable {
-                Button { Task { await model.unlockWithTouchID() } } label: { Label("用 Touch ID 解锁", systemImage: "touchid") }
+                Button { Task { await model.unlockWithTouchID() } } label: { Label(tr("用 Touch ID 解锁"), systemImage: "touchid") }
                     .buttonStyle(.kvPrimary)
             } else {
-                Button("打开 Keevo 解锁") {
+                Button(tr("打开 Keevo 解锁")) {
                     QuickAccessController.shared.close()
                     model.showMainWindow()
                 }
                 .buttonStyle(.kvPrimary)
             }
-            Text("解锁后继续这次搜索。").font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
+            Text(tr("解锁后继续这次搜索。")).font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
@@ -302,12 +302,12 @@ struct QuickAccessView: View {
 
     private var hints: some View {
         HStack(spacing: 14) {
-            hint(["↩"], "复制密码")
-            hint(["⌘", "C"], "复制用户名")
-            hint(["⌥", "↩"], "复制验证码")
-            hint(["⌘", "O"], "在主窗口打开")
+            hint(["↩"], tr("复制密码"))
+            hint(["⌘", "C"], tr("复制用户名"))
+            hint(["⌥", "↩"], tr("复制验证码"))
+            hint(["⌘", "O"], tr("在主窗口打开"))
             Spacer()
-            hint(["esc"], "关闭")
+            hint(["esc"], tr("关闭"))
         }
         .font(.system(size: 11))
         .foregroundStyle(KV.Colors.fgSecondary)
@@ -340,7 +340,7 @@ struct QuickAccessView: View {
             }
             Spacer()
             if selected, copied == nil {
-                Text("↩ 复制密码").font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.85))
+                Text(tr("↩ 复制密码")).font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.85))
             }
         }
         .padding(.horizontal, 12)
@@ -370,28 +370,28 @@ struct QuickAccessView: View {
     private func copyPassword() {
         guard let item = current else { return }
         guard let (_, f) = field(item, { $0.purpose == "password" && !$0.value.expose().isEmpty }) else {
-            return done("「\(item.title)」没有密码", copiedValue: false)
+            return done(tr("「{}」没有密码", "\(item.title)"), copiedValue: false)
         }
         Clipboard.copy(f.value.expose())
-        done("已复制「\(item.title)」的密码，90 秒后从剪贴板清除")
+        done(tr("已复制「{}」的密码，90 秒后从剪贴板清除", "\(item.title)"))
     }
 
     private func copyUsername() {
         guard let item = current else { return }
         guard let (_, f) = field(item, { $0.purpose == "username" && !$0.value.expose().isEmpty }) else {
-            return done("「\(item.title)」没有用户名", copiedValue: false)
+            return done(tr("「{}」没有用户名", "\(item.title)"), copiedValue: false)
         }
         Clipboard.copy(f.value.expose())
-        done("已复制「\(item.title)」的用户名")
+        done(tr("已复制「{}」的用户名", "\(item.title)"))
     }
 
     private func copyCode() {
         guard let item = current else { return }
         guard let (_, f) = field(item, { $0.kind == "totp" }), let code = model.otpCode(itemId: item.id, fieldId: f.id) else {
-            return done("「\(item.title)」没有一次性密码", copiedValue: false)
+            return done(tr("「{}」没有一次性密码", "\(item.title)"), copiedValue: false)
         }
         Clipboard.copy(code.code.expose())
-        done("已复制「\(item.title)」的验证码，\(code.remainingMs / 1000) 秒后更新")
+        done(tr("已复制「{}」的验证码，{} 秒后更新", "\(item.title)", "\(code.remainingMs / 1000)"))
     }
 
     private func openInMain() {
@@ -452,7 +452,7 @@ struct ShortcutRecorder: View {
         Button { recording ? stop() : start() } label: {
             HStack(spacing: 4) {
                 if recording {
-                    Text("按下新的组合键…").font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
+                    Text(tr("按下新的组合键…")).font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
                 } else {
                     ForEach(shortcut.symbols, id: \.self) { k in
                         Text(k)
@@ -472,8 +472,8 @@ struct ShortcutRecorder: View {
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("快速访问的快捷键：\(shortcut.display)")
-        .accessibilityHint("按下后输入新的组合键")
+        .accessibilityLabel(tr("快速访问的快捷键：{}", "\(shortcut.display)"))
+        .accessibilityHint(tr("按下后输入新的组合键"))
         .onDisappear(perform: stop)
     }
 
@@ -511,8 +511,8 @@ enum AppLanguage: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .system: "跟随系统"
-        case .zhHans: "简体中文"
+        case .system: tr("跟随系统")
+        case .zhHans: tr("简体中文")
         case .en: "English"
         }
     }
@@ -542,23 +542,23 @@ struct GeneralSettings: View {
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: KV.Space.s5) {
-            SettingsSection(title: "快速访问与菜单栏") {
+            SettingsSection(title: tr("快速访问与菜单栏")) {
                 SettingsRow(
-                    title: "快速访问的快捷键",
+                    title: tr("快速访问的快捷键"),
                     detail: model.quickAccessShortcutTaken
-                        ? "这个组合键已被其他应用占用，请换一个。"
-                        : "在任何应用中按下，搜索并复制密码。点一下后按新的组合键即可修改。"
+                        ? tr("这个组合键已被其他应用占用，请换一个。")
+                        : tr("在任何应用中按下，搜索并复制密码。点一下后按新的组合键即可修改。")
                 ) {
                     ShortcutRecorder()
                 }
                 CardRowDivider()
-                SettingsRow(title: "在菜单栏显示 Keevo", detail: "显示锁定状态，提供快速访问、生成密码与立即锁定。关闭窗口后 Keevo 继续在菜单栏中运行。") {
-                    Toggle("在菜单栏显示 Keevo", isOn: $model.menuBarEnabled).kvSwitch("在菜单栏显示 Keevo")
+                SettingsRow(title: tr("在菜单栏显示 Keevo"), detail: tr("显示锁定状态，提供快速访问、生成密码与立即锁定。关闭窗口后 Keevo 继续在菜单栏中运行。")) {
+                    Toggle(tr("在菜单栏显示 Keevo"), isOn: $model.menuBarEnabled).kvSwitch(tr("在菜单栏显示 Keevo"))
                 }
             }
-            SettingsSection(title: "语言", footer: "可选：跟随系统、简体中文、English。") {
-                SettingsRow(title: "界面语言", detail: "更改后重新打开 Keevo 生效。") {
-                    Picker("界面语言", selection: $language) {
+            SettingsSection(title: tr("语言"), footer: tr("可选：跟随系统、简体中文、English。")) {
+                SettingsRow(title: tr("界面语言"), detail: tr("更改后重新打开 Keevo 生效。")) {
+                    Picker(tr("界面语言"), selection: $language) {
                         ForEach(AppLanguage.allCases) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.menu)
@@ -567,10 +567,10 @@ struct GeneralSettings: View {
                     .onChange(of: language) { AppLanguage.current = language }
                 }
             }
-            SettingsSection(title: "提醒") {
-                SettingsRow(title: "提醒我练习主密码", detail: "第 3 天、第 7 天，之后每月一次。只在开启了 Touch ID 时提醒。") {
-                    Toggle("提醒我练习主密码", isOn: $practice)
-                        .kvSwitch("提醒我练习主密码")
+            SettingsSection(title: tr("提醒")) {
+                SettingsRow(title: tr("提醒我练习主密码"), detail: tr("第 3 天、第 7 天，之后每月一次。只在开启了 Touch ID 时提醒。")) {
+                    Toggle(tr("提醒我练习主密码"), isOn: $practice)
+                        .kvSwitch(tr("提醒我练习主密码"))
                         .onChange(of: practice) { PracticeSchedule.enabled = practice }
                 }
             }

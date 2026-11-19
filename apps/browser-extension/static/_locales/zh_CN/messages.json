@@ -1,0 +1,17 @@
+{
+  "name": {
+    "message": "Keevo（开发版）"
+  },
+  "description": {
+    "message": "Keevo 浏览器扩展 M0 原型，只用于开发，请勿存放真实数据。"
+  },
+  "openInlineMenu": {
+    "message": "在当前输入框打开 Keevo 填充菜单"
+  },
+  "fillWithKeevo": {
+    "message": "用 Keevo 填充"
+  },
+  "fillOtpWithKeevo": {
+    "message": "用 Keevo 填入一次性密码"
+  }
+}

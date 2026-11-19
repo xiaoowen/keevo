@@ -76,7 +76,8 @@ struct CardRow<Value: View, Actions: View>: View {
 
     var body: some View {
         HStack(alignment: multiline ? .firstTextBaseline : .center, spacing: 10) {
-            Text(label)
+            // 字段名是保险库中的数据：模板的默认名称按界面语言显示
+            Text(tr(label))
                 .font(labelFont)
                 .foregroundStyle(labelColor)
                 .frame(width: labelWidth, alignment: .leading)
@@ -107,9 +108,9 @@ struct FieldRow: View {
             valueView
         } actions: {
             if field.concealed {
-                Button(revealed ? "隐藏" : "显示", action: toggle)
+                Button(revealed ? tr("隐藏") : tr("显示"), action: toggle)
                     .buttonStyle(.kvLink)
-                    .help(revealed ? "隐藏" : "显示（30 秒后自动隐藏）")
+                    .help(revealed ? tr("隐藏") : tr("显示（30 秒后自动隐藏）"))
                 LargeTypeButton(action: largeType)
             }
             CopyButton(label: field.label) { field.value.expose() }
@@ -129,7 +130,7 @@ struct FieldRow: View {
                     .help(url.absoluteString)
                     .lineLimit(1)
                 OutlineBadge(text: Self.matchMode(url))
-                    .help("填充时按这个方式匹配网址（docs/architecture.md §5.3）")
+                    .help(tr("填充时按这个方式匹配网址（docs/architecture.md §5.3）"))
             }
         } else {
             Text(field.value.expose())
@@ -159,7 +160,7 @@ struct FieldRow: View {
     static func matchMode(_ url: URL) -> String {
         let host = url.host() ?? ""
         let isIP = host.split(separator: ".").count == 4 && host.allSatisfy { $0.isNumber || $0 == "." } || host.contains(":")
-        return host == "localhost" || host.hasSuffix(".localhost") || isIP ? "按主机与端口匹配" : "按域名匹配"
+        return host == "localhost" || host.hasSuffix(".localhost") || isIP ? tr("按主机与端口匹配") : tr("按域名匹配")
     }
 }
 
@@ -172,11 +173,11 @@ struct CopyButton: View {
     var body: some View {
         IconButton(
             systemImage: "doc.on.doc",
-            label: "复制\(label)",
-            help: "复制（\(Int(Clipboard.clearAfter)) 秒后自动清除）"
+            label: tr("复制{}", "\(tr(label))"),
+            help: tr("复制（{} 秒后自动清除）", "\(Int(Clipboard.clearAfter))")
         ) {
             Clipboard.copy(value())
-            model.showToast("已复制\(label) · \(Int(Clipboard.clearAfter)) 秒后清除")
+            model.showToast(tr("已复制{} · {} 秒后清除", "\(tr(label))", "\(Int(Clipboard.clearAfter))"))
         }
     }
 }
@@ -195,7 +196,7 @@ struct OtpRow: View {
             let remaining = max(0, expiresAt.timeIntervalSince(context.date))
             CardRow(label: field.label) {
                 if invalid {
-                    Text("配置无效，请在编辑器中检查").font(KV.Typography.footnote).foregroundStyle(KV.Colors.statusDangerFg)
+                    Text(tr("配置无效，请在编辑器中检查")).font(KV.Typography.footnote).foregroundStyle(KV.Colors.statusDangerFg)
                 } else if let code {
                     HStack(spacing: 10) {
                         CountdownRing(fraction: remaining / Double(code.period), seconds: Int(remaining.rounded(.up)))
@@ -204,13 +205,13 @@ struct OtpRow: View {
                             .tracking(1)
                             .foregroundStyle(KV.Colors.fgPrimary)
                             .textSelection(.enabled)
-                            .accessibilityLabel("验证码 \(code.code.expose().map(String.init).joined(separator: " "))")
+                            .accessibilityLabel(tr("验证码 {}", "\(code.code.expose().map(String.init).joined(separator: " "))"))
                     }
                 }
             } actions: {
                 if let code, !invalid {
                     let seconds = Int(remaining.rounded(.up))
-                    Text("\(seconds) 秒")
+                    Text(tr("{} 秒", "\(seconds)"))
                         .font(KV.Typography.footnote)
                         .monospacedDigit()
                         .foregroundStyle(seconds <= 5 ? KV.Colors.statusWarningFg : KV.Colors.fgSecondary)
@@ -260,7 +261,7 @@ struct CountdownRing: View {
         }
         .frame(width: 18, height: 18)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("还剩 \(seconds) 秒")
+        .accessibilityLabel(tr("还剩 {} 秒", "\(seconds)"))
     }
 }
 
@@ -276,7 +277,7 @@ struct KvRows: View {
     var body: some View {
         if showHeader {
             CardRow(label: field.label) {
-                Text("\(field.kv.count) 项").font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
+                Text(tr("{} 项", "\(field.kv.count)")).font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
             } actions: {
                 CopyEnvButton(field: field)
             }
@@ -298,7 +299,7 @@ struct KvRows: View {
                         .font(KV.Typography.mono)
                         .tracking(1)
                         .foregroundStyle(KV.Colors.fgSecondary)
-                        .accessibilityLabel("已隐藏")
+                        .accessibilityLabel(tr("已隐藏"))
                 } else {
                     Text(entry.value.expose())
                         .font(KV.Typography.mono)
@@ -310,13 +311,13 @@ struct KvRows: View {
             } actions: {
                 if entry.concealed {
                     if shown {
-                        Text("已显示 · 30 秒后隐藏")
+                        Text(tr("已显示 · 30 秒后隐藏"))
                             .font(KV.Typography.caption.weight(.semibold))
                             .foregroundStyle(KV.Colors.accentFg)
                     } else {
-                        OutlineBadge(text: "秘密")
+                        OutlineBadge(text: tr("秘密"))
                     }
-                    Button(shown ? "隐藏" : "显示") { toggle(key) }.buttonStyle(.kvLink)
+                    Button(shown ? tr("隐藏") : tr("显示")) { toggle(key) }.buttonStyle(.kvLink)
                 }
                 CopyButton(label: entry.key) { entry.value.expose() }
             }
@@ -335,9 +336,9 @@ struct ReferenceMenu: View {
     var otp = false
 
     var body: some View {
-        Button("复制 keevo:// 引用") { model.copyReference(itemId: itemId, fieldId: fieldId, kvKey: kvKey) }
+        Button(tr("复制 keevo:// 引用")) { model.copyReference(itemId: itemId, fieldId: fieldId, kvKey: kvKey) }
         if otp {
-            Button("复制验证码的 keevo:// 引用") {
+            Button(tr("复制验证码的 keevo:// 引用")) {
                 model.copyReference(itemId: itemId, fieldId: fieldId, kvKey: nil, suffix: "?attribute=otp")
             }
         }
@@ -349,7 +350,7 @@ struct CopyEnvButton: View {
     let field: FieldEntry
 
     var body: some View {
-        CopyButton(label: "全部变量（.env 格式）") {
+        CopyButton(label: tr("全部变量（.env 格式）")) {
             field.kv.map { "\($0.key)=\($0.value.expose())" }.joined(separator: "\n")
         }
     }
@@ -373,7 +374,7 @@ struct EnvironmentView: View {
             if !environments.isEmpty {
                 let current = environments.first { $0.id == selected } ?? environments[0]
                 HStack {
-                    Picker("环境", selection: Binding(get: { current.id }, set: { selected = $0 })) {
+                    Picker(tr("环境"), selection: Binding(get: { current.id }, set: { selected = $0 })) {
                         ForEach(environments, id: \.id) { Text($0.label ?? "").tag($0.id) }
                     }
                     .pickerStyle(.segmented)
@@ -381,7 +382,7 @@ struct EnvironmentView: View {
                     .fixedSize()
                     Spacer()
                     if let kv = current.fields.first(where: { $0.kind == "kv_list" }) {
-                        Text("复制为 .env").font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
+                        Text(tr("复制为 .env")).font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
                         CopyEnvButton(field: kv)
                     }
                 }
@@ -412,14 +413,14 @@ struct CodesRows: View {
 
     var body: some View {
         CardRow(label: field.label) {
-            Text("剩余 \(remaining) / \(field.codes.count)")
+            Text(tr("剩余 {} / {}", "\(remaining)", "\(field.codes.count)"))
                 .font(KV.Typography.footnote)
                 .foregroundStyle(remaining < 3 ? KV.Colors.statusWarningFg : KV.Colors.fgSecondary)
         } actions: {
-            Button(revealed.contains(field.id) ? "隐藏" : "显示") { toggle(field.id) }.buttonStyle(.kvLink)
+            Button(revealed.contains(field.id) ? tr("隐藏") : tr("显示")) { toggle(field.id) }.buttonStyle(.kvLink)
         }
         if remaining < 3 {
-            Banner(kind: .warning, message: "恢复码只剩 \(remaining) 个。请到网站上重新生成一组，并更新这里。")
+            Banner(kind: .warning, message: tr("恢复码只剩 {} 个。请到网站上重新生成一组，并更新这里。", "\(remaining)"))
                 .padding(.horizontal, 14)
                 .padding(.bottom, 10)
         }
@@ -440,12 +441,12 @@ struct CodesRows: View {
                     .foregroundStyle(code.used ? KV.Colors.fgTertiary : KV.Colors.fgPrimary)
                 }
                 .toggleStyle(.checkbox)
-                .help(code.used ? "标记为未使用" : "标记为已使用")
+                .help(code.used ? tr("标记为未使用") : tr("标记为已使用"))
                 if code.used {
-                    Text("已使用").font(KV.Typography.caption).foregroundStyle(KV.Colors.fgTertiary)
+                    Text(tr("已使用")).font(KV.Typography.caption).foregroundStyle(KV.Colors.fgTertiary)
                 }
                 Spacer()
-                CopyButton(label: "恢复码") { code.code.expose() }
+                CopyButton(label: tr("恢复码")) { code.code.expose() }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)

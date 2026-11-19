@@ -5,6 +5,7 @@
 // 点击劫持防护见 guard.ts（docs/security.md §12）。
 // - 菜单只拿到条目概要；凭据由 Service Worker 直接发给发起菜单的那个帧，不经过这里。
 
+import { t } from "./i18n.js";
 import { logoMark, siteIcon } from "./brand.js";
 import { createGuard } from "./guard.js";
 import type { Candidate, MenuInit, MenuRequest, MenuResponse } from "./types.js";
@@ -33,24 +34,24 @@ function updateReady(): void {
 // ---- 渲染
 
 const MESSAGES: Record<string, string> = {
-  unpaired: "这个浏览器还没有与 Keevo 配对。请点击工具栏中的 Keevo 图标完成配对。",
-  locked: "Keevo 已锁定，请在 Keevo 中解锁。",
-  connecting: "正在连接 Keevo…",
-  error: "暂时无法连接 Keevo。请点击工具栏中的 Keevo 图标查看。",
-  no_session: "菜单已过期，请重新点击输入框旁的图标。",
-  limited: "这个浏览器短时间内查询了太多网站，Keevo 暂时停止回答。请在 Keevo 中查看。",
+  unpaired: t("这个浏览器还没有与 Keevo 配对。请点击工具栏中的 Keevo 图标完成配对。"),
+  locked: t("Keevo 已锁定，请在 Keevo 中解锁。"),
+  connecting: t("正在连接 Keevo…"),
+  error: t("暂时无法连接 Keevo。请点击工具栏中的 Keevo 图标查看。"),
+  no_session: t("菜单已过期，请重新点击输入框旁的图标。"),
+  limited: t("这个浏览器短时间内查询了太多网站，Keevo 暂时停止回答。请在 Keevo 中查看。"),
 };
 
 const ERRORS: Record<string, string> = {
-  not_authorized: "没有得到授权：在 Keevo 中被拒绝或超时，或者这个浏览器的填充已被暂停。",
-  url_mismatch: "这个条目与当前网站不匹配，已拒绝。",
-  not_found: "这个条目已不存在。",
-  locked: "Keevo 已锁定，请在 Keevo 中解锁。",
-  origin_changed: "页面已跳转到其他网站，已取消填充。",
-  no_password_field: "没有找到可以填充的密码框。",
-  no_field: "没有找到可以填入的输入框。",
-  no_totp: "这个条目没有一次性密码。",
-  failed: "填充没有完成，请重试。",
+  not_authorized: t("没有得到授权：在 Keevo 中被拒绝或超时，或者这个浏览器的填充已被暂停。"),
+  url_mismatch: t("这个条目与当前网站不匹配，已拒绝。"),
+  not_found: t("这个条目已不存在。"),
+  locked: t("Keevo 已锁定，请在 Keevo 中解锁。"),
+  origin_changed: t("页面已跳转到其他网站，已取消填充。"),
+  no_password_field: t("没有找到可以填充的密码框。"),
+  no_field: t("没有找到可以填入的输入框。"),
+  no_totp: t("这个条目没有一次性密码。"),
+  failed: t("填充没有完成，请重试。"),
 };
 
 let init: MenuInit | null = null;
@@ -71,7 +72,7 @@ function render(note?: { kind: "info" | "danger"; text: string }): void {
   const head = el("div", undefined, "head");
   head.append(
     logoMark(16),
-    el("span", init.kind === "otp" ? "Keevo · 一次性密码填入" : "Keevo · 填充到", "label"),
+    el("span", init.kind === "otp" ? t("Keevo · 一次性密码填入") : t("Keevo · 填充到"), "label"),
     el("span", host(init.origin), "site"),
   );
   root.append(head);
@@ -81,7 +82,7 @@ function render(note?: { kind: "info" | "danger"; text: string }): void {
     if (init.topOrigin !== init.origin) {
       const warn = el(
         "p",
-        `这个输入框嵌在 ${init.topOrigin ? host(init.topOrigin) : "另一个网站"} 的页面中，来自 ${host(init.origin)}。确认这是你要登录的网站再填充。`,
+        t("这个输入框嵌在 {} 的页面中，来自 {}。确认这是你要登录的网站再填充。", String(init.topOrigin ? host(init.topOrigin) : t("另一个网站")), String(host(init.origin))),
         "banner warning",
       );
       root.append(warn);
@@ -91,8 +92,8 @@ function render(note?: { kind: "info" | "danger"; text: string }): void {
       // 没有匹配时提醒仿冒网站的可能（设计稿"钓鱼网站"）：用警示样式，而不是普通的灰字
       const warn = el("div", undefined, "banner warning");
       warn.append(
-        el("strong", "这个网站没有匹配的登录。"),
-        document.createTextNode("Keevo 只在条目中保存的网站上填充。如果这是你常用的网站，网址却对不上，可能是仿冒网站。"),
+        el("strong", t("这个网站没有匹配的登录。")),
+        document.createTextNode(t("Keevo 只在条目中保存的网站上填充。如果这是你常用的网站，网址却对不上，可能是仿冒网站。")),
       );
       root.append(warn);
     }
@@ -100,7 +101,7 @@ function render(note?: { kind: "info" | "danger"; text: string }): void {
     list.setAttribute("role", "listbox");
     items.forEach((c) => list.append(row(c)));
     root.append(list);
-    if (items.length > 0) root.append(el("p", "↑↓ 选择 · ↩ 填充 · Esc 关闭", "keys"));
+    if (items.length > 0) root.append(el("p", t("↑↓ 选择 · ↩ 填充 · Esc 关闭"), "keys"));
   }
   if (note) root.append(el("p", note.text, `banner ${note.kind}`));
   updateReady();
@@ -121,7 +122,7 @@ function row(c: Candidate): HTMLElement {
     enter.setAttribute("aria-hidden", "true");
     b.append(enter);
   }
-  if (pendingConfirm === c.item_id) b.append(el("span", "再次点击确认", "confirm"));
+  if (pendingConfirm === c.item_id) b.append(el("span", t("再次点击确认"), "confirm"));
   b.addEventListener("click", (e) => {
     if (!guard.check(e) || busy) return;
     void choose(c);
@@ -134,11 +135,11 @@ async function choose(c: Candidate): Promise<void> {
   // 跨域 iframe 中的输入框：第一次点击只要求确认（docs/security.md §12）
   if (init.topOrigin !== init.origin && pendingConfirm !== c.item_id) {
     pendingConfirm = c.item_id;
-    render({ kind: "info", text: `再次点击「${c.title}」，确认填充到 ${host(init.origin)}。` });
+    render({ kind: "info", text: t("再次点击「{}」，确认填充到 {}。", String(c.title), String(host(init.origin))) });
     return;
   }
   busy = true;
-  render({ kind: "info", text: "正在向 Keevo 取用。第一次在这个网站上使用这个条目时，请在 Keevo 中确认。" });
+  render({ kind: "info", text: t("正在向 Keevo 取用。第一次在这个网站上使用这个条目时，请在 Keevo 中确认。") });
   const r = await ask({ type: "menu_fill", itemId: c.item_id, confirmed: pendingConfirm === c.item_id });
   busy = false;
   pendingConfirm = null;

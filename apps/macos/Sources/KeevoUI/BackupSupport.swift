@@ -43,7 +43,7 @@ extension AppModel {
             }.value
             backupError = nil
         } catch {
-            backupError = "上次自动备份失败：无法写入备份文件夹。外部硬盘没有连接时，连接后会自动重试。"
+            backupError = tr("上次自动备份失败：无法写入备份文件夹。外部硬盘没有连接时，连接后会自动重试。")
         }
         refreshBackups()
     }
@@ -63,7 +63,7 @@ extension AppModel {
             backupError = nil
             return info
         } catch {
-            errorMessage = "无法备份：备份文件夹不可写。请在「设置 → 备份」中检查位置。"
+            errorMessage = tr("无法备份：备份文件夹不可写。请在「设置 → 备份」中检查位置。")
             return nil
         }
     }
@@ -79,8 +79,8 @@ extension AppModel {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
-        panel.prompt = "选择"
-        panel.message = "选择存放 Keevo 备份的文件夹，例如外部硬盘或同步盘中的文件夹。"
+        panel.prompt = tr("选择")
+        panel.message = tr("选择存放 Keevo 备份的文件夹，例如外部硬盘或同步盘中的文件夹。")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         customBackupFolder = url.path == defaultBackupFolder ? nil : url.path
         refreshBackups()
@@ -96,7 +96,7 @@ extension AppModel {
 
     /// 检查文件能否用来恢复。不能时返回原因。
     func backupProblem(_ path: String) -> String? {
-        guard let vault else { return "保险库没有打开。" }
+        guard let vault else { return tr("保险库没有打开。") }
         do {
             try vault.checkBackup(path: path)
             return nil
@@ -116,7 +116,7 @@ extension AppModel {
             return false
         }
         lock()
-        lockNotice = "已恢复到 \(BackupText.when(backup.createdMs)) 的备份。请用备份时的主密码解锁；恢复前的保险库已另存一份备份。"
+        lockNotice = tr("已恢复到 {} 的备份。请用备份时的主密码解锁；恢复前的保险库已另存一份备份。", "\(BackupText.when(backup.createdMs))")
         refreshBackups()
         return true
     }
@@ -127,11 +127,11 @@ extension AppModel {
 enum BackupText {
     static func kind(_ kind: String) -> String {
         switch kind {
-        case "auto": "自动"
-        case "manual": "手动"
-        case "import": "导入之前"
-        case "delete": "删除之前"
-        case "restore": "恢复之前"
+        case "auto": tr("自动")
+        case "manual": tr("手动")
+        case "import": tr("导入之前")
+        case "delete": tr("删除之前")
+        case "restore": tr("恢复之前")
         default: kind
         }
     }
@@ -141,18 +141,18 @@ enum BackupText {
         let date = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
         let calendar = Calendar.current
         let time = date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
-        if calendar.isDateInToday(date) { return "今天 \(time)" }
-        if calendar.isDateInYesterday(date) { return "昨天 \(time)" }
+        if calendar.isDateInToday(date) { return tr("今天 {}", "\(time)") }
+        if calendar.isDateInYesterday(date) { return tr("昨天 {}", "\(time)") }
         let c = calendar.dateComponents([.year, .month, .day], from: date)
         let sameYear = c.year == calendar.component(.year, from: Date())
-        return (sameYear ? "" : "\(c.year ?? 0)年") + "\(c.month ?? 0)月\(c.day ?? 0)日 \(time)"
+        return (sameYear ? "" : tr("{}年", "\(c.year ?? 0)")) + tr("{}月{}日 {}", "\(c.month ?? 0)", "\(c.day ?? 0)", "\(time)")
     }
 
     static func full(_ ms: UInt64) -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
         let c = Calendar.current.dateComponents([.year, .month, .day], from: date)
         let time = date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
-        return "\(c.year ?? 0)年\(c.month ?? 0)月\(c.day ?? 0)日 \(time)"
+        return tr("{}年{}月{}日 {}", "\(c.year ?? 0)", "\(c.month ?? 0)", "\(c.day ?? 0)", "\(time)")
     }
 
     static func size(_ bytes: UInt64) -> String {
@@ -211,32 +211,32 @@ struct BackupSettings: View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: KV.Space.s5) {
             SettingsSection(
-                title: "自动备份",
-                footer: "备份与保险库同等加密：需要主密码与账户密钥才能打开。可以选一个外部硬盘或同步盘中的文件夹。"
+                title: tr("自动备份"),
+                footer: tr("备份与保险库同等加密：需要主密码与账户密钥才能打开。可以选一个外部硬盘或同步盘中的文件夹。")
             ) {
-                SettingsRow(title: "每天自动备份", detail: "Keevo 运行时每天一次；导入与恢复之前也会备份。") {
-                    Toggle("每天自动备份", isOn: $model.autoBackupEnabled)
-                        .kvSwitch("每天自动备份")
+                SettingsRow(title: tr("每天自动备份"), detail: tr("Keevo 运行时每天一次；导入与恢复之前也会备份。")) {
+                    Toggle(tr("每天自动备份"), isOn: $model.autoBackupEnabled)
+                        .kvSwitch(tr("每天自动备份"))
                 }
                 CardRowDivider()
-                SettingsRow(title: "位置", detail: BackupText.folder(model.backupFolder)) {
+                SettingsRow(title: tr("位置"), detail: BackupText.folder(model.backupFolder)) {
                     HStack(spacing: KV.Space.s2) {
                         if model.customBackupFolder != nil {
-                            Button("恢复默认") {
+                            Button(tr("恢复默认")) {
                                 model.customBackupFolder = nil
                                 model.refreshBackups()
                             }
                             .buttonStyle(.kvLink)
                         }
-                        Button("更改…") { model.chooseBackupFolder() }
+                        Button(tr("更改…")) { model.chooseBackupFolder() }
                             .buttonStyle(.kvBordered)
                     }
                 }
                 CardRowDivider()
-                SettingsRow(title: "保留") {
-                    Picker("保留", selection: Binding(get: { model.backupKeep }, set: { model.setBackupKeep($0) })) {
+                SettingsRow(title: tr("保留")) {
+                    Picker(tr("保留"), selection: Binding(get: { model.backupKeep }, set: { model.setBackupKeep($0) })) {
                         ForEach(AppModel.backupKeepChoices, id: \.self) { n in
-                            Text("最近 \(n) 份").tag(n)
+                            Text(tr("最近 {} 份", "\(n)")).tag(n)
                         }
                     }
                     .pickerStyle(.menu)
@@ -248,9 +248,9 @@ struct BackupSettings: View {
                 Banner(kind: .warning, message: error)
             }
             VStack(alignment: .leading, spacing: KV.Space.s2) {
-                GroupTitle(text: "备份（\(model.backups.count)）")
+                GroupTitle(text: tr("备份（{}）", "\(model.backups.count)"))
                 if model.backups.isEmpty {
-                    Text("还没有备份。")
+                    Text(tr("还没有备份。"))
                         .font(KV.Typography.body)
                         .foregroundStyle(KV.Colors.fgSecondary)
                 } else {
@@ -262,20 +262,20 @@ struct BackupSettings: View {
                     }
                 }
                 HStack(spacing: KV.Space.s2) {
-                    Button("立即备份") {
+                    Button(tr("立即备份")) {
                         working = true
                         Task {
-                            if await model.backupNow() != nil { model.showToast("已备份") }
+                            if await model.backupNow() != nil { model.showToast(tr("已备份")) }
                             working = false
                         }
                     }
                     .buttonStyle(.kvBordered)
                     .disabled(working)
-                    Button("从备份恢复…") { choosing = true }
+                    Button(tr("从备份恢复…")) { choosing = true }
                         .buttonStyle(.kvBordered)
                         .disabled(model.phase != .unlocked)
                     Spacer()
-                    Button { model.revealBackups() } label: { Label("在访达中显示", systemImage: "folder") }
+                    Button { model.revealBackups() } label: { Label(tr("在访达中显示"), systemImage: "folder") }
                         .buttonStyle(.kvLink)
                 }
             }
@@ -309,14 +309,14 @@ struct RestorePickerSheet: View {
 
     var body: some View {
         SheetScaffold(
-            title: "选择要恢复的备份",
-            subtitle: "也可以从其他位置选择一个 Keevo 备份文件（.keevo-backup）。",
+            title: tr("选择要恢复的备份"),
+            subtitle: tr("也可以从其他位置选择一个 Keevo 备份文件（.keevo-backup）。"),
             systemImage: "archivebox",
             width: 520
         ) {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
                 if candidates.isEmpty {
-                    Text("备份文件夹中还没有备份。")
+                    Text(tr("备份文件夹中还没有备份。"))
                         .font(KV.Typography.body)
                         .foregroundStyle(KV.Colors.fgSecondary)
                 } else {
@@ -341,14 +341,14 @@ struct RestorePickerSheet: View {
                 if let problem {
                     Banner(kind: .danger, message: problem)
                 }
-                Button { pickFile() } label: { Label("从其他位置选择…", systemImage: "folder") }
+                Button { pickFile() } label: { Label(tr("从其他位置选择…"), systemImage: "folder") }
                     .buttonStyle(.kvLink)
             }
         } footer: {
-            Button("取消") { dismiss() }
+            Button(tr("取消")) { dismiss() }
                 .buttonStyle(.kvSecondary)
                 .keyboardShortcut(.cancelAction)
-            Button("继续") { proceed() }
+            Button(tr("继续")) { proceed() }
                 .buttonStyle(.kvPrimary)
                 .keyboardShortcut(.defaultAction)
                 .disabled(current == nil)
@@ -364,7 +364,7 @@ struct RestorePickerSheet: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         if let type = UTType(filenameExtension: "keevo-backup") { panel.allowedContentTypes = [type] }
-        panel.prompt = "选择"
+        panel.prompt = tr("选择")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? UInt64) ?? 0
         let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
@@ -399,31 +399,31 @@ struct RestoreConfirmSheet: View {
 
     var body: some View {
         SheetScaffold(
-            title: "从备份恢复？",
-            subtitle: "恢复到「\(BackupText.when(backup.createdMs)) · \(BackupText.kind(backup.kind))」的备份。",
+            title: tr("从备份恢复？"),
+            subtitle: tr("恢复到「{} · {}」的备份。", "\(BackupText.when(backup.createdMs))", "\(BackupText.kind(backup.kind))"),
             systemImage: "arrow.uturn.backward",
             tint: KV.Colors.statusWarningFg,
             width: 520
         ) {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
                 KVCard {
-                    CardRow(label: "备份时间") { Text(BackupText.full(backup.createdMs)).font(KV.Typography.body) } actions: {}
+                    CardRow(label: tr("备份时间")) { Text(BackupText.full(backup.createdMs)).font(KV.Typography.body) } actions: {}
                     CardRowDivider()
-                    CardRow(label: "内容") { Text("保险库数据库（加密）").font(KV.Typography.body) } actions: {}
+                    CardRow(label: tr("内容")) { Text(tr("保险库数据库（加密）")).font(KV.Typography.body) } actions: {}
                     CardRowDivider()
-                    CardRow(label: "当前保险库") { Text("恢复前会再备份一份").font(KV.Typography.body) } actions: {}
+                    CardRow(label: tr("当前保险库")) { Text(tr("恢复前会再备份一份")).font(KV.Typography.body) } actions: {}
                 }
                 Banner(
                     kind: .warning,
-                    message: "备份之后的修改会被替换掉（可以从恢复前自动生成的备份找回）。恢复后需要用备份时的主密码解锁；这台 Mac 上的浏览器配对、命令行授权与解锁设置保持现在的状态。"
+                    message: tr("备份之后的修改会被替换掉（可以从恢复前自动生成的备份找回）。恢复后需要用备份时的主密码解锁；这台 Mac 上的浏览器配对、命令行授权与解锁设置保持现在的状态。")
                 )
                 ErrorText()
             }
         } footer: {
-            Button("取消") { dismiss() }
+            Button(tr("取消")) { dismiss() }
                 .buttonStyle(.kvSecondary)
                 .keyboardShortcut(.cancelAction)
-            Button("恢复") {
+            Button(tr("恢复")) {
                 working = true
                 Task {
                     if await model.restore(from: backup) { dismiss() }

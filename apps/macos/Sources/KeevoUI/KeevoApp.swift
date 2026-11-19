@@ -27,35 +27,35 @@ public struct KeevoApp: App {
         .defaultSize(width: 1200, height: 760)
         .commands {
             CommandGroup(after: .appInfo) {
-                Button("立即锁定") { model.lock() }
+                Button(tr("立即锁定")) { model.lock() }
                     .keyboardShortcut("l", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .newItem) {
                 let unlocked = model.phase == .unlocked && !model.vaults.isEmpty
-                Button("新建登录") { model.mainRequest = .newItem(NewItemChoice.all[0]) }
+                Button(tr("新建登录")) { model.mainRequest = .newItem(NewItemChoice.all[0]) }
                     .keyboardShortcut("n")
                     .disabled(!unlocked)
-                Menu("新建") {
+                Menu(tr("新建")) {
                     ForEach(NewItemChoice.all.dropFirst()) { choice in
                         Button(choice.name) { model.mainRequest = .newItem(choice) }
                     }
                 }
                 .disabled(!unlocked)
                 Divider()
-                Button("生成密码…") { model.mainRequest = .generator }
+                Button(tr("生成密码…")) { model.mainRequest = .generator }
                     .keyboardShortcut("g", modifiers: [.command, .shift])
                     .disabled(model.phase != .unlocked)
             }
             CommandGroup(after: .importExport) {
-                Button("导入…") { model.showingImport = true }
+                Button(tr("导入…")) { model.showingImport = true }
                     .keyboardShortcut("i", modifiers: [.command, .shift])
                     .disabled(model.phase != .unlocked || model.vaults.isEmpty)
-                Button("导出…") { model.showingExport = true }
+                Button(tr("导出…")) { model.showingExport = true }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
                     .disabled(model.phase != .unlocked)
             }
             CommandGroup(after: .textEditing) {
-                Button("搜索条目") { model.mainRequest = .focusSearch }
+                Button(tr("搜索条目")) { model.mainRequest = .focusSearch }
                     .keyboardShortcut("f")
                     .disabled(model.phase != .unlocked)
             }
@@ -65,7 +65,7 @@ public struct KeevoApp: App {
                 .environment(model)
         }
         // 独立的生成器：锁定时也可以使用（菜单栏"生成密码…"）
-        Window("生成密码", id: "generator") {
+        Window(tr("生成密码"), id: "generator") {
             GeneratorView().tinted
                 .environment(model)
                 .frame(width: 460)
@@ -96,7 +96,7 @@ private struct MenuBarLabel: View {
 
     var body: some View {
         Image(systemName: model.phase == .unlocked ? "checkmark.shield" : "lock.shield")
-            .accessibilityLabel(model.phase == .unlocked ? "Keevo 已解锁" : "Keevo 已锁定")
+            .accessibilityLabel(model.phase == .unlocked ? tr("Keevo 已解锁") : tr("Keevo 已锁定"))
             .onAppear { model.openMainWindow = { openWindow(id: "main") } }
     }
 }
@@ -108,31 +108,31 @@ private struct MenuBarContent: View {
     var body: some View {
         let unlocked = model.phase == .unlocked
         if unlocked {
-            Text("Keevo 已解锁")
-            Text("闲置 \(model.autoLockMinutes) 分钟后自动锁定")
+            Text(tr("Keevo 已解锁"))
+            Text(tr("闲置 {} 分钟后自动锁定", "\(model.autoLockMinutes)"))
         } else {
-            Text("Keevo 已锁定")
+            Text(tr("Keevo 已锁定"))
         }
         Divider()
         if !unlocked, model.phase == .locked, model.touchIDUsable {
-            Button("用 Touch ID 解锁…") { Task { await model.unlockWithTouchID() } }
+            Button(tr("用 Touch ID 解锁…")) { Task { await model.unlockWithTouchID() } }
         }
-        Button("快速访问…") { QuickAccessController.shared.show(model: model) }
+        Button(tr("快速访问…")) { QuickAccessController.shared.show(model: model) }
             .keyboardShortcut(KeyEquivalent(Character(Shortcut.saved.key.lowercased())), modifiers: Shortcut.saved.eventModifiers)
             .disabled(!unlocked)
-        Button("生成密码…") {
+        Button(tr("生成密码…")) {
             NSApp.activate()
             openWindow(id: "generator")
         }
         Divider()
-        Button("打开 Keevo") { model.showMainWindow() }
+        Button(tr("打开 Keevo")) { model.showMainWindow() }
         if unlocked {
-            Button("立即锁定") { model.lock() }
+            Button(tr("立即锁定")) { model.lock() }
         }
         Divider()
-        SettingsLink { Text("设置…") }
+        SettingsLink { Text(tr("设置…")) }
             .keyboardShortcut(",")
-        Button("退出 Keevo") { NSApp.terminate(nil) }
+        Button(tr("退出 Keevo")) { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 }
@@ -168,7 +168,7 @@ struct RootView: View {
         .overlay(alignment: .top) {
             VStack(spacing: KV.Space.s2) {
                 if let browser = model.pairingNotice {
-                    Banner(kind: .info, message: "\(browserName(browser)) 中的扩展正在请求与 Keevo 配对……")
+                    Banner(kind: .info, message: tr("{} 中的扩展正在请求与 Keevo 配对……", "\(browserName(browser))"))
                         .task {
                             try? await Task.sleep(for: .seconds(60))
                             model.pairingNotice = nil
@@ -184,7 +184,7 @@ struct RootView: View {
                             Image(systemName: "xmark.circle.fill").foregroundStyle(KV.Colors.fgTertiary)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("关闭提示")
+                        .accessibilityLabel(tr("关闭提示"))
                     }
                 }
                 // 浏览器保存了新登录（spec/ipc.md §5.5）：每次写入都对用户可见
@@ -220,14 +220,14 @@ struct RootView: View {
         }
         // 频率限制触发的暂停（spec/ipc.md §5.2 第 3 条）：用户确认后才恢复
         .alert(
-            "已暂停「\(model.pausedPairing?.name ?? "")」的填充",
+            tr("已暂停「{}」的填充", "\(model.pausedPairing?.name ?? "")"),
             isPresented: Binding(get: { model.pausedPairing != nil }, set: { if !$0 { model.pausedPairing = nil } }),
             presenting: model.pausedPairing
         ) { paused in
-            Button("保持暂停", role: .cancel) { model.pausedPairing = nil }
-            Button("恢复") { model.resumeBrowserPairing(id: paused.id) }
+            Button(tr("保持暂停"), role: .cancel) { model.pausedPairing = nil }
+            Button(tr("恢复")) { model.resumeBrowserPairing(id: paused.id) }
         } message: { paused in
-            Text("\(browserName(paused.browser)) 中的这个扩展在 10 分钟内为太多不同的条目取用了凭据，可能已被冒用。确认是你本人在操作后再恢复；也可以在「设置 → 浏览器」中解除配对。")
+            Text(tr("{} 中的这个扩展在 10 分钟内为太多不同的条目取用了凭据，可能已被冒用。确认是你本人在操作后再恢复；也可以在「设置 → 浏览器」中解除配对。", "\(browserName(paused.browser))"))
         }
     }
 }

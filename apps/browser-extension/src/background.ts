@@ -13,6 +13,7 @@
 // - 协议 v3（spec/ipc.md §5.6）：弹窗搜索全部条目、在 Keevo 中打开、请求解锁。Keevo 中允许搜索或解锁后会回到浏览器，
 //   这里随之重新打开弹窗；Keevo 不支持某个版本时逐级退回。
 
+import { t } from "./i18n.js";
 import init, { KeevoClient, generatePassword } from "./wasm/keevo_wasm.js";
 import type {
   BarRequest,
@@ -473,7 +474,7 @@ async function clearClipboard(): Promise<void> {
     await chrome.offscreen.createDocument({
       url: "offscreen.html",
       reasons: [chrome.offscreen.Reason.CLIPBOARD],
-      justification: "90 秒后清除 Keevo 写入剪贴板的密码或验证码",
+      justification: t("90 秒后清除 Keevo 写入剪贴板的密码或验证码"),
     });
   }
   const msg: OffscreenRequest = { target: "offscreen", type: "clear_if", hash: clipboardHash };

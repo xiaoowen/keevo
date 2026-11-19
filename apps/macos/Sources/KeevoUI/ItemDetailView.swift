@@ -52,7 +52,7 @@ struct ItemDetailView: View {
                     .overlay { if dropTargeted, !detail.trashed { AttachmentDropOverlay(title: detail.title) } }
             } else {
                 DetailTopBar { EmptyView() }
-                EmptyState(symbol: "questionmark.square.dashed", title: "这个条目已不存在", message: "它可能已被永久删除。")
+                EmptyState(symbol: "questionmark.square.dashed", title: tr("这个条目已不存在"), message: tr("它可能已被永久删除。"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -75,14 +75,14 @@ struct ItemDetailView: View {
         .sheet(isPresented: $showingConflicts) {
             if let detail { ConflictSheet(detail: detail) }
         }
-        .confirmationDialog("永久删除这个条目？", isPresented: $confirmPurge) {
-            Button("永久删除", role: .destructive) {
+        .confirmationDialog(tr("永久删除这个条目？"), isPresented: $confirmPurge) {
+            Button(tr("永久删除"), role: .destructive) {
                 model.purge(itemId: itemId)
                 selectedItem = nil
             }
-            Button("取消", role: .cancel) {}
+            Button(tr("取消"), role: .cancel) {}
         } message: {
-            Text("删除后无法从回收站恢复。")
+            Text(tr("删除后无法从回收站恢复。"))
         }
     }
 
@@ -105,22 +105,22 @@ struct ItemDetailView: View {
                     .frame(width: 14)
             }
             .buttonStyle(.kvBordered)
-            .help(d.favorite ? "取消收藏" : "收藏")
-            .accessibilityLabel(d.favorite ? "取消收藏" : "收藏")
-            Button("编辑") { editing = true }
+            .help(d.favorite ? tr("取消收藏") : tr("收藏"))
+            .accessibilityLabel(d.favorite ? tr("取消收藏") : tr("收藏"))
+            Button(tr("编辑")) { editing = true }
                 .buttonStyle(.kvBordered)
                 .keyboardShortcut("e")
-                .help("编辑（⌘E）")
+                .help(tr("编辑（⌘E）"))
         }
         Menu {
-            Button("历史版本…") { showingHistory = true }
+            Button(tr("历史版本…")) { showingHistory = true }
                 .keyboardShortcut("y")
             Divider()
             if d.trashed {
-                Button("恢复") { model.restore(itemId: d.id) }
-                Button("永久删除…", role: .destructive) { confirmPurge = true }
+                Button(tr("恢复")) { model.restore(itemId: d.id) }
+                Button(tr("永久删除…"), role: .destructive) { confirmPurge = true }
             } else {
-                Button("移入回收站") { model.trash(itemId: d.id) }
+                Button(tr("移入回收站")) { model.trash(itemId: d.id) }
                     .keyboardShortcut(.delete)
             }
         } label: {
@@ -130,8 +130,8 @@ struct ItemDetailView: View {
         .buttonStyle(.kvBordered)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("更多")
-        .accessibilityLabel("更多操作")
+        .help(tr("更多"))
+        .accessibilityLabel(tr("更多操作"))
     }
 
     // MARK: - 内容
@@ -142,7 +142,7 @@ struct ItemDetailView: View {
             if hasNotice(d) { notice(d) }
             let groups = fieldGroups(d)
             if groups.isEmpty {
-                Text("还没有填写任何字段。点「编辑」添加。")
+                Text(tr("还没有填写任何字段。点「编辑」添加。"))
                     .font(KV.Typography.footnote)
                     .foregroundStyle(KV.Colors.fgSecondary)
             } else if d.itemType == "environment" {
@@ -183,7 +183,7 @@ struct ItemDetailView: View {
         HStack(spacing: 14) {
             SiteIcon(title: d.title, url: d.fields.first { $0.kind == "url" }?.value.expose(), size: 48)
             VStack(alignment: .leading, spacing: 2) {
-                Text(d.title.isEmpty ? "（无标题）" : d.title)
+                Text(d.title.isEmpty ? tr("（无标题）") : d.title)
                     .font(KV.Typography.title)
                     .foregroundStyle(KV.Colors.fgPrimary)
                     .textSelection(.enabled)
@@ -201,23 +201,25 @@ struct ItemDetailView: View {
 
     /// "个人" → "个人保险库"，"dev" → "dev 保险库"。
     static func vaultLabel(_ name: String) -> String {
-        if name.isEmpty { return "保险库" }
-        if name.hasSuffix("保险库") { return name }
-        return name.unicodeScalars.last.map(\.isASCII) == true ? "\(name) 保险库" : "\(name)保险库"
+        // 默认保险库名是数据（"个人"）：按界面语言显示
+        let name = tr(name)
+        if name.isEmpty { return tr("保险库") }
+        if name.hasSuffix(tr("保险库")) { return name }
+        return name.unicodeScalars.last.map(\.isASCII) == true ? tr("{} 保险库", "\(name)") : tr("{}保险库", "\(name)")
     }
 
     private func footer(_ d: ItemDetail) -> some View {
         HStack(spacing: KV.Space.s2) {
             ForEach(d.tags, id: \.self) { Pill(text: $0) }
             Spacer(minLength: KV.Space.s3)
-            Text(Self.relative(d.updatedMs) + "修改 ·")
+            Text(tr("{}修改 ·", Self.relative(d.updatedMs)))
                 .font(KV.Typography.footnote)
                 .foregroundStyle(KV.Colors.fgSecondary)
-            Button("\(d.revisionCount) 个历史版本") { showingHistory = true }
+            Button(tr("{} 个历史版本", "\(d.revisionCount)")) { showingHistory = true }
                 .buttonStyle(.plain)
                 .font(KV.Typography.footnote)
                 .foregroundStyle(KV.Colors.accentFg)
-                .help("查看与恢复历史版本（⌘Y）")
+                .help(tr("查看与恢复历史版本（⌘Y）"))
         }
         .padding(.top, KV.Space.s1)
     }
@@ -227,10 +229,10 @@ struct ItemDetailView: View {
         let date = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
         let seconds = Date().timeIntervalSince(date)
         switch seconds {
-        case ..<60: return "刚刚"
-        case ..<3600: return "\(Int(seconds / 60)) 分钟前"
-        case ..<86_400: return "\(Int(seconds / 3600)) 小时前"
-        case ..<(86_400 * 30): return "\(Int(seconds / 86_400)) 天前"
+        case ..<60: return tr("刚刚")
+        case ..<3600: return tr("{} 分钟前", "\(Int(seconds / 60))")
+        case ..<86_400: return tr("{} 小时前", "\(Int(seconds / 3600))")
+        case ..<(86_400 * 30): return tr("{} 天前", "\(Int(seconds / 86_400))")
         default: return date.formatted(.dateTime.year().month().day().locale(Locale(identifier: "zh_Hans"))) + " "
         }
     }
@@ -276,26 +278,26 @@ struct ItemDetailView: View {
     private func notice(_ d: ItemDetail) -> some View {
         if d.trashed {
             HStack(spacing: KV.Space.s2) {
-                Banner(kind: .info, message: "这个条目在回收站中。")
-                Button("恢复") { model.restore(itemId: d.id) }.buttonStyle(.kvBordered)
-                Button("永久删除…") { confirmPurge = true }.buttonStyle(.kvBordered)
+                Banner(kind: .info, message: tr("这个条目在回收站中。"))
+                Button(tr("恢复")) { model.restore(itemId: d.id) }.buttonStyle(.kvBordered)
+                Button(tr("永久删除…")) { confirmPurge = true }.buttonStyle(.kvBordered)
             }
         } else if !d.conflicts.isEmpty || d.resurrected || d.integrityIssues > 0 {
             HStack(spacing: KV.Space.s2) {
                 Banner(kind: .warning, message: conflictSummary(d))
-                Button("处理…") { showingConflicts = true }.buttonStyle(.kvBordered)
+                Button(tr("处理…")) { showingConflicts = true }.buttonStyle(.kvBordered)
             }
         } else if d.headCount > 64 {
-            Banner(kind: .info, message: "这个条目的并发修订异常多。编辑并保存一次即可合并。")
+            Banner(kind: .info, message: tr("这个条目的并发修订异常多。编辑并保存一次即可合并。"))
         }
     }
 
     private func conflictSummary(_ d: ItemDetail) -> String {
         var parts: [String] = []
-        if d.resurrected { parts.append("另一台设备删除了这个条目，但这里有新的修改，已为你保留") }
-        if !d.conflicts.isEmpty { parts.append("\(d.conflicts.count) 处修改与其他设备冲突") }
-        if d.integrityIssues > 0 { parts.append("合并时发现 \(d.integrityIssues) 处来源不一致的内容") }
-        return parts.joined(separator: "；") + "。"
+        if d.resurrected { parts.append(tr("另一台设备删除了这个条目，但这里有新的修改，已为你保留")) }
+        if !d.conflicts.isEmpty { parts.append(tr("{} 处修改与其他设备冲突", "\(d.conflicts.count)")) }
+        if d.integrityIssues > 0 { parts.append(tr("合并时发现 {} 处来源不一致的内容", "\(d.integrityIssues)")) }
+        return parts.joined(separator: tr("；")) + tr("。")
     }
 
     private func toggle(_ id: String) {

@@ -46,6 +46,11 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 scripts/check-crypto-deps.py
+      - name: 界面文字的翻译完整，生成的表是最新的
+        run: |
+          python3 -I scripts/i18n.py check
+          python3 -I scripts/i18n.py gen
+          git diff --exit-code apps/macos/Sources/KeevoUI/LocalizationTable.swift apps/browser-extension/src/i18n-table.ts
       - name: 设计令牌（对比度达标且生成产物已更新）
         run: python3 design/build_tokens.py --check
 

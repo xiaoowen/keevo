@@ -27,7 +27,7 @@ cd "$EXT"
 [[ -d node_modules ]] || npm ci --ignore-scripts --no-audit --no-fund
 rm -rf dist
 npx tsc -p .
-cp static/* dist/
+cp -R static/. dist/
 mkdir -p dist/wasm
 cp src/wasm/keevo_wasm.js src/wasm/keevo_wasm_bg.wasm dist/wasm/
 echo "扩展已构建：$EXT/dist（在 chrome://extensions 中用「加载已解压的扩展程序」载入）"

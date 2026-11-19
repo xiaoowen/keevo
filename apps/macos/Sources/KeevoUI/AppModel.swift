@@ -186,7 +186,7 @@ final class AppModel {
     convenience init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Keevo", isDirectory: true)
-        self.init(dataDirectory: support, enclave: SecureEnclaveBridge(touchIDReason: "解锁 Keevo"), background: true)
+        self.init(dataDirectory: support, enclave: SecureEnclaveBridge(touchIDReason: tr("解锁 Keevo")), background: true)
     }
 
     /// `dataDirectory`：数据库与本机密钥目录（spec/crypto.md §8.7）。`background` 为 `false` 时不监听系统锁定、
@@ -720,54 +720,54 @@ final class AppModel {
     }
 
     static func describe(_ error: Error) -> String {
-        guard let error = error as? KeevoError else { return "发生了意外错误。" }
+        guard let error = error as? KeevoError else { return tr("发生了意外错误。") }
         switch error {
         case .WrongCredentials:
-            return "主密码或账户密钥不正确。"
+            return tr("主密码或账户密钥不正确。")
         case .SecretKeyRequired:
-            return "这台 Mac 上没有可用的账户密钥（例如数据是从别处恢复的）。请从应急包中输入账户密钥，之后只需主密码。"
+            return tr("这台 Mac 上没有可用的账户密钥（例如数据是从别处恢复的）。请从应急包中输入账户密钥，之后只需主密码。")
         case .TouchIdUnavailable:
-            return "现在不能使用 Touch ID，请输入主密码。"
+            return tr("现在不能使用 Touch ID，请输入主密码。")
         case .AuthenticationFailed:
-            return "Touch ID 未能识别指纹。"
+            return tr("Touch ID 未能识别指纹。")
         case .EnclaveUnavailable:
-            return "Secure Enclave 暂时不可用，请稍后重试。"
+            return tr("Secure Enclave 暂时不可用，请稍后重试。")
         case .Cancelled:
-            return "已取消。"
+            return tr("已取消。")
         case .InvalidSecretKey(let code) where code == "checksum_mismatch":
-            return "账户密钥校验失败，请检查是否有输错的字符。"
+            return tr("账户密钥校验失败，请检查是否有输错的字符。")
         case .InvalidSecretKey:
-            return "账户密钥格式不正确，应形如 K1-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX。"
+            return tr("账户密钥格式不正确，应形如 K1-XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX。")
         case .Tampered:
-            return "数据似乎被篡改或损坏了，Keevo 已阻止打开它。你可以从历史版本恢复。"
+            return tr("数据似乎被篡改或损坏了，Keevo 已阻止打开它。你可以从历史版本恢复。")
         case .Locked:
-            return "保险库已锁定。"
+            return tr("保险库已锁定。")
         case .DeveloperServiceUnavailable(let reason) where reason.contains("cdhash was not compiled in"):
-            return "请从打包的 Keevo.app 运行（scripts/package-macos.sh），命令行工具与 SSH Agent 才能使用。"
+            return tr("请从打包的 Keevo.app 运行（scripts/package-macos.sh），命令行工具与 SSH Agent 才能使用。")
         case .DeveloperServiceUnavailable(let reason):
-            return "无法启动：\(reason)"
+            return tr("无法启动：{}", "\(reason)")
         case .SshKey(let code, let detail):
             return sshKeyProblem(code: code, detail: detail)
         case .Backup(let code) where code == "other_account":
-            return "这份备份属于另一个 Keevo 账户，不能用来恢复这个保险库。"
+            return tr("这份备份属于另一个 Keevo 账户，不能用来恢复这个保险库。")
         case .Backup(let code) where code == "newer_version":
-            return "这份备份来自更新版本的 Keevo，请先更新 Keevo。"
+            return tr("这份备份来自更新版本的 Keevo，请先更新 Keevo。")
         case .Backup:
-            return "这不是 Keevo 备份文件，或者文件已损坏。"
+            return tr("这不是 Keevo 备份文件，或者文件已损坏。")
         case .KdfNeedsConfirmation:
-            return "这个保险库的解锁参数异常地高，可能被篡改过。为安全起见，Keevo 没有自动解锁。"
+            return tr("这个保险库的解锁参数异常地高，可能被篡改过。为安全起见，Keevo 没有自动解锁。")
         case .ItemTooLarge:
-            return "这个条目合并其他设备的内容后过大，无法保存。请先处理冲突或删除部分字段。"
+            return tr("这个条目合并其他设备的内容后过大，无法保存。请先处理冲突或删除部分字段。")
         case .ItemNeedsRebuild:
-            return "这个条目合并其他设备的内容后超出了上限，只能查看。可以把它重建为一个新条目后继续编辑。"
+            return tr("这个条目合并其他设备的内容后超出了上限，只能查看。可以把它重建为一个新条目后继续编辑。")
         case .NotFound:
-            return "这个条目已不存在。"
+            return tr("这个条目已不存在。")
         case .BrowserServiceUnavailable(let reason) where reason.contains("cdhash"):
-            return "这个构建没有编译进 native host 的 cdhash，请用 scripts/package-macos.sh 打包后运行。"
+            return tr("这个构建没有编译进 native host 的 cdhash，请用 scripts/package-macos.sh 打包后运行。")
         case .BrowserServiceUnavailable(let reason):
-            return "浏览器服务无法启动（\(reason)）。"
+            return tr("浏览器服务无法启动（{}）。", "\(reason)")
         default:
-            return "操作失败：\(error)"
+            return tr("操作失败：{}", "\(error)")
         }
     }
 
@@ -775,10 +775,10 @@ final class AppModel {
     var passwordReasonText: String? {
         guard touchIDEnabled || passwordReason == .invalidated else { return nil }
         switch passwordReason {
-        case .restarted: return "Mac 重启后需要输入一次主密码。"
-        case .intervalElapsed: return "距上次输入主密码已超过 \(passwordIntervalDays) 天，请输入一次主密码。"
-        case .tooManyFailures: return "Touch ID 连续多次未能识别，请输入主密码。"
-        case .invalidated: return "Touch ID 已失效（例如指纹有变化）。输入主密码后会自动恢复。"
+        case .restarted: return tr("Mac 重启后需要输入一次主密码。")
+        case .intervalElapsed: return tr("距上次输入主密码已超过 {} 天，请输入一次主密码。", "\(passwordIntervalDays)")
+        case .tooManyFailures: return tr("Touch ID 连续多次未能识别，请输入主密码。")
+        case .invalidated: return tr("Touch ID 已失效（例如指纹有变化）。输入主密码后会自动恢复。")
         case .notEnabled, nil: return nil
         }
     }

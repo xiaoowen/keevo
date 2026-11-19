@@ -185,7 +185,8 @@
   }
 
   function showIcon(field: HTMLInputElement): void {
-    const label = anchorKind === "otp" ? "用 Keevo 填入一次性密码" : "用 Keevo 填充";
+    // 内容脚本不能使用模块导入：文字取自 _locales（按浏览器的界面语言）
+    const label = chrome.i18n.getMessage(anchorKind === "otp" ? "fillOtpWithKeevo" : "fillWithKeevo");
     if (icon) {
       icon.button.setAttribute("aria-label", label);
       icon.button.title = label;

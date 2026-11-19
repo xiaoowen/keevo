@@ -1,0 +1,17 @@
+{
+  "name": {
+    "message": "Keevo (Dev)"
+  },
+  "description": {
+    "message": "Keevo browser extension prototype, for development only. Don't store real data."
+  },
+  "openInlineMenu": {
+    "message": "Open the Keevo fill menu in the current field"
+  },
+  "fillWithKeevo": {
+    "message": "Fill with Keevo"
+  },
+  "fillOtpWithKeevo": {
+    "message": "Fill one-time password with Keevo"
+  }
+}

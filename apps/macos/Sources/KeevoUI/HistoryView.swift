@@ -23,8 +23,8 @@ struct HistorySheet: View {
 
     var body: some View {
         SheetScaffold(
-            title: "历史版本",
-            subtitle: "最近 20 个版本，以及 90 天内（按 Keevo 的运行时间计）的全部版本会保留内容；更早的只保留修订记录。",
+            title: tr("历史版本"),
+            subtitle: tr("最近 20 个版本，以及 90 天内（按 Keevo 的运行时间计）的全部版本会保留内容；更早的只保留修订记录。"),
             systemImage: "clock.arrow.circlepath",
             width: 760
         ) {
@@ -47,10 +47,10 @@ struct HistorySheet: View {
             }
             .frame(height: 340)
         } footer: {
-            Button("关闭") { dismiss() }
+            Button(tr("关闭")) { dismiss() }
                 .buttonStyle(.kvSecondary)
                 .keyboardShortcut(.cancelAction)
-            Button("恢复到此版本…") { confirmRestore = true }
+            Button(tr("恢复到此版本…")) { confirmRestore = true }
                 .buttonStyle(.kvPrimary)
                 .disabled(fields == nil || isLatest)
         }
@@ -67,14 +67,14 @@ struct HistorySheet: View {
             fields = model.revisionFields(itemId: itemId, revId: entry.revId)
         }
         .onDisappear { fields = nil; revealed = [] }
-        .confirmationDialog("恢复到这个版本？", isPresented: $confirmRestore) {
-            Button("恢复") {
+        .confirmationDialog(tr("恢复到这个版本？"), isPresented: $confirmRestore) {
+            Button(tr("恢复")) {
                 if let id = selected { model.restoreVersion(itemId: itemId, revId: id) }
                 dismiss()
             }
-            Button("取消", role: .cancel) {}
+            Button(tr("取消"), role: .cancel) {}
         } message: {
-            Text("这个版本的内容会作为一次新的修改保存；当前的内容仍然留在历史中，可以再恢复回来。")
+            Text(tr("这个版本的内容会作为一次新的修改保存；当前的内容仍然留在历史中，可以再恢复回来。"))
         }
     }
 
@@ -82,12 +82,12 @@ struct HistorySheet: View {
         let isSelected = entry.revId == selected
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: KV.Space.s1_5) {
-                Text(entry.title ?? (entry.deleted ? "（永久删除）" : "（内容已清理）"))
+                Text(entry.title ?? (entry.deleted ? tr("（永久删除）") : tr("（内容已清理）")))
                     .font(isSelected ? KV.Typography.bodyStrong : KV.Typography.body)
                     .foregroundStyle(entry.title == nil ? KV.Colors.fgSecondary : KV.Colors.fgPrimary)
                     .lineLimit(1)
                 if entry.revId == history.first?.revId {
-                    Text("当前")
+                    Text(tr("当前"))
                         .font(KV.Typography.caption.weight(.semibold))
                         .foregroundStyle(KV.Colors.accentFg)
                         .padding(.horizontal, 6)
@@ -100,7 +100,7 @@ struct HistorySheet: View {
                     Text(Date(timeIntervalSince1970: TimeInterval(ms) / 1000), format: Self.dateFormat)
                 }
                 if entry.merge {
-                    Text("· 合并了多台设备的修改")
+                    Text(tr("· 合并了多台设备的修改"))
                 }
             }
             .font(KV.Typography.caption)
@@ -120,14 +120,14 @@ struct HistorySheet: View {
         if let entry = selectedEntry, entry.deleted || entry.pruned {
             EmptyState(
                 symbol: "clock.badge.xmark",
-                title: entry.deleted ? "永久删除" : "内容已清理",
-                message: entry.deleted ? "这是永久删除留下的记录，没有内容。" : "这个版本已超出保留期，只保留了修订记录。"
+                title: entry.deleted ? tr("永久删除") : tr("内容已清理"),
+                message: entry.deleted ? tr("这是永久删除留下的记录，没有内容。") : tr("这个版本已超出保留期，只保留了修订记录。")
             )
             .frame(maxWidth: .infinity, minHeight: 300)
         } else if let fields {
             let shown = fields.filter(FieldDisplay.hasContent)
             if shown.isEmpty {
-                EmptyState(symbol: "doc", title: "没有字段", message: "这个版本只有标题。")
+                EmptyState(symbol: "doc", title: tr("没有字段"), message: tr("这个版本只有标题。"))
                     .frame(maxWidth: .infinity, minHeight: 300)
             } else {
                 KVCard {
@@ -145,7 +145,7 @@ struct HistorySheet: View {
                             }
                         } actions: {
                             if field.concealed || field.kind == "totp" {
-                                Button(revealed.contains(field.id) ? "隐藏" : "显示") {
+                                Button(revealed.contains(field.id) ? tr("隐藏") : tr("显示")) {
                                     if revealed.contains(field.id) { revealed.remove(field.id) } else { revealed.insert(field.id) }
                                 }
                                 .buttonStyle(.kvLink)
@@ -155,7 +155,7 @@ struct HistorySheet: View {
                 }
             }
         } else {
-            EmptyState(symbol: "clock.arrow.circlepath", title: "选择一个版本", message: "在左侧选择一个版本查看内容。")
+            EmptyState(symbol: "clock.arrow.circlepath", title: tr("选择一个版本"), message: tr("在左侧选择一个版本查看内容。"))
                 .frame(maxWidth: .infinity, minHeight: 300)
         }
     }

@@ -11,6 +11,15 @@ struct GeneratorView: View {
         case passphrase = "口令短语"
         case pin = "PIN"
         var id: String { rawValue }
+
+        /// 显示名（原始值写在偏好中，保持不变）。
+        var title: String {
+            switch self {
+            case .password: tr("随机字符")
+            case .passphrase: tr("口令短语")
+            case .pin: "PIN"
+            }
+        }
     }
 
     /// 选择"使用"时调用；为 `nil` 时只提供复制（独立打开的生成器）。
@@ -50,18 +59,18 @@ struct GeneratorView: View {
 
     var body: some View {
         SheetScaffold(
-            title: "密码生成器",
+            title: tr("密码生成器"),
             systemImage: "wand.and.stars",
             width: 460
         ) {
             VStack(alignment: .leading, spacing: KV.Space.s4) {
-                KVSegmented(options: Mode.allCases.map { ($0.rawValue, $0.rawValue) }, selection: $modeRaw)
+                KVSegmented(options: Mode.allCases.map { ($0.rawValue, $0.title) }, selection: $modeRaw)
                 preview
                 KVCard { options }
                     .onChange(of: recipe.description) { regenerate() }
             }
         } footer: {
-            Button("复制") {
+            Button(tr("复制")) {
                 if let result {
                     Clipboard.copy(result.value.expose())
                     copied = true
@@ -70,7 +79,7 @@ struct GeneratorView: View {
             .buttonStyle(.kvSecondary)
             .disabled(result == nil)
             if let use {
-                Button("使用") {
+                Button(tr("使用")) {
                     if let result { use(result.value.expose()) }
                     dismiss()
                 }
@@ -78,7 +87,7 @@ struct GeneratorView: View {
                 .keyboardShortcut(.defaultAction)
                 .disabled(result == nil)
             } else {
-                Button("完成") { dismiss() }
+                Button(tr("完成")) { dismiss() }
                     .buttonStyle(.kvPrimary)
                     .keyboardShortcut(.defaultAction)
             }
@@ -91,44 +100,44 @@ struct GeneratorView: View {
     private var options: some View {
         switch mode {
         case .password:
-            sliderRow("长度", value: $length, range: 8...64, unit: "个字符")
+            sliderRow(tr("长度"), value: $length, range: 8...64, unit: tr("个字符"))
             CardRowDivider()
-            toggleRow("大写字母（A–Z）", $uppercase)
+            toggleRow(tr("大写字母（A–Z）"), $uppercase)
             CardRowDivider()
-            toggleRow("小写字母（a–z）", $lowercase)
+            toggleRow(tr("小写字母（a–z）"), $lowercase)
             CardRowDivider()
-            toggleRow("数字（0–9）", $digits)
+            toggleRow(tr("数字（0–9）"), $digits)
             CardRowDivider()
-            toggleRow("符号（!#$%&*+-.:;=?@^_~）", $symbols)
+            toggleRow(tr("符号（!#$%&*+-.:;=?@^_~）"), $symbols)
             CardRowDivider()
-            toggleRow("排除容易看错的字符（0 O o 1 l I）", $avoidAmbiguous)
+            toggleRow(tr("排除容易看错的字符（0 O o 1 l I）"), $avoidAmbiguous)
         case .passphrase:
-            sliderRow("单词数", value: $words, range: 3...10, unit: "个单词")
+            sliderRow(tr("单词数"), value: $words, range: 3...10, unit: tr("个单词"))
             CardRowDivider()
-            SettingsRow(title: "分隔符") {
-                Picker("分隔符", selection: $separator) {
-                    Text("连字符 -").tag("-")
-                    Text("空格").tag(" ")
-                    Text("句点 .").tag(".")
-                    Text("下划线 _").tag("_")
+            SettingsRow(title: tr("分隔符")) {
+                Picker(tr("分隔符"), selection: $separator) {
+                    Text(tr("连字符 -")).tag("-")
+                    Text(tr("空格")).tag(" ")
+                    Text(tr("句点 .")).tag(".")
+                    Text(tr("下划线 _")).tag("_")
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
                 .fixedSize()
             }
             CardRowDivider()
-            toggleRow("首字母大写", $capitalize)
+            toggleRow(tr("首字母大写"), $capitalize)
             CardRowDivider()
-            toggleRow("加一位数字", $includeNumber)
+            toggleRow(tr("加一位数字"), $includeNumber)
             CardRowDivider()
-            Text("单词来自 EFF 大词表（7776 个英文单词，CC BY 3.0 US）。")
+            Text(tr("单词来自 EFF 大词表（7776 个英文单词，CC BY 3.0 US）。"))
                 .font(KV.Typography.footnote)
                 .foregroundStyle(KV.Colors.fgSecondary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .pin:
-            sliderRow("位数", value: $pinLength, range: 4...12, unit: "位")
+            sliderRow(tr("位数"), value: $pinLength, range: 4...12, unit: tr("位"))
         }
     }
 
@@ -166,13 +175,13 @@ struct GeneratorView: View {
                             .textSelection(.enabled)
                             .lineLimit(3)
                     } else {
-                        Text(failed ? "请至少选择一种字符" : " ")
+                        Text(failed ? tr("请至少选择一种字符") : " ")
                             .font(KV.Typography.body)
                             .foregroundStyle(KV.Colors.statusDangerFg)
                     }
                 }
                 .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                IconButton(systemImage: "arrow.clockwise", label: "重新生成") { regenerate() }
+                IconButton(systemImage: "arrow.clockwise", label: tr("重新生成")) { regenerate() }
                     .keyboardShortcut("r")
             }
             .padding(.leading, KV.Space.s4)
@@ -203,10 +212,10 @@ struct StrengthMeter: View {
 
     private var level: (Int, String, Color) {
         switch bits {
-        case ..<40: (1, "弱", KV.Colors.statusDangerFg)
-        case ..<60: (2, "一般", KV.Colors.statusWarningFg)
-        case ..<80: (3, "强", KV.Colors.statusSuccessFg)
-        default: (4, "很强", KV.Colors.statusSuccessFg)
+        case ..<40: (1, tr("弱"), KV.Colors.statusDangerFg)
+        case ..<60: (2, tr("一般"), KV.Colors.statusWarningFg)
+        case ..<80: (3, tr("强"), KV.Colors.statusSuccessFg)
+        default: (4, tr("很强"), KV.Colors.statusSuccessFg)
         }
     }
 
@@ -220,10 +229,10 @@ struct StrengthMeter: View {
                 }
             }
             Text(level.1).font(KV.Typography.footnote.weight(.semibold)).foregroundStyle(level.2)
-            Text("约 \(Int(bits.rounded())) 比特熵").font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
+            Text(tr("约 {} 比特熵", "\(Int(bits.rounded()))")).font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("强度：\(level.1)，约 \(Int(bits.rounded())) 比特熵")
+        .accessibilityLabel(tr("强度：{}，约 {} 比特熵", "\(level.1)", "\(Int(bits.rounded()))"))
     }
 }
 

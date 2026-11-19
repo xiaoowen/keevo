@@ -34,7 +34,7 @@ extension AppModel {
                 let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? 0
                 tooBig = (url.lastPathComponent, size)
             } catch KeevoError.Attachment {
-                errorMessage = "无法读取「\(url.lastPathComponent)」。文件夹不能作为附件。"
+                errorMessage = tr("无法读取「{}」。文件夹不能作为附件。", "\(url.lastPathComponent)")
             } catch {
                 report(error)
             }
@@ -48,7 +48,7 @@ extension AppModel {
         do {
             try vault.updateItem(itemId: itemId, edits: [.removeField(fieldId: fieldId)])
             reloadAfterBrowserWrite()
-            showToast("已删除附件")
+            showToast(tr("已删除附件"))
         } catch {
             report(error)
         }
@@ -62,7 +62,7 @@ extension AppModel {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try vault.saveAttachment(itemId: itemId, attachmentId: attachment.id, path: url.path)
-            showToast("已保存「\(attachment.name)」")
+            showToast(tr("已保存「{}」", "\(attachment.name)"))
         } catch {
             report(error)
         }
@@ -99,7 +99,7 @@ enum AttachmentText {
         let date = Date(timeIntervalSince1970: TimeInterval(a.addedMs) / 1000)
         let c = Calendar.current.dateComponents([.year, .month, .day], from: date)
         let sameYear = c.year == Calendar.current.component(.year, from: Date())
-        return "\(size) · " + (sameYear ? "" : "\(c.year ?? 0)年") + "\(c.month ?? 0)月\(c.day ?? 0)日添加"
+        return "\(size) · " + (sameYear ? "" : tr("{}年", "\(c.year ?? 0)")) + tr("{}月{}日添加", "\(c.month ?? 0)", "\(c.day ?? 0)")
     }
 }
 
@@ -119,9 +119,9 @@ struct AttachmentsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: KV.Space.s2) {
             HStack {
-                GroupTitle(text: fields.isEmpty ? "附件" : "附件（\(fields.count)）")
+                GroupTitle(text: fields.isEmpty ? tr("附件") : tr("附件（{}）", "\(fields.count)"))
                 Spacer()
-                Button { choose() } label: { Label("添加附件…", systemImage: "plus") }
+                Button { choose() } label: { Label(tr("添加附件…"), systemImage: "plus") }
                     .buttonStyle(.kvLink)
             }
             if !fields.isEmpty {
@@ -132,7 +132,7 @@ struct AttachmentsSection: View {
                     }
                 }
             }
-            Text("附件与条目一起加密保存在这台 Mac 上；单个文件最大 50 MB。也可以把文件拖到这里。")
+            Text(tr("附件与条目一起加密保存在这台 Mac 上；单个文件最大 50 MB。也可以把文件拖到这里。"))
                 .font(KV.Typography.footnote)
                 .foregroundStyle(KV.Colors.fgSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -159,12 +159,12 @@ struct AttachmentsSection: View {
                 Text(AttachmentText.detail(a)).font(KV.Typography.caption).foregroundStyle(KV.Colors.fgSecondary)
             }
             Spacer(minLength: KV.Space.s2)
-            Button("预览") { preview = model.previewURL(itemId: itemId, attachment: a) }
+            Button(tr("预览")) { preview = model.previewURL(itemId: itemId, attachment: a) }
                 .buttonStyle(.kvLink)
-            Button("保存…") { model.saveAttachment(itemId: itemId, attachment: a) }
+            Button(tr("保存…")) { model.saveAttachment(itemId: itemId, attachment: a) }
                 .buttonStyle(.kvLink)
             Menu {
-                Button("删除附件…", role: .destructive) { deleting = f }
+                Button(tr("删除附件…"), role: .destructive) { deleting = f }
             } label: {
                 Image(systemName: "ellipsis").foregroundStyle(KV.Colors.fgSecondary)
             }
@@ -172,7 +172,7 @@ struct AttachmentsSection: View {
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
             .fixedSize()
-            .accessibilityLabel("更多操作")
+            .accessibilityLabel(tr("更多操作"))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
@@ -183,8 +183,8 @@ struct AttachmentsSection: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
-        panel.prompt = "添加"
-        panel.message = "选择要添加到「\(title)」的文件。"
+        panel.prompt = tr("添加")
+        panel.message = tr("选择要添加到「{}」的文件。", "\(title)")
         guard panel.runModal() == .OK else { return }
         let urls = panel.urls
         Task {
@@ -202,8 +202,8 @@ struct AttachmentDropOverlay: View {
     var body: some View {
         VStack(spacing: 6) {
             Image(systemName: "paperclip").font(.system(size: 22)).foregroundStyle(KV.Colors.accentFg)
-            Text("松开即可添加到「\(title)」").font(KV.Typography.bodyStrong).foregroundStyle(KV.Colors.accentFg)
-            Text("可以一次添加多个文件").font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
+            Text(tr("松开即可添加到「{}」", "\(title)")).font(KV.Typography.bodyStrong).foregroundStyle(KV.Colors.accentFg)
+            Text(tr("可以一次添加多个文件")).font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(KV.Colors.accentSubtle.opacity(0.92), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -228,18 +228,18 @@ struct TooBigAttachmentSheet: View {
 
     var body: some View {
         SheetScaffold(
-            title: "无法添加「\(file.name)」",
-            subtitle: "这个文件有 \(ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file))，超过了单个附件 50 MB 的上限。",
+            title: tr("无法添加「{}」", "\(file.name)"),
+            subtitle: tr("这个文件有 {}，超过了单个附件 50 MB 的上限。", "\(ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file))"),
             systemImage: "exclamationmark.triangle",
             tint: KV.Colors.statusWarningFg,
             width: 460
         ) {
-            Text("大文件请放在加密磁盘或其他位置；在条目中记录它的位置即可。")
+            Text(tr("大文件请放在加密磁盘或其他位置；在条目中记录它的位置即可。"))
                 .font(KV.Typography.footnote)
                 .foregroundStyle(KV.Colors.fgSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         } footer: {
-            Button("好") { dismiss() }
+            Button(tr("好")) { dismiss() }
                 .buttonStyle(.kvPrimary)
                 .keyboardShortcut(.defaultAction)
         }
@@ -253,19 +253,19 @@ struct DeleteAttachmentSheet: View {
 
     var body: some View {
         SheetScaffold(
-            title: "删除附件「\(name)」？",
-            subtitle: "删除后不再出现在条目中。",
+            title: tr("删除附件「{}」？", "\(name)"),
+            subtitle: tr("删除后不再出现在条目中。"),
             systemImage: "trash",
             tint: KV.Colors.statusDangerFg,
             width: 460
         ) {
-            Text("附件保留在条目的历史版本中，可以通过「恢复到此版本」找回；清理历史后彻底删除。")
+            Text(tr("附件保留在条目的历史版本中，可以通过「恢复到此版本」找回；清理历史后彻底删除。"))
                 .font(KV.Typography.footnote)
                 .foregroundStyle(KV.Colors.fgSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         } footer: {
-            Button("取消") { dismiss() }.buttonStyle(.kvSecondary).keyboardShortcut(.cancelAction)
-            Button("删除") {
+            Button(tr("取消")) { dismiss() }.buttonStyle(.kvSecondary).keyboardShortcut(.cancelAction)
+            Button(tr("删除")) {
                 confirm()
                 dismiss()
             }

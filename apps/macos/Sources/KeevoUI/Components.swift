@@ -72,7 +72,7 @@ struct SecretText: View {
                 .font(KV.Typography.mono)
                 .tracking(1)
                 .foregroundStyle(KV.Colors.fgSecondary)
-                .accessibilityLabel("已隐藏")
+                .accessibilityLabel(tr("已隐藏"))
         }
     }
 }
@@ -133,11 +133,11 @@ struct LargeTypeView: View {
                 }
             }
             HStack(spacing: KV.Space.s4) {
-                legend("字母", .letter)
-                legend("数字", .digit)
-                legend("符号", .symbol)
+                legend(tr("字母"), .letter)
+                legend(tr("数字"), .digit)
+                legend(tr("符号"), .symbol)
                 Spacer()
-                Button("完成") { dismiss() }.keyboardShortcut(.defaultAction)
+                Button(tr("完成")) { dismiss() }.keyboardShortcut(.defaultAction)
             }
         }
         .padding(KV.Space.s6)
@@ -226,7 +226,7 @@ struct PairingCode: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("配对码：\(words.map(\.zh).joined(separator: "、"))")
+        .accessibilityLabel(tr("配对码：{}", "\(words.map { UILanguage.current == .en ? $0.en : $0.zh }.joined(separator: tr("、")))"))
     }
 }
 
@@ -364,8 +364,8 @@ struct LargeTypeButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("大字显示")
-        .accessibilityLabel("大字显示")
+        .help(tr("大字显示"))
+        .accessibilityLabel(tr("大字显示"))
     }
 }
 
@@ -391,7 +391,7 @@ struct KVSearchField: View {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(KV.Colors.fgTertiary)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("清除搜索")
+                .accessibilityLabel(tr("清除搜索"))
             }
         }
         .padding(.horizontal, 10)
@@ -426,7 +426,8 @@ struct GroupTitle: View {
     let text: String
 
     var body: some View {
-        Text(text)
+        // 分区名可能是模板的默认名称：按界面语言显示
+        Text(tr(text))
             .font(KV.Typography.body.weight(.semibold))
             .foregroundStyle(KV.Colors.fgSecondary)
             .accessibilityAddTraits(.isHeader)

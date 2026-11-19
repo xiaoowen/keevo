@@ -10,6 +10,7 @@
 //
 // 键盘：搜索框中 ↑↓ 选择当前网站的条目，回车填充，Esc 关闭弹窗。
 
+import { LANG, t } from "./i18n.js";
 import { glyph, lockGlyph, logoMark, siteIcon } from "./brand.js";
 import type { Candidate, PopupRequest, PopupResponse, Recipe, SasWord, ViewState } from "./types.js";
 
@@ -43,28 +44,28 @@ function iconButton(icon: SVGSVGElement, label: string, onClick: () => void): HT
 }
 
 const ERRORS: Record<string, string> = {
-  host_not_installed: "没有找到 Keevo 的本机组件。请在 Keevo 的「设置 → 浏览器」中安装 Chrome 支持。",
-  service_unavailable: "未能连接 Keevo。请确认 Keevo 正在运行。",
-  disconnected: "与 Keevo 的连接已断开。",
-  not_paired: "Keevo 不认识这个浏览器了，请重新配对。",
-  pairing_rejected: "配对已被拒绝或超时。",
-  pairing_limited: "Keevo 正在处理另一个配对，或配对尝试过于频繁，请稍后再试。",
-  locked: "Keevo 已锁定。请先在 Keevo 中解锁。",
-  not_authorized: "没有得到授权：在 Keevo 中被拒绝或超时，或者这个浏览器的填充已被暂停。",
-  not_found: "这个条目已不存在。",
-  url_mismatch: "这个条目与当前网站不匹配，已拒绝。",
-  response_too_large: "这个条目的内容太长，无法自动填充。请在 Keevo 中复制。",
-  no_tab: "没有找到当前标签页。",
-  queries_limited: "这个浏览器短时间内查询了太多网站，Keevo 暂时停止回答。请在 Keevo 中查看。",
-  unsupported: "这个版本的 Keevo 不支持这项操作，请更新 Keevo。",
-  bad_request: "通信出错，请重试。",
-  protocol: "通信出错，请重试。",
-  failed: "操作没有完成，请重试。",
+  host_not_installed: t("没有找到 Keevo 的本机组件。请在 Keevo 的「设置 → 浏览器」中安装 Chrome 支持。"),
+  service_unavailable: t("未能连接 Keevo。请确认 Keevo 正在运行。"),
+  disconnected: t("与 Keevo 的连接已断开。"),
+  not_paired: t("Keevo 不认识这个浏览器了，请重新配对。"),
+  pairing_rejected: t("配对已被拒绝或超时。"),
+  pairing_limited: t("Keevo 正在处理另一个配对，或配对尝试过于频繁，请稍后再试。"),
+  locked: t("Keevo 已锁定。请先在 Keevo 中解锁。"),
+  not_authorized: t("没有得到授权：在 Keevo 中被拒绝或超时，或者这个浏览器的填充已被暂停。"),
+  not_found: t("这个条目已不存在。"),
+  url_mismatch: t("这个条目与当前网站不匹配，已拒绝。"),
+  response_too_large: t("这个条目的内容太长，无法自动填充。请在 Keevo 中复制。"),
+  no_tab: t("没有找到当前标签页。"),
+  queries_limited: t("这个浏览器短时间内查询了太多网站，Keevo 暂时停止回答。请在 Keevo 中查看。"),
+  unsupported: t("这个版本的 Keevo 不支持这项操作，请更新 Keevo。"),
+  bad_request: t("通信出错，请重试。"),
+  protocol: t("通信出错，请重试。"),
+  failed: t("操作没有完成，请重试。"),
 };
 
 const FILL_RESULTS: Record<string, string> = {
-  no_password_field: "页面上没有找到可见的密码框。",
-  origin_changed: "页面已跳转到其他网站，已取消填充。",
+  no_password_field: t("页面上没有找到可见的密码框。"),
+  origin_changed: t("页面已跳转到其他网站，已取消填充。"),
 };
 
 type NoteKind = "info" | "warning" | "danger" | "success";
@@ -205,18 +206,18 @@ function header(): HTMLElement {
   const s = view.state;
   if (view.page === "generator" || (view.page === "new_login" && s.status === "connected" && !s.locked)) {
     h.append(
-      iconButton(glyph("back", 13, 2.4), "返回", () => {
+      iconButton(glyph("back", 13, 2.4), t("返回"), () => {
         view.page = "list";
         view.note = null;
         render();
       }),
-      el("h1", view.page === "generator" ? "生成密码" : "新建登录"),
+      el("h1", view.page === "generator" ? t("生成密码") : t("新建登录")),
     );
     return h;
   }
-  h.append(logoMark(20), el("h1", "Keevo"), el("span", "开发版", "badge"));
+  h.append(logoMark(20), el("h1", "Keevo"), el("span", t("开发版"), "badge"));
   if (s.status === "connected" && !view.repairing) {
-    h.append(el("span", s.locked ? "已锁定" : "已连接", s.locked ? "status" : "status ok"));
+    h.append(el("span", s.locked ? t("已锁定") : t("已连接"), s.locked ? "status" : "status ok"));
   }
   return h;
 }
@@ -238,15 +239,15 @@ function render(): void {
       case "idle":
       case "connecting":
       case "pairing":
-        root.append(el("p", "正在连接 Keevo…", "muted"));
+        root.append(el("p", t("正在连接 Keevo…"), "muted"));
         break;
       case "awaiting_confirm":
         renderSas(s.words);
         break;
       case "error":
-        root.append(el("div", ERRORS[s.error] ?? `出错了（${s.error}）`, "banner danger"));
+        root.append(el("div", ERRORS[s.error] ?? t("出错了（{}）", String(s.error)), "banner danger"));
         root.append(
-          button("重新配对", () => {
+          button(t("重新配对"), () => {
             view.repairing = true;
             render();
           }),
@@ -277,26 +278,26 @@ function renderLocked(touchId: boolean): void {
   const box = el("div", undefined, "locked");
   const icon = el("div", undefined, "locked-icon");
   icon.append(lockGlyph(22));
-  box.append(icon, el("h2", "Keevo 已锁定"));
+  box.append(icon, el("h2", t("Keevo 已锁定")));
   root.append(box);
   if (view.version < 3) {
-    box.append(el("p", "请在 Keevo 应用中解锁。解锁只在 Keevo 中进行，扩展从不接触你的主密码。", "muted"));
+    box.append(el("p", t("请在 Keevo 应用中解锁。解锁只在 Keevo 中进行，扩展从不接触你的主密码。"), "muted"));
     return;
   }
   if (Date.now() - view.unlocking < UNLOCK_WAIT_MS) {
     box.append(
       el(
         "p",
-        touchId ? "请在弹出的 Touch ID 窗口中验证指纹。解锁后会回到这里。" : "请在 Keevo 中输入主密码。解锁后会回到这里。",
+        touchId ? t("请在弹出的 Touch ID 窗口中验证指纹。解锁后会回到这里。") : t("请在 Keevo 中输入主密码。解锁后会回到这里。"),
         "muted",
       ),
     );
-    const waiting = button("正在等待 Keevo…", () => undefined, "wide");
+    const waiting = button(t("正在等待 Keevo…"), () => undefined, "wide");
     waiting.disabled = true;
     waiting.prepend(el("span", undefined, "spinner"));
     box.append(waiting);
-    const hint = el("p", touchId ? "没有看到 Touch ID 窗口？" : "没有看到 Keevo？", "note");
-    hint.append(button("切换到 Keevo", () => void ask({ type: "open" }), "link"));
+    const hint = el("p", touchId ? t("没有看到 Touch ID 窗口？") : t("没有看到 Keevo？"), "note");
+    hint.append(button(t("切换到 Keevo"), () => void ask({ type: "open" }), "link"));
     box.append(hint);
     return;
   }
@@ -304,12 +305,12 @@ function renderLocked(touchId: boolean): void {
     el(
       "p",
       touchId
-        ? "解锁在 Keevo 应用中完成，扩展从不接触你的主密码。"
-        : "这次解锁需要在 Keevo 中输入主密码。扩展从不接触你的主密码。",
+        ? t("解锁在 Keevo 应用中完成，扩展从不接触你的主密码。")
+        : t("这次解锁需要在 Keevo 中输入主密码。扩展从不接触你的主密码。"),
       "muted",
     ),
   );
-  const go = button(touchId ? "用 Touch ID 解锁" : "在 Keevo 中解锁", () => void unlock(), "wide");
+  const go = button(touchId ? t("用 Touch ID 解锁") : t("在 Keevo 中解锁"), () => void unlock(), "wide");
   if (touchId) go.prepend(glyph("touchid", 15, 1.9));
   box.append(go);
 }
@@ -328,8 +329,8 @@ async function unlock(): Promise<void> {
 }
 
 function renderPairForm(): void {
-  root.append(el("p", "这个浏览器还没有与 Keevo 配对。配对需要 Keevo 正在运行并已解锁。"));
-  const label = el("label", "在 Keevo 中显示的名称", "field-label");
+  root.append(el("p", t("这个浏览器还没有与 Keevo 配对。配对需要 Keevo 正在运行并已解锁。")));
+  const label = el("label", t("在 Keevo 中显示的名称"), "field-label");
   const input = el("input");
   input.id = "pair-name";
   input.maxLength = 64;
@@ -339,11 +340,11 @@ function renderPairForm(): void {
   const preview = el("p", "", "note");
   const showPreview = async (): Promise<void> => {
     const r = await ask({ type: "display_name", name: input.value });
-    preview.textContent = r.name?.trim() ? `Keevo 中将显示为「${r.name}」` : "名称为空时显示为「Chrome」";
+    preview.textContent = r.name?.trim() ? t("Keevo 中将显示为「{}」", String(r.name)) : t("名称为空时显示为「Chrome」");
   };
   input.oninput = () => void showPreview();
   void showPreview();
-  const go = button("与 Keevo 配对", () => {
+  const go = button(t("与 Keevo 配对"), () => {
     view.repairing = false;
     view.note = null;
     void ask({ type: "pair", name: input.value }).then((r) => {
@@ -361,20 +362,20 @@ function renderPairForm(): void {
 
 /** 配对码：6 个词，与 Keevo.app 中显示的完全一致（spec/ipc.md §4.2，spec/sas-wordlist-v1.tsv）。 */
 function renderSas(words: SasWord[]): void {
-  root.append(el("p", "请在 Keevo 中逐个核对下面 6 个词，顺序也要一致，然后在 Keevo 中确认："));
+  root.append(el("p", t("请在 Keevo 中逐个核对下面 6 个词，顺序也要一致，然后在 Keevo 中确认：")));
   const grid = el("ol", undefined, "sas");
-  grid.setAttribute("aria-label", `配对码：${words.map((w) => w.zh).join("、")}`);
+  grid.setAttribute("aria-label", t("配对码：{}", String(words.map((w) => (LANG === "en" ? w.en : w.zh)).join(t("、")))));
   words.forEach((w, i) => {
     const cell = el("li");
     cell.append(el("span", String(i + 1), "sas-index"), el("span", w.zh, "sas-zh"), el("span", w.en, "sas-en"));
     grid.append(cell);
   });
   root.append(grid);
-  if (view.name) root.append(el("p", `这个浏览器在 Keevo 中显示为「${view.name}」。`, "note"));
+  if (view.name) root.append(el("p", t("这个浏览器在 Keevo 中显示为「{}」。", String(view.name)), "note"));
   root.append(
     el(
       "div",
-      "Keevo 中会弹出确认窗口。如果没有出现，说明有程序在冒充 Keevo，请关闭这个弹窗，不要继续；如果词不一致，请在 Keevo 中选择「不一致」。",
+      t("Keevo 中会弹出确认窗口。如果没有出现，说明有程序在冒充 Keevo，请关闭这个弹窗，不要继续；如果词不一致，请在 Keevo 中选择「不一致」。"),
       "banner info",
     ),
   );
@@ -387,7 +388,7 @@ function renderItems(): void {
   const search = el("input");
   search.id = "search";
   search.type = "search";
-  search.placeholder = all ? "搜索全部条目" : "搜索当前网站的登录";
+  search.placeholder = all ? t("搜索全部条目") : t("搜索当前网站的登录");
   search.setAttribute("aria-label", search.placeholder);
   search.value = view.query;
   search.autocomplete = "off";
@@ -415,27 +416,27 @@ function renderItems(): void {
   root.append(searchBox);
   if (view.blocked) {
     root.append(
-      el("div", "这个页面上的 Keevo 菜单被遮挡或变得透明，为了安全已经关闭。请在这里选择要填充的登录。", "banner warning"),
+      el("div", t("这个页面上的 Keevo 菜单被遮挡或变得透明，为了安全已经关闭。请在这里选择要填充的登录。"), "banner warning"),
     );
   }
   root.append(list);
   renderList(list);
   root.append(links());
   root.append(inlineSetting());
-  if (view.name) root.append(el("p", `这个浏览器在 Keevo 中显示为「${view.name}」`, "footer"));
+  if (view.name) root.append(el("p", t("这个浏览器在 Keevo 中显示为「{}」", String(view.name)), "footer"));
 }
 
 function renderList(list: HTMLElement): void {
   list.replaceChildren();
   const items = filtered();
   const searching = view.query.trim() !== "" && view.version >= 3;
-  if (searching) list.append(el("div", `当前网站 · ${host() || "—"}`, "section-label"));
+  if (searching) list.append(el("div", t("当前网站 · {}", String(host() || "—")), "section-label"));
   else if (view.origin) list.append(el("p", view.origin, view.origin.startsWith("https:") ? "origin secure" : "origin"));
   const current = el("div", undefined, "rows");
   current.setAttribute("role", "listbox");
-  current.setAttribute("aria-label", "当前网站的登录");
-  if (view.candidates.length === 0) current.append(el("p", "当前网站没有匹配的登录。", "muted"));
-  else if (items.length === 0) current.append(el("p", "当前网站没有符合搜索的登录。", "muted"));
+  current.setAttribute("aria-label", t("当前网站的登录"));
+  if (view.candidates.length === 0) current.append(el("p", t("当前网站没有匹配的登录。"), "muted"));
+  else if (items.length === 0) current.append(el("p", t("当前网站没有符合搜索的登录。"), "muted"));
   items.forEach((c, i) => {
     const selected = i === view.selected;
     const row = el("div", undefined, selected ? "item selected" : "item");
@@ -444,7 +445,7 @@ function renderList(list: HTMLElement): void {
     const main = el("div", undefined, "item-main");
     const text = el("div", undefined, "text");
     text.append(highlighted(c.title, "title"), el("div", c.subtitle, "subtitle"));
-    const fillButton = button("填充", () => void fill(c), "fill");
+    const fillButton = button(t("填充"), () => void fill(c), "fill");
     fillButton.disabled = view.busy;
     main.append(siteIcon(c.title, view.origin), text, fillButton);
     main.onclick = (e) => {
@@ -486,39 +487,39 @@ function otherSites(): HTMLElement {
   const s = view.search;
   if (s.status === "needs_permission" || (s.status === "error" && s.query === q)) {
     const go = button("", () => void searchAll(true), "bordered wide");
-    go.append(glyph("search", 14, 2.2), document.createTextNode(`在全部条目中搜索「${q}」`));
+    go.append(glyph("search", 14, 2.2), document.createTextNode(t("在全部条目中搜索「{}」", String(q))));
     box.append(go);
-    box.append(el("p", "第一次需要在 Keevo 中允许，之后到 Keevo 下次锁定前不再询问。搜索结果只有标题与用户名。", "note"));
+    box.append(el("p", t("第一次需要在 Keevo 中允许，之后到 Keevo 下次锁定前不再询问。搜索结果只有标题与用户名。"), "note"));
     return box;
   }
   if (s.status === "waiting") {
-    box.append(el("p", "请在 Keevo 中允许这次搜索。允许后会回到这里。", "note"));
+    box.append(el("p", t("请在 Keevo 中允许这次搜索。允许后会回到这里。"), "note"));
     return box;
   }
-  box.append(el("div", "其他网站", "section-label"));
+  box.append(el("div", t("其他网站"), "section-label"));
   const ids = new Set(view.candidates.map((c) => c.item_id));
   const others = s.query === q ? s.results.filter((c) => !ids.has(c.item_id)) : [];
   if (s.status !== "results" || s.query !== q) {
-    box.append(el("p", "正在搜索…", "muted"));
+    box.append(el("p", t("正在搜索…"), "muted"));
     return box;
   }
   if (others.length === 0) {
-    box.append(el("p", "其他网站没有符合搜索的条目。", "muted"));
+    box.append(el("p", t("其他网站没有符合搜索的条目。"), "muted"));
     return box;
   }
   const rows = el("div", undefined, "rows");
-  rows.setAttribute("aria-label", "其他网站的条目");
+  rows.setAttribute("aria-label", t("其他网站的条目"));
   for (const c of others) {
     const row = el("div", undefined, "item-main other");
     const text = el("div", undefined, "text");
     text.append(highlighted(c.title, "title"), el("div", c.subtitle, "subtitle"));
     const open = button("", () => void openInKeevo(c.item_id), "secondary open");
-    open.append(glyph("external", 11, 2.2), document.createTextNode("打开"));
-    open.setAttribute("aria-label", `在 Keevo 中打开 ${c.title}`);
+    open.append(glyph("external", 11, 2.2), document.createTextNode(t("打开")));
+    open.setAttribute("aria-label", t("在 Keevo 中打开 {}", String(c.title)));
     row.append(siteIcon(c.title, ""), text, open);
     rows.append(row);
   }
-  box.append(rows, el("p", "其他网站的条目不能在这里填充，可以在 Keevo 中打开后查看或复制。", "note"));
+  box.append(rows, el("p", t("其他网站的条目不能在这里填充，可以在 Keevo 中打开后查看或复制。"), "note"));
   return box;
 }
 
@@ -543,11 +544,11 @@ async function searchAll(allow: boolean): Promise<void> {
   if (r.results) view.search = { query, status: "results", results: r.results };
   else if (r.error === "not_authorized") {
     view.search = { query, status: "needs_permission", results: [] };
-    if (allow) setNote("warning", "没有得到允许：在 Keevo 中被拒绝或超时。");
+    if (allow) setNote("warning", t("没有得到允许：在 Keevo 中被拒绝或超时。"));
   } else {
     view.search = { query, status: "error", results: [] };
     if (r.error === "locked") view.state = r.state;
-    else setNote("danger", ERRORS[r.error ?? "failed"] ?? `出错了（${r.error}）`);
+    else setNote("danger", ERRORS[r.error ?? "failed"] ?? t("出错了（{}）", String(r.error)));
   }
   if (r.error === "locked" || (allow && r.error)) render();
   else refreshList();
@@ -565,7 +566,7 @@ async function openInKeevo(itemId?: string): Promise<void> {
 function links(): HTMLElement {
   const bar = el("footer", undefined, "links");
   bar.append(
-    button("生成密码", () => {
+    button(t("生成密码"), () => {
       view.page = "generator";
       view.note = null;
       render();
@@ -573,15 +574,15 @@ function links(): HTMLElement {
     }, "link"),
   );
   if (view.version >= 2) {
-    const create = button("新建登录", () => void startNewLogin(), "link");
+    const create = button(t("新建登录"), () => void startNewLogin(), "link");
     if (!onWebsite()) {
       create.disabled = true;
-      create.title = "当前页面不是网站";
+      create.title = t("当前页面不是网站");
     }
     bar.append(create);
   }
   if (view.version >= 3) {
-    const open = button("在 Keevo 中打开", () => void openInKeevo(), "link");
+    const open = button(t("在 Keevo 中打开"), () => void openInKeevo(), "link");
     open.classList.add("end");
     bar.append(open);
   }
@@ -596,10 +597,10 @@ function inlineSetting(): HTMLElement {
   const row = el("div", undefined, "setting");
   const text = el("div", undefined, "text");
   text.append(
-    el("div", "在输入框旁显示 Keevo 图标", "setting-title"),
-    el("div", view.inline ? "已开启。刷新页面后生效。" : "需要读取和更改网站数据的权限。不开启时可用快捷键或这个弹窗填充。", "subtitle"),
+    el("div", t("在输入框旁显示 Keevo 图标"), "setting-title"),
+    el("div", view.inline ? t("已开启。刷新页面后生效。") : t("需要读取和更改网站数据的权限。不开启时可用快捷键或这个弹窗填充。"), "subtitle"),
   );
-  const toggle = button(view.inline ? "关闭" : "开启", () => {
+  const toggle = button(view.inline ? t("关闭") : t("开启"), () => {
     // 权限请求必须是点击之后的第一个异步操作
     const change = view.inline
       ? chrome.permissions.remove({ origins: SITE_ORIGINS })
@@ -619,18 +620,18 @@ function inlineSetting(): HTMLElement {
 /** 选中条目的更多操作：复制用户名、复制密码、一次性密码、在 Keevo 中打开。 */
 function actions(c: Candidate): HTMLElement {
   const bar = el("div", undefined, "actions");
-  const copyUser = button("复制用户名", () => void copyUsername(c), "secondary");
-  const copyPass = button("复制密码", () => void copySecret(c, "password"), "secondary");
-  const otp = button("一次性密码", () => void showTotp(c), "secondary");
+  const copyUser = button(t("复制用户名"), () => void copyUsername(c), "secondary");
+  const copyPass = button(t("复制密码"), () => void copySecret(c, "password"), "secondary");
+  const otp = button(t("一次性密码"), () => void showTotp(c), "secondary");
   for (const b of [copyUser, copyPass, otp]) b.disabled = view.busy;
   bar.append(copyUser, copyPass, otp);
-  if (view.version >= 3) bar.append(button("在 Keevo 中打开", () => void openInKeevo(c.item_id), "secondary"));
+  if (view.version >= 3) bar.append(button(t("在 Keevo 中打开"), () => void openInKeevo(c.item_id), "secondary"));
   if (view.totp?.itemId === c.item_id) {
     const code = view.totp.code;
     const box = el("div", undefined, "totp");
     const digits = el("span", code.length === 6 ? `${code.slice(0, 3)} ${code.slice(3)}` : code, "totp-code");
-    digits.setAttribute("aria-label", `一次性密码 ${code.split("").join(" ")}`);
-    box.append(digits, button("复制", () => void copySecret(c, "totp"), "secondary"));
+    digits.setAttribute("aria-label", t("一次性密码 {}", String(code.split("").join(" "))));
+    box.append(digits, button(t("复制"), () => void copySecret(c, "totp"), "secondary"));
     bar.append(box);
   }
   return bar;
@@ -671,12 +672,12 @@ function classified(value: string): HTMLElement {
 /** 强度：文字、四段条与颜色一起表示（与 Keevo.app 的划分一致）。 */
 function meter(bits: number): HTMLElement {
   const [level, label, cls]: [number, string, string] =
-    bits < 40 ? [1, "弱", "danger"] : bits < 60 ? [2, "一般", "warning"] : bits < 80 ? [3, "强", "success"] : [4, "很强", "success"];
+    bits < 40 ? [1, t("弱"), "danger"] : bits < 60 ? [2, t("一般"), "warning"] : bits < 80 ? [3, t("强"), "success"] : [4, t("很强"), "success"];
   const box = el("div", undefined, `meter ${cls}`);
   box.setAttribute("role", "img");
-  box.setAttribute("aria-label", `强度：${label}，约 ${Math.round(bits)} 比特熵`);
+  box.setAttribute("aria-label", t("强度：{}，约 {} 比特熵", String(label), String(Math.round(bits))));
   for (let i = 1; i <= 4; i++) box.append(el("span", undefined, i <= level ? "bar on" : "bar"));
-  box.append(el("span", label, "level"), el("span", `约 ${Math.round(bits)} 比特熵`, "bits"));
+  box.append(el("span", label, "level"), el("span", t("约 {} 比特熵", String(Math.round(bits))), "bits"));
   return box;
 }
 
@@ -713,10 +714,10 @@ function renderGenerator(): void {
   const g = view.gen;
   const seg = el("div", undefined, "segmented");
   seg.setAttribute("role", "radiogroup");
-  seg.setAttribute("aria-label", "生成方式");
+  seg.setAttribute("aria-label", t("生成方式"));
   for (const [kind, label] of [
-    ["password", "随机字符"],
-    ["passphrase", "口令短语"],
+    ["password", t("随机字符")],
+    ["passphrase", t("口令短语")],
   ] as const) {
     const b = button(label, () => {
       if (g.kind === kind) return;
@@ -731,9 +732,9 @@ function renderGenerator(): void {
   }
   const valueBox = el("div", undefined, "gen-value");
   const output = el("output");
-  output.setAttribute("aria-label", "生成的密码");
+  output.setAttribute("aria-label", t("生成的密码"));
   if (view.generated) output.append(classified(view.generated.value));
-  valueBox.append(output, iconButton(glyph("refresh", 15), "重新生成", () => void regenerate()));
+  valueBox.append(output, iconButton(glyph("refresh", 15), t("重新生成"), () => void regenerate()));
   const card = el("div", undefined, "gen-card");
   const changed = (): void => {
     saveGenerator();
@@ -741,40 +742,40 @@ function renderGenerator(): void {
   };
   if (g.kind === "password") {
     card.append(
-      sliderRow("长度", g.length, 8, 64, (v) => {
+      sliderRow(t("长度"), g.length, 8, 64, (v) => {
         g.length = v;
         changed();
       }),
-      toggleRow("数字（0–9）", g.digits, (on) => {
+      toggleRow(t("数字（0–9）"), g.digits, (on) => {
         g.digits = on;
         changed();
       }),
-      toggleRow("符号（!#$%&*+-.:;=?@^_~）", g.symbols, (on) => {
+      toggleRow(t("符号（!#$%&*+-.:;=?@^_~）"), g.symbols, (on) => {
         g.symbols = on;
         changed();
       }),
     );
   } else {
     card.append(
-      sliderRow("单词数", g.words, 3, 10, (v) => {
+      sliderRow(t("单词数"), g.words, 3, 10, (v) => {
         g.words = v;
         changed();
       }),
-      toggleRow("首字母大写", g.capitalize, (on) => {
+      toggleRow(t("首字母大写"), g.capitalize, (on) => {
         g.capitalize = on;
         changed();
       }),
-      toggleRow("加一位数字", g.number, (on) => {
+      toggleRow(t("加一位数字"), g.number, (on) => {
         g.number = on;
         changed();
       }),
     );
   }
-  const copy = button("复制", () => void copyText(view.generated?.value ?? "", "密码"), "secondary big");
-  const fillPage = button("填入网页", () => void fillGenerated(), "big");
+  const copy = button(t("复制"), () => void copyText(view.generated?.value ?? "", t("密码")), "secondary big");
+  const fillPage = button(t("填入网页"), () => void fillGenerated(), "big");
   copy.disabled = !view.generated;
   fillPage.disabled = !view.generated || !onWebsite();
-  if (!onWebsite()) fillPage.title = "当前页面不是网站";
+  if (!onWebsite()) fillPage.title = t("当前页面不是网站");
   const buttons = el("div", undefined, "pair-buttons");
   buttons.append(copy, fillPage);
   root.append(seg, valueBox);
@@ -784,7 +785,7 @@ function renderGenerator(): void {
     buttons,
     el(
       "p",
-      "在扩展内生成，不经过网络。「填入网页」填到当前网页的新密码框；提交后 Keevo 会询问是否保存。复制的密码 90 秒后从剪贴板清除。",
+      t("在扩展内生成，不经过网络。「填入网页」填到当前网页的新密码框；提交后 Keevo 会询问是否保存。复制的密码 90 秒后从剪贴板清除。"),
       "note",
     ),
   );
@@ -816,23 +817,23 @@ async function startNewLogin(): Promise<void> {
 function renderNewLogin(): void {
   const f = view.form;
   const site = el("div", undefined, "field");
-  site.append(el("span", "网站", "field-label"));
+  site.append(el("span", t("网站"), "field-label"));
   const siteValue = el("div", view.origin, view.origin.startsWith("https:") ? "readonly origin secure" : "readonly origin");
   site.append(siteValue);
 
-  const userLabel = el("label", "用户名", "field-label");
+  const userLabel = el("label", t("用户名"), "field-label");
   const user = el("input");
   user.id = "nl-user";
   user.value = f.username;
   user.maxLength = 1024;
   user.autocomplete = "off";
-  user.placeholder = "用户名或邮箱";
+  user.placeholder = t("用户名或邮箱");
   userLabel.htmlFor = user.id;
   user.oninput = () => {
     f.username = user.value;
   };
 
-  const pwLabel = el("label", "密码", "field-label");
+  const pwLabel = el("label", t("密码"), "field-label");
   const pwRow = el("div", undefined, "password-row");
   const pw = el("input");
   pw.id = "nl-password";
@@ -845,10 +846,10 @@ function renderNewLogin(): void {
   const hint = el("p", "", "note");
   const updateHint = (): void => {
     hint.textContent =
-      f.password !== "" && f.password === f.generated ? `已生成 ${[...f.password].length} 位随机密码，可以改成你自己的。` : "";
+      f.password !== "" && f.password === f.generated ? t("已生成 {} 位随机密码，可以改成你自己的。", String([...f.password].length)) : "";
   };
   updateHint();
-  const save = button("保存到 Keevo", () => void saveLogin(), "big");
+  const save = button(t("保存到 Keevo"), () => void saveLogin(), "big");
   pw.oninput = () => {
     f.password = pw.value;
     save.disabled = f.password === "" || view.busy;
@@ -856,11 +857,11 @@ function renderNewLogin(): void {
   };
   pwRow.append(
     pw,
-    iconButton(glyph(f.reveal ? "eyeOff" : "eye", 14), f.reveal ? "隐藏密码" : "显示密码", () => {
+    iconButton(glyph(f.reveal ? "eyeOff" : "eye", 14), f.reveal ? t("隐藏密码") : t("显示密码"), () => {
       f.reveal = !f.reveal;
       render();
     }),
-    iconButton(glyph("refresh", 14), "重新生成", () => {
+    iconButton(glyph("refresh", 14), t("重新生成"), () => {
       void generate().then((g) => {
         if (!g) return;
         f.password = g.value;
@@ -871,7 +872,7 @@ function renderNewLogin(): void {
   );
   save.disabled = f.password === "" || view.busy;
   const cancel = button(
-    "取消",
+    t("取消"),
     () => {
       view.page = "list";
       render();
@@ -887,7 +888,7 @@ function renderNewLogin(): void {
     pwLabel,
     pwRow,
     hint,
-    el("p", `标题为 ${host().replace(/^www\./, "")}。只保存网站地址，不保存路径。保存后在这个网站上填充不再询问。`, "note"),
+    el("p", t("标题为 {}。只保存网站地址，不保存路径。保存后在这个网站上填充不再询问。", String(host().replace(/^www\./, ""))), "note"),
     buttons,
   );
   if (!document.activeElement || document.activeElement === document.body) user.focus();
@@ -903,15 +904,15 @@ async function saveLogin(): Promise<void> {
   if (r.saved) {
     view.form = { username: "", password: "", generated: "", reveal: false };
     view.page = "list";
-    setNote("success", `已保存到 Keevo：${host().replace(/^www\./, "")}。`);
+    setNote("success", t("已保存到 Keevo：{}。", String(host().replace(/^www\./, ""))));
     await loadCandidates();
     return;
   }
   setNote(
     "danger",
     r.error === "not_authorized"
-      ? "保存得太频繁（10 分钟内最多 5 个），请稍后再试，或在 Keevo 中新建。"
-      : (ERRORS[r.error ?? "failed"] ?? `出错了（${r.error}）`),
+      ? t("保存得太频繁（10 分钟内最多 5 个），请稍后再试，或在 Keevo 中新建。")
+      : (ERRORS[r.error ?? "failed"] ?? t("出错了（{}）", String(r.error))),
   );
   render();
 }
@@ -921,12 +922,12 @@ async function saveLogin(): Promise<void> {
 /** 等待 Keevo 期间的提示：第一次在某个网站上使用某个条目时，Keevo 会请用户确认（spec/ipc.md §5.2）。 */
 function waiting(): void {
   view.busy = true;
-  setNote("info", "正在向 Keevo 取用。第一次在这个网站上使用这个条目时，请在 Keevo 中确认。");
+  setNote("info", t("正在向 Keevo 取用。第一次在这个网站上使用这个条目时，请在 Keevo 中确认。"));
   render();
 }
 
 function failed(code: string | undefined): void {
-  setNote("danger", ERRORS[code ?? "failed"] ?? `出错了（${code}）`);
+  setNote("danger", ERRORS[code ?? "failed"] ?? t("出错了（{}）", String(code)));
 }
 
 async function fill(c: Candidate): Promise<void> {
@@ -954,10 +955,10 @@ async function fetchSecret(c: Candidate): Promise<PopupResponse> {
 async function copyUsername(c: Candidate): Promise<void> {
   const r = await fetchSecret(c);
   if (!r.secret) failed(r.error);
-  else if (!r.secret.username) setNote("warning", "这个条目没有用户名。");
+  else if (!r.secret.username) setNote("warning", t("这个条目没有用户名。"));
   else {
     await navigator.clipboard.writeText(r.secret.username);
-    setNote("success", "已复制用户名。");
+    setNote("success", t("已复制用户名。"));
   }
   render();
 }
@@ -980,7 +981,7 @@ async function clipboardGranted(): Promise<boolean> {
   }
 }
 
-const NO_CLIPBOARD = "没有得到剪贴板权限，Keevo 无法在 90 秒后只清除自己写入的内容，所以没有复制。";
+const NO_CLIPBOARD = t("没有得到剪贴板权限，Keevo 无法在 90 秒后只清除自己写入的内容，所以没有复制。");
 
 async function writeSecret(value: string): Promise<void> {
   await navigator.clipboard.writeText(value);
@@ -996,24 +997,24 @@ async function copyText(value: string, label: string): Promise<void> {
   }
   if (!value) return;
   await writeSecret(value);
-  setNote("success", `已复制${label}，90 秒后从剪贴板清除。`);
+  setNote("success", t("已复制{}，90 秒后从剪贴板清除。", String(label)));
   render();
 }
 
 /** 复制条目的密码或一次性密码。 */
 async function copySecret(c: Candidate, field: "password" | "totp"): Promise<void> {
   if (!(await clipboardGranted())) {
-    setNote("warning", `${NO_CLIPBOARD}你仍可以直接填充。`);
+    setNote("warning", t("{}你仍可以直接填充。", String(NO_CLIPBOARD)));
     render();
     return;
   }
   const r = await fetchSecret(c);
   const value = r.secret ? (field === "password" ? r.secret.password : r.secret.totp) : undefined;
   if (!r.secret) failed(r.error);
-  else if (!value) setNote("warning", field === "totp" ? "这个条目没有一次性密码。" : "这个条目没有密码。");
+  else if (!value) setNote("warning", field === "totp" ? t("这个条目没有一次性密码。") : t("这个条目没有密码。"));
   else {
     await writeSecret(value);
-    setNote("success", `已复制${field === "totp" ? "一次性密码" : "密码"}，90 秒后从剪贴板清除。`);
+    setNote("success", t("已复制{}，90 秒后从剪贴板清除。", String(field === "totp" ? t("一次性密码") : t("密码"))));
   }
   render();
 }
@@ -1021,7 +1022,7 @@ async function copySecret(c: Candidate, field: "password" | "totp"): Promise<voi
 async function showTotp(c: Candidate): Promise<void> {
   const r = await fetchSecret(c);
   if (!r.secret) failed(r.error);
-  else if (!r.secret.totp) setNote("warning", "这个条目没有一次性密码。");
+  else if (!r.secret.totp) setNote("warning", t("这个条目没有一次性密码。"));
   else {
     view.totp = { itemId: c.item_id, code: r.secret.totp };
     view.note = null;

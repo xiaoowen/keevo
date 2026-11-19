@@ -133,16 +133,16 @@ struct DraftField: Identifiable {
 
     static func defaultLabel(_ kind: String) -> String {
         switch kind {
-        case "concealed": "密码"
-        case "url": "网站"
-        case "email": "电子邮件"
-        case "phone": "电话"
-        case "multiline": "备注"
-        case "date": "日期"
-        case "totp": "一次性密码"
-        case "kv_list": "变量"
-        case "recovery_codes": "恢复码"
-        default: "文本"
+        case "concealed": tr("密码")
+        case "url": tr("网站")
+        case "email": tr("电子邮件")
+        case "phone": tr("电话")
+        case "multiline": tr("备注")
+        case "date": tr("日期")
+        case "totp": tr("一次性密码")
+        case "kv_list": tr("变量")
+        case "recovery_codes": tr("恢复码")
+        default: tr("文本")
         }
     }
 }
@@ -212,26 +212,26 @@ struct ItemEditor: View {
     var body: some View {
         VStack(spacing: 0) {
             DetailTopBar {
-                Text("正在编辑")
+                Text(tr("正在编辑"))
                     .font(KV.Typography.footnote)
                     .foregroundStyle(KV.Colors.fgSecondary)
                     .padding(.trailing, KV.Space.s1)
-                Button("取消") { close() }
+                Button(tr("取消")) { close() }
                     .buttonStyle(.kvBordered)
                     .keyboardShortcut(.cancelAction)
-                    .help("放弃修改（esc）")
-                Button("保存") { save() }
+                    .help(tr("放弃修改（esc）"))
+                Button(tr("保存")) { save() }
                     .buttonStyle(KVButtonStyle(kind: .primary, compact: true))
                     .keyboardShortcut("s")
                     .disabled(needsRebuild)
-                    .help("保存（⌘S）")
+                    .help(tr("保存（⌘S）"))
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     header
                     if needsAttention {
                         VStack(alignment: .leading, spacing: KV.Space.s2) {
-                            GroupTitle(text: "需要你处理")
+                            GroupTitle(text: tr("需要你处理"))
                             ConflictPanel(detail: base) { rebase() }
                         }
                     }
@@ -239,7 +239,7 @@ struct ItemEditor: View {
                         groupView(group)
                     }
                     Button { addSection() } label: {
-                        Label("添加分区", systemImage: "plus.rectangle.on.rectangle")
+                        Label(tr("添加分区"), systemImage: "plus.rectangle.on.rectangle")
                     }
                     .buttonStyle(.kvLink)
                     tagEditor
@@ -247,7 +247,7 @@ struct ItemEditor: View {
                         HStack(spacing: KV.Space.s2) {
                             Banner(kind: .danger, message: error)
                             if needsRebuild {
-                                Button("重建为新条目") { rebuild() }.buttonStyle(.kvBordered)
+                                Button(tr("重建为新条目")) { rebuild() }.buttonStyle(.kvBordered)
                             }
                         }
                     }
@@ -271,7 +271,7 @@ struct ItemEditor: View {
         HStack(spacing: 14) {
             SiteIcon(title: title, url: fields.first { $0.kind == "url" && !removed.contains($0.id) }?.value, size: 48)
             VStack(alignment: .leading, spacing: 4) {
-                TextField("标题", text: $title)
+                TextField(tr("标题"), text: $title)
                     .textFieldStyle(.plain)
                     .font(KV.Typography.title)
                     .foregroundStyle(KV.Colors.fgPrimary)
@@ -282,7 +282,7 @@ struct ItemEditor: View {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .strokeBorder(titleFocused ? KV.Colors.focusRing : KV.Colors.borderSubtle, lineWidth: titleFocused ? 2 : 1)
                     )
-                    .accessibilityLabel("标题")
+                    .accessibilityLabel(tr("标题"))
                 Text("\(ItemTypeInfo.name(base.itemType)) · \(ItemDetailView.vaultLabel(model.vaults.first { $0.id == base.vaultId }?.name ?? ""))")
                     .font(KV.Typography.footnote)
                     .foregroundStyle(KV.Colors.fgSecondary)
@@ -296,8 +296,8 @@ struct ItemEditor: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(favorite ? "取消收藏" : "收藏")
-            .accessibilityLabel(favorite ? "取消收藏" : "收藏")
+            .help(favorite ? tr("取消收藏") : tr("收藏"))
+            .accessibilityLabel(favorite ? tr("取消收藏") : tr("收藏"))
         }
     }
 
@@ -337,7 +337,7 @@ struct ItemEditor: View {
 
     private var tagEditor: some View {
         VStack(alignment: .leading, spacing: KV.Space.s2) {
-            GroupTitle(text: "标签")
+            GroupTitle(text: tr("标签"))
             FlowLayout {
                 ForEach(tags, id: \.self) { tag in
                     HStack(spacing: KV.Space.s1) {
@@ -346,14 +346,14 @@ struct ItemEditor: View {
                             Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(KV.Colors.accentFg)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("移除标签\(tag)")
+                        .accessibilityLabel(tr("移除标签{}", "\(tag)"))
                     }
                     .padding(.leading, 10)
                     .padding(.trailing, KV.Space.s2)
                     .padding(.vertical, 3)
                     .background(KV.Colors.accentSubtle, in: Capsule())
                 }
-                TextField("添加标签", text: $newTag)
+                TextField(tr("添加标签"), text: $newTag)
                     .textFieldStyle(.plain)
                     .font(KV.Typography.footnote)
                     .frame(width: 120)
@@ -361,7 +361,7 @@ struct ItemEditor: View {
                     .padding(.vertical, 3)
                     .overlay(Capsule().strokeBorder(KV.Colors.borderSubtle, style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
                     .onSubmit(addTag)
-                    .help("输入后按回车添加")
+                    .help(tr("输入后按回车添加"))
             }
         }
     }
@@ -407,7 +407,7 @@ struct ItemEditor: View {
 
     private func addSection() {
         guard let id = try? newId() else { return }
-        sections.append(DraftSection(id: id, label: "新分区", isNew: true, originalLabel: ""))
+        sections.append(DraftSection(id: id, label: tr("新分区"), isNew: true, originalLabel: ""))
     }
 
     /// 删除分区：其中的字段移到默认分区末尾（与 keevo-core `Edit::RemoveSection` 一致）。
@@ -513,7 +513,7 @@ struct ItemEditor: View {
         }
         do {
             try model.update(itemId: base.id, edits: edits, force: true)
-            model.showToast("已保存")
+            model.showToast(tr("已保存"))
             close()
         } catch KeevoError.ItemNeedsRebuild {
             needsRebuild = true
@@ -561,12 +561,12 @@ struct SectionHeaderEditor: View {
 
     var body: some View {
         HStack(spacing: KV.Space.s2) {
-            TextField("分区名称", text: $label)
+            TextField(tr("分区名称"), text: $label)
                 .textFieldStyle(.plain)
                 .font(KV.Typography.body.weight(.semibold))
                 .foregroundStyle(KV.Colors.fgSecondary)
-                .accessibilityLabel("分区名称")
-            IconButton(systemImage: "trash", label: "删除分区", help: "删除分区（其中的字段移到默认分区）", action: remove)
+                .accessibilityLabel(tr("分区名称"))
+            IconButton(systemImage: "trash", label: tr("删除分区"), help: tr("删除分区（其中的字段移到默认分区）"), action: remove)
         }
     }
 }
@@ -581,7 +581,7 @@ struct AddFieldMenu: View {
                 Button(FieldKindInfo.name(kind)) { add(kind) }
             }
         } label: {
-            Label("添加字段", systemImage: "plus")
+            Label(tr("添加字段"), systemImage: "plus")
                 .font(KV.Typography.footnote.weight(.semibold))
                 .foregroundStyle(KV.Colors.accentFg)
         }
@@ -610,11 +610,11 @@ struct DraftFieldRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: KV.Space.s2) {
-                TextField("字段名称", text: $field.label)
+                TextField(tr("字段名称"), text: $field.label)
                     .textFieldStyle(.plain)
                     .font(KV.Typography.footnote)
                     .foregroundStyle(KV.Colors.fgSecondary)
-                    .accessibilityLabel("字段名称")
+                    .accessibilityLabel(tr("字段名称"))
                 Spacer(minLength: 0)
                 fieldMenu
             }
@@ -642,19 +642,19 @@ struct DraftFieldRow: View {
         if field.hidesValue {
             Group {
                 if revealed {
-                    TextField("", text: $field.value, prompt: DraftFieldRow.prompt("值")).kvInput(mono: true)
+                    TextField("", text: $field.value, prompt: DraftFieldRow.prompt(tr("值"))).kvInput(mono: true)
                 } else {
-                    SecureField("", text: $field.value, prompt: Self.prompt(field.loaded ? "" : "保持不变")).kvInput()
+                    SecureField("", text: $field.value, prompt: Self.prompt(field.loaded ? "" : tr("保持不变"))).kvInput()
                 }
             }
             .accessibilityLabel(field.label)
-            IconButton(systemImage: revealed ? "eye.slash" : "eye", label: revealed ? "隐藏" : "显示") {
+            IconButton(systemImage: revealed ? "eye.slash" : "eye", label: revealed ? tr("隐藏") : tr("显示")) {
                 field.load()
                 revealed.toggle()
             }
             .padding(.top, 3)
             if field.kind == "concealed" {
-                IconButton(systemImage: "wand.and.stars", label: "生成密码") { generating = true }
+                IconButton(systemImage: "wand.and.stars", label: tr("生成密码")) { generating = true }
                     .padding(.top, 3)
             }
             if field.kind == "totp" {
@@ -665,7 +665,7 @@ struct DraftFieldRow: View {
                 .padding(.top, 3)
             }
         } else if field.kind == "multiline" {
-            TextField("", text: $field.value, prompt: Self.prompt("值"), axis: .vertical)
+            TextField("", text: $field.value, prompt: Self.prompt(tr("值")), axis: .vertical)
                 .lineLimit(3...12)
                 .kvInput()
                 .accessibilityLabel(field.label)
@@ -682,26 +682,26 @@ struct DraftFieldRow: View {
 
     private var placeholder: String {
         switch field.kind {
-        case "date": "例如 2026-11-18"
+        case "date": tr("例如 2026-11-18")
         case "url": "https://…"
         case "email": "name@example.com"
-        default: "值"
+        default: tr("值")
         }
     }
 
     private var fieldMenu: some View {
-        IconMenu(label: field.isNew ? "字段操作（新字段保存后才能调整位置）" : "字段操作") {
-            Button("上移") { move(-1) }.disabled(!canMoveUp)
-            Button("下移") { move(1) }.disabled(!canMoveDown)
+        IconMenu(label: field.isNew ? tr("字段操作（新字段保存后才能调整位置）") : tr("字段操作")) {
+            Button(tr("上移")) { move(-1) }.disabled(!canMoveUp)
+            Button(tr("下移")) { move(1) }.disabled(!canMoveDown)
             if !field.isNew {
-                Menu("移到分区") {
-                    Button("默认分区") { moveTo(nil) }.disabled(field.sectionId == nil)
+                Menu(tr("移到分区")) {
+                    Button(tr("默认分区")) { moveTo(nil) }.disabled(field.sectionId == nil)
                     ForEach(sections) { s in
                         Button(s.label) { moveTo(s.id) }.disabled(field.sectionId == s.id)
                     }
                 }
             }
-            Menu("自动填充用途") {
+            Menu(tr("自动填充用途")) {
                 ForEach(FieldKindInfo.purposes, id: \.0) { purpose, name in
                     Button {
                         field.purpose = purpose
@@ -711,7 +711,7 @@ struct DraftFieldRow: View {
                 }
             }
             Divider()
-            Button("删除字段", role: .destructive, action: remove)
+            Button(tr("删除字段"), role: .destructive, action: remove)
         }
     }
 }
@@ -726,14 +726,14 @@ struct FormatHint: View {
         guard !v.isEmpty else { return nil }
         switch kind {
         case "email":
-            return v.contains("@") && v.split(separator: "@").last?.contains(".") == true ? nil : "看起来不像电子邮件地址"
+            return v.contains("@") && v.split(separator: "@").last?.contains(".") == true ? nil : tr("看起来不像电子邮件地址")
         case "url":
-            guard let url = URL(string: v), let scheme = url.scheme, url.host != nil else { return "网址应以 https:// 开头" }
-            return ["https", "http"].contains(scheme.lowercased()) ? nil : "网址应以 https:// 开头"
+            guard let url = URL(string: v), let scheme = url.scheme, url.host != nil else { return tr("网址应以 https:// 开头") }
+            return ["https", "http"].contains(scheme.lowercased()) ? nil : tr("网址应以 https:// 开头")
         case "phone":
-            return v.allSatisfy { $0.isNumber || " +-()".contains($0) } ? nil : "电话号码只能包含数字、空格和 + - ( )"
+            return v.allSatisfy { $0.isNumber || " +-()".contains($0) } ? nil : tr("电话号码只能包含数字、空格和 + - ( )")
         case "date":
-            return v.range(of: #"^\d{4}-\d{2}(-\d{2})?$"#, options: .regularExpression) == nil ? "日期格式为 YYYY-MM-DD" : nil
+            return v.range(of: #"^\d{4}-\d{2}(-\d{2})?$"#, options: .regularExpression) == nil ? tr("日期格式为 YYYY-MM-DD") : nil
         default:
             return nil
         }
@@ -753,15 +753,15 @@ struct OtpPreview: View {
 
     var body: some View {
         if unchanged {
-            Text("保持不变。可以粘贴 otpauth:// 链接或密钥，也可以从二维码导入。")
+            Text(tr("保持不变。可以粘贴 otpauth:// 链接或密钥，也可以从二维码导入。"))
                 .font(KV.Typography.caption).foregroundStyle(KV.Colors.fgSecondary)
         } else if !text.isEmpty {
             if let info = try? parseOtp(text: text) {
                 let who = [info.issuer, info.account].compactMap { $0 }.joined(separator: " · ")
-                Text("\(who.isEmpty ? "一次性密码" : who)：\(info.digits) 位，每 \(info.period) 秒，\(info.algorithm)")
+                Text(tr("{}：{} 位，每 {} 秒，{}", "\(who.isEmpty ? tr("一次性密码") : who)", "\(info.digits)", "\(info.period)", "\(info.algorithm)"))
                     .font(KV.Typography.caption).foregroundStyle(KV.Colors.statusSuccessFg)
             } else {
-                Text("无法识别。请粘贴 otpauth://totp/ 链接或 Base32 密钥。")
+                Text(tr("无法识别。请粘贴 otpauth://totp/ 链接或 Base32 密钥。"))
                     .font(KV.Typography.caption).foregroundStyle(KV.Colors.statusDangerFg)
             }
         }
@@ -775,9 +775,9 @@ struct OtpImportMenu: View {
 
     var body: some View {
         Menu {
-            Button("从图片文件读取二维码…") { openImage() }
-            Button("读取剪贴板中的二维码图片") { readPasteboard() }
-            Button("扫描屏幕上的二维码…") { Task { await scanScreen() } }
+            Button(tr("从图片文件读取二维码…")) { openImage() }
+            Button(tr("读取剪贴板中的二维码图片")) { readPasteboard() }
+            Button(tr("扫描屏幕上的二维码…")) { Task { await scanScreen() } }
         } label: {
             Image(systemName: "qrcode.viewfinder")
                 .font(.system(size: 13, weight: .medium))
@@ -789,10 +789,10 @@ struct OtpImportMenu: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help(message ?? "从二维码导入")
-        .accessibilityLabel("从二维码导入")
-        .alert("没有找到一次性密码的二维码", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
-            Button("好") { message = nil }
+        .help(message ?? tr("从二维码导入"))
+        .accessibilityLabel(tr("从二维码导入"))
+        .alert(tr("没有找到一次性密码的二维码"), isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
+            Button(tr("好")) { message = nil }
         } message: {
             Text(message ?? "")
         }
@@ -802,7 +802,7 @@ struct OtpImportMenu: View {
         if let uri = QRCodeReader.otpURI(in: texts) {
             found(uri)
         } else {
-            message = texts.isEmpty ? "图片中没有可识别的二维码。" : "二维码的内容不是 otpauth://totp/ 链接。"
+            message = texts.isEmpty ? tr("图片中没有可识别的二维码。") : tr("二维码的内容不是 otpauth://totp/ 链接。")
         }
     }
 
@@ -817,7 +817,7 @@ struct OtpImportMenu: View {
     private func readPasteboard() {
         let pb = NSPasteboard.general
         guard let data = pb.data(forType: .png) ?? pb.data(forType: .tiff) else {
-            message = "剪贴板中没有图片。"
+            message = tr("剪贴板中没有图片。")
             return
         }
         accept(QRCodeReader.decode(data: data))
@@ -830,7 +830,7 @@ struct OtpImportMenu: View {
         } catch ScreenQRScanner.ScanError.cancelled {
             return
         } catch {
-            message = "无法截取所选的内容。"
+            message = tr("无法截取所选的内容。")
         }
     }
 }
@@ -845,22 +845,22 @@ struct KvEditor: View {
                 HStack(spacing: KV.Space.s2) {
                     TextField("", text: $entry.key, prompt: DraftFieldRow.prompt("KEY")).kvInput(mono: true).frame(width: 180)
                     if entry.concealed {
-                        SecureField("", text: $entry.value, prompt: DraftFieldRow.prompt("值")).kvInput()
+                        SecureField("", text: $entry.value, prompt: DraftFieldRow.prompt(tr("值"))).kvInput()
                     } else {
-                        TextField("", text: $entry.value, prompt: DraftFieldRow.prompt("值")).kvInput(mono: true)
+                        TextField("", text: $entry.value, prompt: DraftFieldRow.prompt(tr("值"))).kvInput(mono: true)
                     }
-                    Toggle("秘密", isOn: $entry.concealed)
+                    Toggle(tr("秘密"), isOn: $entry.concealed)
                         .toggleStyle(.checkbox)
                         .font(KV.Typography.footnote)
-                        .help("秘密的值默认隐藏，复制后自动清除")
-                    IconButton(systemImage: "minus.circle", label: "删除 \(entry.key)") {
+                        .help(tr("秘密的值默认隐藏，复制后自动清除"))
+                    IconButton(systemImage: "minus.circle", label: tr("删除 {}", "\(entry.key)")) {
                         entries.removeAll { $0.id == entry.id }
                     }
                 }
             }
             HStack(spacing: KV.Space.s4) {
-                Button { entries.append(DraftKv(key: "", value: "", concealed: true)) } label: { Label("添加一项", systemImage: "plus") }
-                Button("从剪贴板导入 .env") { importEnv() }
+                Button { entries.append(DraftKv(key: "", value: "", concealed: true)) } label: { Label(tr("添加一项"), systemImage: "plus") }
+                Button(tr("从剪贴板导入 .env")) { importEnv() }
             }
             .buttonStyle(.kvLink)
             .padding(.top, KV.Space.s1)
@@ -897,16 +897,16 @@ struct CodesEditor: View {
         VStack(alignment: .leading, spacing: KV.Space.s1) {
             ForEach($codes) { $code in
                 HStack(spacing: KV.Space.s2) {
-                    SecureField("", text: $code.code, prompt: DraftFieldRow.prompt("恢复码")).kvInput(mono: true)
-                    Toggle("已使用", isOn: $code.used).toggleStyle(.checkbox).font(KV.Typography.footnote)
-                    IconButton(systemImage: "minus.circle", label: "删除恢复码") {
+                    SecureField("", text: $code.code, prompt: DraftFieldRow.prompt(tr("恢复码"))).kvInput(mono: true)
+                    Toggle(tr("已使用"), isOn: $code.used).toggleStyle(.checkbox).font(KV.Typography.footnote)
+                    IconButton(systemImage: "minus.circle", label: tr("删除恢复码")) {
                         codes.removeAll { $0.id == code.id }
                     }
                 }
             }
             HStack(spacing: KV.Space.s4) {
-                Button { codes.append(DraftCode(code: "", used: false)) } label: { Label("添加一个", systemImage: "plus") }
-                Button("从剪贴板导入（每行一个）") {
+                Button { codes.append(DraftCode(code: "", used: false)) } label: { Label(tr("添加一个"), systemImage: "plus") }
+                Button(tr("从剪贴板导入（每行一个）")) {
                     let lines = (NSPasteboard.general.string(forType: .string) ?? "")
                         .split(whereSeparator: \.isNewline)
                         .map { $0.trimmingCharacters(in: .whitespaces) }

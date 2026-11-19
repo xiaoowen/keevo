@@ -234,6 +234,12 @@ $ keevo run --env-file .env.keevo -- npm run dev
 | Passkey | 通行密钥 |
 | Secret reference | 密钥引用 |
 
+- **界面语言**：简体中文与英文。中文是源语言：界面代码中的文字写成 `tr("模板", 参数…)`（macOS）或 `t("模板", 参数…)`（扩展），英文翻译在 `apps/macos/Localization/en.json` 与 `apps/browser-extension/i18n/en.json`，模板中的 `{}` 依次对应参数，英文可以用 `{0}`、`{1}` 调整语序。`scripts/i18n.py check` 检查翻译是否完整、占位符个数是否一致，`gen` 生成代码中的表。
+  - **macOS**：跟随系统（系统首选语言是中文时用中文，其他语言都用英文），或在"设置 → 通用"中指定，重新打开后生效。
+  - **扩展**：跟随浏览器的界面语言；扩展名称与说明用 Chrome 的 `_locales`。
+  - **保险库中的数据**：条目类型模板的默认字段名、分区名与默认保险库名"个人"保存在保险库中，显示时按界面语言翻译（`apps/macos/Localization/data-labels.txt`）；用户自己起的名称原样显示。
+  - 截图程序可以用 `KEEVO_LANG=en scripts/snapshots.sh` 渲染英文界面。
+
 ## 7. 设计系统
 
 - **设计令牌**：颜色、字体、间距、圆角、动效以 `design/tokens/*.json` 为单一来源，生成 Swift 与 CSS 两套产物，保证桌面应用与扩展视觉一致。规范、取舍与组件清单见 [design/README.md](../design/README.md)。

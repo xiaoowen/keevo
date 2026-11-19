@@ -19,13 +19,13 @@ enum SidebarItem: Hashable {
 
     var title: String {
         switch self {
-        case .security: "安全中心"
-        case .all: "全部条目"
-        case .favorites: "收藏"
+        case .security: tr("安全中心")
+        case .all: tr("全部条目")
+        case .favorites: tr("收藏")
         case .type(let t): ItemTypeInfo.name(t)
-        case .vault: "保险库"
+        case .vault: tr("保险库")
         case .tag(let t): t
-        case .trash: "最近删除"
+        case .trash: tr("最近删除")
         }
     }
 }
@@ -151,7 +151,7 @@ struct MainView: View {
         guard let request else { return }
         model.mainRequest = nil
         guard model.editingItem == nil else {
-            model.showToast("先保存或取消正在编辑的条目")
+            model.showToast(tr("先保存或取消正在编辑的条目"))
             return
         }
         switch request {
@@ -187,8 +187,8 @@ struct MainView: View {
     private var itemColumn: some View {
         VStack(spacing: 0) {
             HStack(spacing: KV.Space.s2) {
-                KVSearchField(text: $search, prompt: "搜索，或输入 type:ssh", focus: $searchFocused)
-                    .help("过滤：type: tag: vault: url: is:fav is:conflict is:weak，前加 - 表示排除")
+                KVSearchField(text: $search, prompt: tr("搜索，或输入 type:ssh"), focus: $searchFocused)
+                    .help(tr("过滤：type: tag: vault: url: is:fav is:conflict is:weak，前加 - 表示排除"))
                     .onKeyPress(.downArrow) {
                         guard model.editingItem == nil else { return .ignored }
                         listFocused = true
@@ -244,24 +244,24 @@ struct MainView: View {
     @ViewBuilder
     private var emptyState: some View {
         if !search.isEmpty {
-            EmptyState(symbol: "magnifyingglass", title: "没有符合的条目", message: "换个关键词，或用 type: tag: vault: url: 过滤。")
+            EmptyState(symbol: "magnifyingglass", title: tr("没有符合的条目"), message: tr("换个关键词，或用 type: tag: vault: url: 过滤。"))
         } else if sidebar == .trash {
-            EmptyState(symbol: "trash", title: "回收站是空的", message: "移入回收站的条目会出现在这里，可以恢复。")
+            EmptyState(symbol: "trash", title: tr("回收站是空的"), message: tr("移入回收站的条目会出现在这里，可以恢复。"))
         } else if sidebar == .favorites {
-            EmptyState(symbol: "star", title: "还没有收藏", message: "在条目详情中点星标即可收藏。")
+            EmptyState(symbol: "star", title: tr("还没有收藏"), message: tr("在条目详情中点星标即可收藏。"))
         } else {
-            EmptyState(symbol: "key", title: "还没有条目", message: "点击 + 添加第一个登录，或从其他密码管理器导入。")
+            EmptyState(symbol: "key", title: tr("还没有条目"), message: tr("点击 + 添加第一个登录，或从其他密码管理器导入。"))
         }
     }
 
     @ViewBuilder
     private func rowMenu(_ item: ItemEntry) -> some View {
         if item.trashed {
-            Button("恢复") { model.restore(itemId: item.id) }
+            Button(tr("恢复")) { model.restore(itemId: item.id) }
         } else {
-            Button(item.favorite ? "取消收藏" : "收藏") { model.setFavorite(itemId: item.id, !item.favorite) }
+            Button(item.favorite ? tr("取消收藏") : tr("收藏")) { model.setFavorite(itemId: item.id, !item.favorite) }
             Divider()
-            Button("移入回收站") { model.trash(itemId: item.id) }
+            Button(tr("移入回收站")) { model.trash(itemId: item.id) }
         }
     }
 
@@ -276,7 +276,7 @@ struct MainView: View {
         } else {
             VStack(spacing: 0) {
                 DetailTopBar { EmptyView() }
-                EmptyState(symbol: "rectangle.on.rectangle", title: "选择一个条目", message: "在左侧选择条目查看详情，或按 ⌘N 新建。")
+                EmptyState(symbol: "rectangle.on.rectangle", title: tr("选择一个条目"), message: tr("在左侧选择条目查看详情，或按 ⌘N 新建。"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -311,24 +311,24 @@ private struct Sidebar: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     VStack(spacing: 2) {
-                        row(.all, "全部条目", symbol: "square.grid.2x2", prominent: true)
-                        row(.favorites, "收藏", symbol: "star", prominent: true)
-                        row(.security, "安全中心", symbol: "checkmark.shield", prominent: true, attention: true)
+                        row(.all, tr("全部条目"), symbol: "square.grid.2x2", prominent: true)
+                        row(.favorites, tr("收藏"), symbol: "star", prominent: true)
+                        row(.security, tr("安全中心"), symbol: "checkmark.shield", prominent: true, attention: true)
                     }
-                    section("分类", Self.personal)
-                    section("开发者", Self.developer)
+                    section(tr("分类"), Self.personal)
+                    section(tr("开发者"), Self.developer)
                     if model.vaults.count > 1 {
-                        group("保险库") {
+                        group(tr("保险库")) {
                             ForEach(model.vaults, id: \.id) { v in row(.vault(v.id), v.name) }
                         }
                     }
                     if !tags.isEmpty {
-                        group("标签") {
+                        group(tr("标签")) {
                             ForEach(tags, id: \.self) { t in row(.tag(t), t) }
                         }
                     }
                     VStack(spacing: 2) {
-                        row(.trash, "最近删除", symbol: "trash", prominent: true)
+                        row(.trash, tr("最近删除"), symbol: "trash", prominent: true)
                     }
                 }
                 .padding(.horizontal, 10)
@@ -337,7 +337,7 @@ private struct Sidebar: View {
             .scrollIndicators(.never)
             HStack(spacing: 6) {
                 Circle().fill(KV.Colors.fgTertiary).frame(width: 7, height: 7)
-                Text("仅在这台 Mac 上 · 未开启同步")
+                Text(tr("仅在这台 Mac 上 · 未开启同步"))
                     .font(KV.Typography.footnote)
                     .foregroundStyle(KV.Colors.fgSecondary)
             }
@@ -422,7 +422,7 @@ struct SidebarRow: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityValue(count > 0 ? "\(count) 个" : "")
+        .accessibilityValue(count > 0 ? tr("{} 个", "\(count)") : "")
     }
 }
 
@@ -440,7 +440,7 @@ private struct NewItemMenu: View {
                 Button { create(choice) } label: { Label(choice.name, systemImage: choice.symbol) }
             }
             Divider()
-            Button { generator() } label: { Label("生成密码…", systemImage: "wand.and.stars") }
+            Button { generator() } label: { Label(tr("生成密码…"), systemImage: "wand.and.stars") }
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: 14, weight: .semibold))
@@ -453,8 +453,8 @@ private struct NewItemMenu: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .disabled(disabled)
-        .help("新建条目（⌘N 新建登录）")
-        .accessibilityLabel("新建条目")
+        .help(tr("新建条目（⌘N 新建登录）"))
+        .accessibilityLabel(tr("新建条目"))
     }
 }
 
@@ -488,8 +488,8 @@ struct DetailTopBar<Actions: View>: View {
                     Image(systemName: "lock").font(.system(size: 12, weight: .semibold)).frame(width: 14)
                 }
                 .buttonStyle(.kvBordered)
-                .help("立即锁定（⇧⌘L）")
-                .accessibilityLabel("锁定")
+                .help(tr("立即锁定（⇧⌘L）"))
+                .accessibilityLabel(tr("锁定"))
             }
             .padding(.horizontal, KV.Space.s4)
             .frame(height: 54)
@@ -506,7 +506,7 @@ private struct EditingShield: View {
         if model.editingItem != nil {
             KV.Colors.bgCanvas.opacity(0.6)
                 .contentShape(Rectangle())
-                .onTapGesture { model.showToast("先保存或取消正在编辑的条目") }
+                .onTapGesture { model.showToast(tr("先保存或取消正在编辑的条目")) }
                 .accessibilityHidden(true)
         }
     }
@@ -546,7 +546,7 @@ struct ItemRow: View {
         HStack(spacing: 10) {
             SiteIcon(title: item.title, url: item.urls.first)
             VStack(alignment: .leading, spacing: 1) {
-                Text(item.title.isEmpty ? "（无标题）" : item.title)
+                Text(item.title.isEmpty ? tr("（无标题）") : item.title)
                     .font(KV.Typography.bodyStrong)
                     .foregroundStyle(KV.Colors.fgPrimary)
                     .lineLimit(1)
@@ -560,14 +560,14 @@ struct ItemRow: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(KV.Colors.statusWarningFg)
-                    .help("有待处理的冲突")
-                    .accessibilityLabel("有待处理的冲突")
+                    .help(tr("有待处理的冲突"))
+                    .accessibilityLabel(tr("有待处理的冲突"))
             }
             if item.favorite {
                 Image(systemName: "star.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(KV.Colors.statusWarningFg)
-                    .accessibilityLabel("已收藏")
+                    .accessibilityLabel(tr("已收藏"))
             }
         }
         .padding(.horizontal, 10)
@@ -598,33 +598,33 @@ struct NewLoginSheet: View {
     private var canSave: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty && defaultVault != nil }
 
     var body: some View {
-        SheetScaffold(title: "新建登录", systemImage: "person.badge.key", width: 460) {
+        SheetScaffold(title: tr("新建登录"), systemImage: "person.badge.key", width: 460) {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
-                LabeledInput(label: "标题") {
-                    TextField("", text: $title, prompt: DraftFieldRow.prompt("例如 GitHub")).focused($titleFocused)
+                LabeledInput(label: tr("标题")) {
+                    TextField("", text: $title, prompt: DraftFieldRow.prompt(tr("例如 GitHub"))).focused($titleFocused)
                 }
-                LabeledInput(label: "用户名") {
-                    TextField("", text: $username, prompt: DraftFieldRow.prompt("用户名或邮箱"))
+                LabeledInput(label: tr("用户名")) {
+                    TextField("", text: $username, prompt: DraftFieldRow.prompt(tr("用户名或邮箱")))
                 }
                 VStack(alignment: .trailing, spacing: KV.Space.s1) {
-                    LabeledInput(label: "密码") {
+                    LabeledInput(label: tr("密码")) {
                         SecureField("", text: $password)
                     }
-                    Button { generating = true } label: { Label("生成强密码", systemImage: "wand.and.stars") }
+                    Button { generating = true } label: { Label(tr("生成强密码"), systemImage: "wand.and.stars") }
                         .buttonStyle(.kvLink)
                         .popover(isPresented: $generating) {
                             GeneratorView { password = $0 }
                         }
                 }
-                LabeledInput(label: "网站") {
+                LabeledInput(label: tr("网站")) {
                     TextField("", text: $url, prompt: DraftFieldRow.prompt("https://…"))
                 }
             }
         } footer: {
-            Button("取消") { dismiss() }
+            Button(tr("取消")) { dismiss() }
                 .buttonStyle(.kvSecondary)
                 .keyboardShortcut(.cancelAction)
-            Button("保存", action: save)
+            Button(tr("保存"), action: save)
                 .buttonStyle(.kvPrimary)
                 .keyboardShortcut(.defaultAction)
                 .disabled(!canSave)
@@ -659,26 +659,26 @@ struct NewItemSheet: View {
     var body: some View {
         SheetScaffold(
             // 中文与拉丁字母之间加空格："新建 SSH 密钥"
-            title: "新建" + (choice.name.first?.isASCII == true ? " " : "") + choice.name,
-            subtitle: "先起个名字，然后在详情中填写其余内容。",
+            title: tr("新建") + (choice.name.first?.isASCII == true ? " " : "") + choice.name,
+            subtitle: tr("先起个名字，然后在详情中填写其余内容。"),
             systemImage: choice.symbol,
             width: 440
         ) {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
-                LabeledInput(label: "标题") {
+                LabeledInput(label: tr("标题")) {
                     TextField("", text: $title).focused($titleFocused).onSubmit(create)
                 }
                 if choice.itemType == "ssh_key" {
-                    Toggle("生成新的 Ed25519 密钥（也可以之后导入现有私钥）", isOn: $generateKey)
+                    Toggle(tr("生成新的 Ed25519 密钥（也可以之后导入现有私钥）"), isOn: $generateKey)
                         .toggleStyle(.checkbox)
                         .font(KV.Typography.body)
                 }
                 if model.vaults.count > 1 {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("保险库")
+                        Text(tr("保险库"))
                             .font(KV.Typography.footnote.weight(.semibold))
                             .foregroundStyle(KV.Colors.fgSecondary)
-                        Picker("保险库", selection: $vault) {
+                        Picker(tr("保险库"), selection: $vault) {
                             ForEach(model.vaults, id: \.id) { Text($0.name).tag(String?.some($0.id)) }
                         }
                         .pickerStyle(.menu)
@@ -688,10 +688,10 @@ struct NewItemSheet: View {
                 }
             }
         } footer: {
-            Button("取消") { dismiss() }
+            Button(tr("取消")) { dismiss() }
                 .buttonStyle(.kvSecondary)
                 .keyboardShortcut(.cancelAction)
-            Button("继续", action: create)
+            Button(tr("继续"), action: create)
                 .buttonStyle(.kvPrimary)
                 .keyboardShortcut(.defaultAction)
                 .disabled(!canCreate)

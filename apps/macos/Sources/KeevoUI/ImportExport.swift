@@ -28,13 +28,13 @@ enum ImportText {
 
     static func sourceDetail(_ source: String) -> String {
         switch source {
-        case "keevo": "Keevo 导出文件（.keevo-export 或 .json）"
-        case "1password": "导出为 1PUX（.1pux）"
-        case "bitwarden": "导出为 JSON（.json），可以有密码保护"
-        case "chrome": "导出密码（.csv）"
-        case "safari": "导出密码（.csv）"
-        case "firefox": "导出登录信息（.csv）"
-        case "lastpass": "导出（.csv）"
+        case "keevo": tr("Keevo 导出文件（.keevo-export 或 .json）")
+        case "1password": tr("导出为 1PUX（.1pux）")
+        case "bitwarden": tr("导出为 JSON（.json），可以有密码保护")
+        case "chrome": tr("导出密码（.csv）")
+        case "safari": tr("导出密码（.csv）")
+        case "firefox": tr("导出登录信息（.csv）")
+        case "lastpass": tr("导出（.csv）")
         default: ""
         }
     }
@@ -52,31 +52,31 @@ enum ImportText {
     /// 作为安全笔记导入的原类别。
     static func original(_ code: String) -> String {
         switch code {
-        case "credit_card": "银行卡"
-        case "identity": "身份"
-        case "document": "文档"
-        case "software_license": "软件许可证"
-        case "bank_account": "银行账户"
-        case "driver_license": "驾照"
-        case "membership": "会员"
-        case "passport": "护照"
-        case "wireless_router": "无线路由器"
-        case "server": "服务器"
-        case "crypto_wallet": "加密钱包"
-        default: "其他类别"
+        case "credit_card": tr("银行卡")
+        case "identity": tr("身份")
+        case "document": tr("文档")
+        case "software_license": tr("软件许可证")
+        case "bank_account": tr("银行账户")
+        case "driver_license": tr("驾照")
+        case "membership": tr("会员")
+        case "passport": tr("护照")
+        case "wireless_router": tr("无线路由器")
+        case "server": tr("服务器")
+        case "crypto_wallet": tr("加密钱包")
+        default: tr("其他类别")
         }
     }
 
     @MainActor static func problem(_ error: Error) -> String {
         guard case KeevoError.Import(let code) = error else { return AppModel.describe(error) }
         switch code {
-        case "not_recognized": return "这个文件不是所选来源的导出文件。请确认来源，或重新导出。"
-        case "wrong_password": return "密码不正确。"
+        case "not_recognized": return tr("这个文件不是所选来源的导出文件。请确认来源，或重新导出。")
+        case "wrong_password": return tr("密码不正确。")
         case "account_restricted":
-            return "这是 Bitwarden 的「账户限制」加密导出，只能由原来的 Bitwarden 账户解密。请在 Bitwarden 中改为「受密码保护」的导出。"
-        case "too_large": return "文件过大，或者解密参数异常地高。"
-        case "empty": return "文件中没有可以导入的条目。"
-        default: return "文件损坏或不完整，无法导入。"
+            return tr("这是 Bitwarden 的「账户限制」加密导出，只能由原来的 Bitwarden 账户解密。请在 Bitwarden 中改为「受密码保护」的导出。")
+        case "too_large": return tr("文件过大，或者解密参数异常地高。")
+        case "empty": return tr("文件中没有可以导入的条目。")
+        default: return tr("文件损坏或不完整，无法导入。")
         }
     }
 }
@@ -146,7 +146,7 @@ struct ImportSheet: View {
         _backup = ViewState(initialValue: backup)
     }
 
-    private var tag: String { "导入 · \(ImportText.sourceName(source))" }
+    private var tag: String { tr("导入 · {}", "\(ImportText.sourceName(source))") }
 
     var body: some View {
         Group {
@@ -163,7 +163,7 @@ struct ImportSheet: View {
 
     // ① 选择来源与文件
     private var sourceStep: some View {
-        SheetScaffold(title: "导入", subtitle: "从其他密码管理器导出的文件导入。", systemImage: "square.and.arrow.down", width: 560) {
+        SheetScaffold(title: tr("导入"), subtitle: tr("从其他密码管理器导出的文件导入。"), systemImage: "square.and.arrow.down", width: 560) {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
                 KVCard {
                     ForEach(Array(importSources().enumerated()), id: \.element) { index, s in
@@ -176,7 +176,7 @@ struct ImportSheet: View {
                     }
                 }
                 HStack(spacing: KV.Space.s2) {
-                    Button("选择文件…") { chooseFile() }.buttonStyle(.kvBordered)
+                    Button(tr("选择文件…")) { chooseFile() }.buttonStyle(.kvBordered)
                     if let file {
                         Text(file.lastPathComponent)
                             .font(KV.Typography.footnote)
@@ -186,13 +186,13 @@ struct ImportSheet: View {
                     }
                 }
                 if let problem { Banner(kind: .danger, message: problem) }
-                Text("导出文件含有明文密码，导入后请删除。KeePass（.kdbx）稍后支持。")
+                Text(tr("导出文件含有明文密码，导入后请删除。KeePass（.kdbx）稍后支持。"))
                     .font(KV.Typography.footnote)
                     .foregroundStyle(KV.Colors.fgSecondary)
             }
         } footer: {
-            Button("取消") { dismiss() }.buttonStyle(.kvSecondary).keyboardShortcut(.cancelAction)
-            Button("继续") { prepare(password: nil) }
+            Button(tr("取消")) { dismiss() }.buttonStyle(.kvSecondary).keyboardShortcut(.cancelAction)
+            Button(tr("继续")) { prepare(password: nil) }
                 .buttonStyle(.kvPrimary)
                 .keyboardShortcut(.defaultAction)
                 .disabled(file == nil || working)
@@ -202,28 +202,28 @@ struct ImportSheet: View {
     // ② 有密码保护
     private var passwordStep: some View {
         SheetScaffold(
-            title: "导入",
-            subtitle: "这个 \(ImportText.sourceName(source)) 导出文件有密码保护。",
+            title: tr("导入"),
+            subtitle: tr("这个 {} 导出文件有密码保护。", "\(ImportText.sourceName(source))"),
             systemImage: "square.and.arrow.down",
             width: 560
         ) {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
-                LabeledInput(label: "导出时设置的密码", focused: true) {
+                LabeledInput(label: tr("导出时设置的密码"), focused: true) {
                     SecureField("", text: $password).onSubmit { prepare(password: password) }
                 }
                 if let problem { Banner(kind: .danger, message: problem) }
-                Text("密码只用于这一次解密，不会保存。")
+                Text(tr("密码只用于这一次解密，不会保存。"))
                     .font(KV.Typography.footnote)
                     .foregroundStyle(KV.Colors.fgSecondary)
             }
         } footer: {
-            Button("返回") {
+            Button(tr("返回")) {
                 step = .source
                 problem = nil
             }
             .buttonStyle(.kvSecondary)
             if working { ProgressView().controlSize(.small) }
-            Button("继续") { prepare(password: password) }
+            Button(tr("继续")) { prepare(password: password) }
                 .buttonStyle(.kvPrimary)
                 .keyboardShortcut(.defaultAction)
                 .disabled(password.isEmpty || working)
@@ -234,7 +234,7 @@ struct ImportSheet: View {
     private var previewStep: some View {
         let p = preview
         return SheetScaffold(
-            title: "导入预览",
+            title: tr("导入预览"),
             subtitle: "\(file?.lastPathComponent ?? "") · \(ImportText.sourceName(source))",
             systemImage: "square.and.arrow.down",
             width: 560
@@ -247,7 +247,7 @@ struct ImportSheet: View {
                             HStack(spacing: 4) {
                                 Text("\(g.count)").font(KV.Typography.body)
                                 if g.original != nil {
-                                    Text("· 作为安全笔记导入，字段保留")
+                                    Text(tr("· 作为安全笔记导入，字段保留"))
                                         .font(KV.Typography.footnote)
                                         .foregroundStyle(KV.Colors.fgSecondary)
                                 }
@@ -256,10 +256,10 @@ struct ImportSheet: View {
                     }
                     if let p, p.duplicates > 0 {
                         CardRowDivider()
-                        CardRow(label: "跳过") {
+                        CardRow(label: tr("跳过")) {
                             HStack(spacing: 4) {
                                 Text("\(p.duplicates)").font(KV.Typography.body)
-                                Text("· 与保险库中已有的登录完全相同")
+                                Text(tr("· 与保险库中已有的登录完全相同"))
                                     .font(KV.Typography.footnote)
                                     .foregroundStyle(KV.Colors.fgSecondary)
                             }
@@ -267,23 +267,23 @@ struct ImportSheet: View {
                     }
                 }
                 HStack(spacing: 10) {
-                    Text("导入到").font(KV.Typography.body)
-                    Picker("导入到", selection: $vaultId) {
+                    Text(tr("导入到")).font(KV.Typography.body)
+                    Picker(tr("导入到"), selection: $vaultId) {
                         ForEach(model.vaults, id: \.id) { v in Text(v.name).tag(v.id) }
                     }
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .fixedSize()
                     Spacer()
-                    Toggle("加上标签「\(tag)」", isOn: $addTag).toggleStyle(.checkbox)
+                    Toggle(tr("加上标签「{}」", "\(tag)"), isOn: $addTag).toggleStyle(.checkbox)
                 }
-                Banner(kind: .info, message: "导入前会自动备份保险库；导入后可以一键撤销。文件夹会变成标签，收藏与一次性密码会保留。")
+                Banner(kind: .info, message: tr("导入前会自动备份保险库；导入后可以一键撤销。文件夹会变成标签，收藏与一次性密码会保留。"))
                 if let problem { Banner(kind: .danger, message: problem) }
             }
         } footer: {
-            Button("取消") { dismiss() }.buttonStyle(.kvSecondary).keyboardShortcut(.cancelAction)
+            Button(tr("取消")) { dismiss() }.buttonStyle(.kvSecondary).keyboardShortcut(.cancelAction)
             if working { ProgressView().controlSize(.small) }
-            Button(p.map { $0.total > 0 ? "导入 \($0.total) 个条目" : "没有新条目" } ?? "导入") { commit() }
+            Button(p.map { $0.total > 0 ? tr("导入 {} 个条目", "\($0.total)") : tr("没有新条目") } ?? tr("导入")) { commit() }
                 .buttonStyle(.kvPrimary)
                 .keyboardShortcut(.defaultAction)
                 .disabled(working || (p?.total ?? 0) == 0 || vaultId.isEmpty)
@@ -296,47 +296,47 @@ struct ImportSheet: View {
         let added = r?.itemIds.count ?? 0
         let plaintext = source != "keevo" || !(file.map { isKeevoExport(path: $0.path) } ?? false)
         return SheetScaffold(
-            title: "已导入 \(added) 个条目",
-            subtitle: (r?.skipped ?? 0) > 0 ? "跳过了 \(r?.skipped ?? 0) 个与已有条目完全相同的登录。" : nil,
+            title: tr("已导入 {} 个条目", "\(added)"),
+            subtitle: (r?.skipped ?? 0) > 0 ? tr("跳过了 {} 个与已有条目完全相同的登录。", "\(r?.skipped ?? 0)") : nil,
             systemImage: "checkmark",
             tint: KV.Colors.statusSuccessFg,
             width: 560
         ) {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
                 KVCard {
-                    CardRow(label: "新增") {
-                        Text(addTag ? "\(added) 个条目，标签「\(tag)」" : "\(added) 个条目").font(KV.Typography.body)
+                    CardRow(label: tr("新增")) {
+                        Text(addTag ? tr("{} 个条目，标签「{}」", "\(added)", "\(tag)") : tr("{} 个条目", "\(added)")).font(KV.Typography.body)
                     } actions: {}
                     if let r, r.withAttachments > 0 {
                         CardRowDivider()
-                        CardRow(label: "附件") {
-                            Text("\(r.withAttachments) 个条目带有附件，Keevo 暂不支持导入附件，已在备注中说明")
+                        CardRow(label: tr("附件")) {
+                            Text(tr("{} 个条目带有附件，Keevo 暂不支持导入附件，已在备注中说明", "\(r.withAttachments)"))
                                 .font(KV.Typography.body)
                                 .fixedSize(horizontal: false, vertical: true)
                         } actions: {}
                     }
                     if let backup {
                         CardRowDivider()
-                        CardRow(label: "备份") {
-                            Text("导入前的备份 · \(BackupText.full(backup.createdMs))").font(KV.Typography.body)
+                        CardRow(label: tr("备份")) {
+                            Text(tr("导入前的备份 · {}", "\(BackupText.full(backup.createdMs))")).font(KV.Typography.body)
                         } actions: {}
                     }
                 }
                 if plaintext, let file {
                     Banner(
                         kind: .warning,
-                        message: "导出文件中的密码是明文。确认导入无误后，请删除 \(file.lastPathComponent)（并清空废纸篓）。"
+                        message: tr("导出文件中的密码是明文。确认导入无误后，请删除 {}（并清空废纸篓）。", "\(file.lastPathComponent)")
                     )
                 }
                 HStack(spacing: KV.Space.s4) {
                     if let file {
                         Button { NSWorkspace.shared.activateFileViewerSelecting([file]) } label: {
-                            Label("在访达中显示导出文件", systemImage: "folder")
+                            Label(tr("在访达中显示导出文件"), systemImage: "folder")
                         }
                         .buttonStyle(.kvLink)
                     }
                     if addTag {
-                        Button("查看导入的条目") {
+                        Button(tr("查看导入的条目")) {
                             model.mainRequest = .showTag(tag)
                             dismiss()
                         }
@@ -345,10 +345,10 @@ struct ImportSheet: View {
                 }
             }
         } footer: {
-            Button { undo() } label: { Label("撤销这次导入", systemImage: "arrow.uturn.backward") }
+            Button { undo() } label: { Label(tr("撤销这次导入"), systemImage: "arrow.uturn.backward") }
                 .buttonStyle(.kvSecondary)
                 .disabled(working)
-            Button("完成") { dismiss() }
+            Button(tr("完成")) { dismiss() }
                 .buttonStyle(.kvPrimary)
                 .keyboardShortcut(.defaultAction)
         }
@@ -362,8 +362,8 @@ struct ImportSheet: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = ImportText.fileTypes(source)
-        panel.prompt = "选择"
-        panel.message = "选择从 \(ImportText.sourceName(source)) 导出的文件。"
+        panel.prompt = tr("选择")
+        panel.message = tr("选择从 {} 导出的文件。", "\(ImportText.sourceName(source))")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         file = url
         problem = nil
@@ -399,7 +399,7 @@ struct ImportSheet: View {
             defer { working = false }
             // 导入前备份；备份失败时不导入
             guard let backup = await model.backupNow(kind: "import") else {
-                problem = "无法备份保险库，所以没有导入。请在「设置 → 备份」中检查备份位置。"
+                problem = tr("无法备份保险库，所以没有导入。请在「设置 → 备份」中检查备份位置。")
                 model.errorMessage = nil
                 return
             }
@@ -424,7 +424,7 @@ struct ImportSheet: View {
                 let moved = try await Task.detached { try vault.undoImport(itemIds: ids) }.value
                 model.reloadAfterBrowserWrite()
                 model.scheduleSecurityCheck(after: .seconds(1))
-                model.showToast("已撤销导入：\(moved) 个条目移到了最近删除")
+                model.showToast(tr("已撤销导入：{} 个条目移到了最近删除", "\(moved)"))
                 dismiss()
             } catch {
                 problem = AppModel.describe(error)
@@ -448,25 +448,25 @@ struct ExportSheet: View {
 
     private var passwordProblem: String? {
         guard format == "keevo" else { return nil }
-        if password.count < 10 { return password.isEmpty ? "" : "至少 10 个字符" }
-        if confirm != password { return confirm.isEmpty ? "" : "两次输入不一致" }
+        if password.count < 10 { return password.isEmpty ? "" : tr("至少 10 个字符") }
+        if confirm != password { return confirm.isEmpty ? "" : tr("两次输入不一致") }
         return nil
     }
 
     var body: some View {
-        SheetScaffold(title: "导出", subtitle: "导出全部保险库，或只导出一个保险库。", systemImage: "square.and.arrow.up", width: 560) {
+        SheetScaffold(title: tr("导出"), subtitle: tr("导出全部保险库，或只导出一个保险库。"), systemImage: "square.and.arrow.up", width: 560) {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
                 KVCard {
-                    ChoiceRow(title: "Keevo 加密文件（推荐）", detail: "用你设置的导出密码加密，可以在另一台 Mac 或另一个账户中导入", selected: format == "keevo") { format = "keevo" }
+                    ChoiceRow(title: tr("Keevo 加密文件（推荐）"), detail: tr("用你设置的导出密码加密，可以在另一台 Mac 或另一个账户中导入"), selected: format == "keevo") { format = "keevo" }
                     CardRowDivider()
-                    ChoiceRow(title: "CSV（明文）", detail: "通用格式，大多数密码管理器都能导入；只包含登录", selected: format == "csv") { format = "csv" }
+                    ChoiceRow(title: tr("CSV（明文）"), detail: tr("通用格式，大多数密码管理器都能导入；只包含登录"), selected: format == "csv") { format = "csv" }
                     CardRowDivider()
-                    ChoiceRow(title: "JSON（明文）", detail: "包含全部条目与字段", selected: format == "json") { format = "json" }
+                    ChoiceRow(title: tr("JSON（明文）"), detail: tr("包含全部条目与字段"), selected: format == "json") { format = "json" }
                 }
                 HStack(spacing: 10) {
-                    Text("导出").font(KV.Typography.body)
-                    Picker("导出", selection: $vaultId) {
-                        Text("全部保险库").tag("")
+                    Text(tr("导出")).font(KV.Typography.body)
+                    Picker(tr("导出"), selection: $vaultId) {
+                        Text(tr("全部保险库")).tag("")
                         ForEach(model.vaults, id: \.id) { v in Text(v.name).tag(v.id) }
                     }
                     .labelsHidden()
@@ -474,22 +474,22 @@ struct ExportSheet: View {
                     .fixedSize()
                 }
                 if format == "keevo" {
-                    LabeledInput(label: "导出密码", hint: "至少 10 个字符", focused: true) {
+                    LabeledInput(label: tr("导出密码"), hint: tr("至少 10 个字符"), focused: true) {
                         SecureField("", text: $password)
                     }
-                    LabeledInput(label: "再输入一次", hint: passwordProblem.flatMap { $0.isEmpty ? nil : $0 }) {
+                    LabeledInput(label: tr("再输入一次"), hint: passwordProblem.flatMap { $0.isEmpty ? nil : $0 }) {
                         SecureField("", text: $confirm).onSubmit(start)
                     }
-                    Text("导出密码只用于这个文件，与主密码无关；忘记后文件无法打开。")
+                    Text(tr("导出密码只用于这个文件，与主密码无关；忘记后文件无法打开。"))
                         .font(KV.Typography.footnote)
                         .foregroundStyle(KV.Colors.fgSecondary)
                 }
                 if let problem { Banner(kind: .danger, message: problem) }
             }
         } footer: {
-            Button("取消") { dismiss() }.buttonStyle(.kvSecondary).keyboardShortcut(.cancelAction)
+            Button(tr("取消")) { dismiss() }.buttonStyle(.kvSecondary).keyboardShortcut(.cancelAction)
             if working { ProgressView().controlSize(.small) }
-            Button("导出…", action: start)
+            Button(tr("导出…"), action: start)
                 .buttonStyle(.kvPrimary)
                 .keyboardShortcut(.defaultAction)
                 .disabled(passwordProblem != nil || working)
@@ -502,7 +502,7 @@ struct ExportSheet: View {
     private var defaultName: String {
         let date = Date().formatted(.iso8601.year().month().day())
         let ext = format == "keevo" ? "keevo-export" : format
-        return "Keevo 导出 \(date).\(ext)"
+        return tr("Keevo 导出 {}.{}", "\(date)", "\(ext)")
     }
 
     private func start() {
@@ -554,10 +554,10 @@ struct ExportSheet: View {
                 let n = try await Task.detached {
                     try vault.exportVault(path: url.path, format: format, vaultId: only, exportPassword: password)
                 }.value
-                model.showToast("已导出 \(n) 个条目")
+                model.showToast(tr("已导出 {} 个条目", "\(n)"))
                 dismiss()
             } catch {
-                problem = "无法导出：\(AppModel.describe(error))"
+                problem = tr("无法导出：{}", "\(AppModel.describe(error))")
             }
         }
     }
@@ -573,28 +573,28 @@ struct ExportPlainSheet: View {
 
     var body: some View {
         SheetScaffold(
-            title: "导出明文文件？",
-            subtitle: "明文文件中的密码，任何拿到文件的人都能读取。",
+            title: tr("导出明文文件？"),
+            subtitle: tr("明文文件中的密码，任何拿到文件的人都能读取。"),
             systemImage: "exclamationmark.triangle",
             tint: KV.Colors.statusDangerFg,
             width: 560
         ) {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
-                Banner(kind: .danger, message: "明文文件不受 Keevo 保护：同步盘、备份与邮件附件都可能把它复制到别处。导入完成后请立即删除。")
+                Banner(kind: .danger, message: tr("明文文件不受 Keevo 保护：同步盘、备份与邮件附件都可能把它复制到别处。导入完成后请立即删除。"))
                 if model.touchIDUsable {
-                    Button { confirm(nil) } label: { Label("用 Touch ID 确认", systemImage: "touchid") }
+                    Button { confirm(nil) } label: { Label(tr("用 Touch ID 确认"), systemImage: "touchid") }
                         .buttonStyle(KVButtonStyle(kind: .secondary, fullWidth: true))
                         .disabled(working)
-                    TextDivider(text: "或输入主密码")
+                    TextDivider(text: tr("或输入主密码"))
                 }
-                LabeledInput(label: "主密码") {
+                LabeledInput(label: tr("主密码")) {
                     SecureField("", text: $password).onSubmit { confirm(password) }
                 }
                 ErrorText()
             }
         } footer: {
-            Button("取消") { dismiss() }.buttonStyle(.kvSecondary).keyboardShortcut(.cancelAction)
-            Button("导出明文…") { confirm(password) }
+            Button(tr("取消")) { dismiss() }.buttonStyle(.kvSecondary).keyboardShortcut(.cancelAction)
+            Button(tr("导出明文…")) { confirm(password) }
                 .buttonStyle(KVButtonStyle(kind: .danger))
                 .keyboardShortcut(.defaultAction)
                 .disabled(password.isEmpty || working)
