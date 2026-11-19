@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>受控输入框（类似 React 的值跟踪）</title>
+<!-- 自动填充回归语料（合成页面）。预期结果见 keevo-expect：icons 为聚焦各字段后应出现的图标（login、otp，null 为不出现）；
+     fills 为填充后各字段的值（anchor 为 null 表示从弹窗填充）。$U、$P、$T 为测试用的用户名、密码与一次性密码。 -->
+<script type="application/json" id="keevo-expect">
+{
+  "title": "受控输入框（类似 React 的值跟踪）",
+  "pattern": "框架在实例上包装 value；填充必须触发 input 事件并被框架感知",
+  "icons": {
+    "#user": "login"
+  },
+  "fills": [
+    {
+      "anchor": null,
+      "expect": {
+        "#user[data-state]": "$U",
+        "#pass[data-state]": "$P"
+      }
+    }
+  ]
+}
+</script>
+<body style="margin:40px;font:16px sans-serif">
+<form onsubmit="return false"><p><input id="user" type="text" name="username" style="width:280px;height:32px"></p><p><input id="pass" type="password" name="password" style="width:280px;height:32px"></p><button>登录</button></form>
+<script>const d = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value"); for (const el of document.querySelectorAll("input")) { let tracked = el.value; Object.defineProperty(el, "value", { get() { return d.get.call(this); }, set(v) { tracked = v; d.set.call(this, v); } }); el.addEventListener("input", () => { const cur = d.get.call(el); if (cur !== tracked) { tracked = cur; el.dataset.state = cur; } }); }</script>
+</body>
+</html>

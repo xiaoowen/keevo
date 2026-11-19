@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>没有登录表单的页面</title>
+<!-- 自动填充回归语料（合成页面）。预期结果见 keevo-expect：icons 为聚焦各字段后应出现的图标（login、otp，null 为不出现）；
+     fills 为填充后各字段的值（anchor 为 null 表示从弹窗填充）。$U、$P、$T 为测试用的用户名、密码与一次性密码。 -->
+<script type="application/json" id="keevo-expect">
+{
+  "title": "没有登录表单的页面",
+  "pattern": "搜索框与订阅邮箱：都不显示图标",
+  "icons": {
+    "#q": null,
+    "#news": null
+  },
+  "fills": [
+    {
+      "anchor": null,
+      "outcome": "no_password_field",
+      "expect": {
+        "#q": "",
+        "#news": ""
+      }
+    }
+  ]
+}
+</script>
+<body style="margin:40px;font:16px sans-serif">
+<form onsubmit="return false"><p><input id="q" type="search" name="q" placeholder="搜索" style="width:280px;height:32px"></p></form><form onsubmit="return false"><p><input id="news" type="email" name="email" placeholder="订阅邮箱" style="width:280px;height:32px"></p><button>订阅</button></form>
+</body>
+</html>

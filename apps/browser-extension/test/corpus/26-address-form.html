@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>地址表单</title>
+<!-- 自动填充回归语料（合成页面）。预期结果见 keevo-expect：icons 为聚焦各字段后应出现的图标（login、otp，null 为不出现）；
+     fills 为填充后各字段的值（anchor 为 null 表示从弹窗填充）。$U、$P、$T 为测试用的用户名、密码与一次性密码。 -->
+<script type="application/json" id="keevo-expect">
+{
+  "title": "地址表单",
+  "pattern": "没有密码框：所有文本框都不显示图标",
+  "icons": {
+    "#name": null,
+    "#street": null,
+    "#city": null
+  },
+  "fills": []
+}
+</script>
+<body style="margin:40px;font:16px sans-serif">
+<form onsubmit="return false"><p><input id="name" type="text" name="name" autocomplete="name" style="width:280px;height:32px"></p><p><input id="street" type="text" name="street" autocomplete="street-address" style="width:280px;height:32px"></p><p><input id="city" type="text" name="city" style="width:280px;height:32px"></p><button>保存</button></form>
+</body>
+</html>

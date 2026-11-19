@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>隐藏的蜜罐字段</title>
+<!-- 自动填充回归语料（合成页面）。预期结果见 keevo-expect：icons 为聚焦各字段后应出现的图标（login、otp，null 为不出现）；
+     fills 为填充后各字段的值（anchor 为 null 表示从弹窗填充）。$U、$P、$T 为测试用的用户名、密码与一次性密码。 -->
+<script type="application/json" id="keevo-expect">
+{
+  "title": "隐藏的蜜罐字段",
+  "pattern": "display:none 的文本框在用户名之前，不应被填写",
+  "icons": {
+    "#user": "login"
+  },
+  "fills": [
+    {
+      "anchor": null,
+      "expect": {
+        "#trap": "",
+        "#user": "$U",
+        "#pass": "$P"
+      }
+    }
+  ]
+}
+</script>
+<body style="margin:40px;font:16px sans-serif">
+<form onsubmit="return false"><input id="trap" type="text" name="email" style="display:none"><p><input id="user" type="text" name="username" style="width:280px;height:32px"></p><p><input id="pass" type="password" style="width:280px;height:32px"></p><button>登录</button></form>
+</body>
+</html>

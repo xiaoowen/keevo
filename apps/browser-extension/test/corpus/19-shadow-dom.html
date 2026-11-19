@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>网页组件中的登录表单</title>
+<!-- 自动填充回归语料（合成页面）。预期结果见 keevo-expect：icons 为聚焦各字段后应出现的图标（login、otp，null 为不出现）；
+     fills 为填充后各字段的值（anchor 为 null 表示从弹窗填充）。$U、$P、$T 为测试用的用户名、密码与一次性密码。 -->
+<script type="application/json" id="keevo-expect">
+{
+  "title": "网页组件中的登录表单",
+  "pattern": "开放的 shadow root",
+  "icons": {
+    "#box >>> #user": "login",
+    "#box >>> #pass": "login"
+  },
+  "fills": [
+    {
+      "anchor": "#box >>> #user",
+      "expect": {
+        "#box >>> #user": "$U",
+        "#box >>> #pass": "$P"
+      }
+    },
+    {
+      "anchor": null,
+      "expect": {
+        "#box >>> #user": "$U",
+        "#box >>> #pass": "$P"
+      }
+    }
+  ]
+}
+</script>
+<body style="margin:40px;font:16px sans-serif">
+<login-box id="box"></login-box>
+<script>customElements.define("login-box", class extends HTMLElement { constructor() { super(); const r = this.attachShadow({ mode: "open" }); r.innerHTML = '<form onsubmit="return false"><p><input id="user" name="username" style="width:280px;height:32px"></p><p><input id="pass" type="password" style="width:280px;height:32px"></p></form>'; } });</script>
+</body>
+</html>

@@ -64,8 +64,27 @@
     return (el.getAttribute("autocomplete") ?? "").toLowerCase().split(/\s+/);
   }
 
+  /** 在 root 中查询，并递归进入开放的 shadow root（网页组件中的登录表单）。封闭的 shadow root 读不到。 */
+  function deepQuery<T extends Element>(root: ParentNode, selector: string): T[] {
+    const out = Array.from(root.querySelectorAll<T>(selector));
+    for (const el of Array.from(root.querySelectorAll("*"))) {
+      if (el.shadowRoot) out.push(...deepQuery<T>(el.shadowRoot, selector));
+    }
+    return out;
+  }
+
+  /** 字段所在的范围：表单，否则是它所在的文档或 shadow root。 */
+  function scopeOfField(el: HTMLInputElement): ParentNode {
+    return el.form ?? (el.getRootNode() as Document | ShadowRoot);
+  }
+
+  /** 可以填写的字段：可见、没有禁用、不是只读。 */
+  function editable(el: HTMLInputElement): boolean {
+    return !el.disabled && !el.readOnly && visible(el);
+  }
+
   function passwordFields(root: ParentNode): HTMLInputElement[] {
-    const all = Array.from(root.querySelectorAll<HTMLInputElement>('input[type="password"]')).filter(visible);
+    const all = deepQuery<HTMLInputElement>(root, 'input[type="password"]').filter(editable);
     // 注册页的"新密码"留给保存与生成功能；只有它们时才退而使用
     const current = all.filter((el) => !autocomplete(el).includes("new-password"));
     return current.length > 0 ? current : all;
@@ -73,26 +92,34 @@
 
   /** 位于密码框之前的最后一个可见文本框：通常就是用户名。 */
   function usernameBefore(password: HTMLInputElement): HTMLInputElement | undefined {
-    const root: ParentNode = password.form ?? document;
-    return Array.from(
-      root.querySelectorAll<HTMLInputElement>('input[type="email"], input[type="text"], input[type="tel"], input:not([type])'),
+    return deepQuery<HTMLInputElement>(
+      scopeOfField(password),
+      'input[type="email"], input[type="text"], input[type="tel"], input:not([type])',
     )
-      .filter((el) => visible(el) && (el.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0)
+      .filter((el) => editable(el) && (el.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0)
       .at(-1);
   }
+
+  /** 没有 autocomplete 标注的验证码框：名称或提示看起来像一次性密码。 */
+  const OTP_HINT = /one.?time|otp|totp|2fa|mfa|two.?factor|verification.?code|auth.?code|security.?code|验证码|动态码|校验码/i;
 
   function classify(target: EventTarget | null): Kind | null {
     if (!(target instanceof HTMLInputElement) || target.disabled || target.readOnly) return null;
     const ac = autocomplete(target);
     if (ac.includes("one-time-code")) return "otp";
     if (target.type === "password") return ac.includes("new-password") ? null : "login";
-    if (!TEXTUAL.has(target.type)) return null;
+    if (!TEXTUAL.has(target.type) && target.type !== "number") return null;
     if (ac.includes("username")) return "login";
-    // 与密码框同在一个表单中、看起来像用户名的文本框，或密码框之前的那个文本框
-    const root: ParentNode = target.form ?? document;
-    const password = passwordFields(root)[0];
-    if (!password) return null;
     const hint = [target.name, target.id, target.placeholder, target.getAttribute("aria-label") ?? ""].join(" ");
+    // 验证码框常标为数字输入、最多 8 位
+    const short = target.maxLength > 0 && target.maxLength <= 8;
+    if (OTP_HINT.test(hint) && (short || target.inputMode === "numeric" || target.type === "number" || target.type === "tel")) {
+      return "otp";
+    }
+    if (target.type === "number") return null;
+    // 与密码框同在一个表单中、看起来像用户名的文本框，或密码框之前的那个文本框
+    const password = passwordFields(scopeOfField(target))[0];
+    if (!password) return null;
     return USER_HINT.test(hint) || ac.includes("email") || usernameBefore(password) === target ? "login" : null;
   }
 
@@ -150,12 +177,17 @@
   }
 
   function showIcon(field: HTMLInputElement): void {
+    const label = anchorKind === "otp" ? "用 Keevo 填入一次性密码" : "用 Keevo 填充";
+    if (icon) {
+      icon.button.setAttribute("aria-label", label);
+      icon.button.title = label;
+    }
     if (!icon) {
       const { host, root } = topLayerHost(ICON_SIZE, ICON_SIZE);
       const button = document.createElement("button");
       button.type = "button";
-      button.setAttribute("aria-label", "用 Keevo 填充");
-      button.title = "用 Keevo 填充";
+      button.setAttribute("aria-label", label);
+      button.title = label;
       const s: Record<string, string> = {
         all: "initial",
         width: `${ICON_SIZE}px`,
@@ -258,17 +290,16 @@
     // 用户选择条目之后、凭据送达之前，页面可能已经跳转到其他网站
     if (location.origin !== m.origin) return "origin_changed";
     if (m.kind === "otp") {
-      if (!m.anchored || !anchor || !visible(anchor) || !m.totp) return "no_field";
+      if (!m.anchored || !anchor || !editable(anchor) || !m.totp) return "no_field";
       setValue(anchor, m.totp);
       return "filled";
     }
     let password: HTMLInputElement | undefined;
     let username: HTMLInputElement | undefined;
-    if (m.anchored && anchor && visible(anchor)) {
+    if (m.anchored && anchor && editable(anchor)) {
       if (anchor.type === "password") password = anchor;
       else username = anchor;
-      const root: ParentNode = anchor.form ?? document;
-      password ??= passwordFields(root)[0];
+      password ??= passwordFields(scopeOfField(anchor))[0];
       if (password && !username) username = usernameBefore(password);
     } else {
       password = passwordFields(document)[0];
@@ -285,9 +316,7 @@
 
   /** 提交时表单中的凭据。修改密码的表单取新密码。 */
   function captured(root: ParentNode): { username: string; password: string; change: boolean } | null {
-    const all = Array.from(root.querySelectorAll<HTMLInputElement>('input[type="password"]')).filter(
-      (el) => el.value !== "",
-    );
+    const all = deepQuery<HTMLInputElement>(root, 'input[type="password"]').filter((el) => el.value !== "");
     if (all.length === 0) return null;
     const fresh = all.filter((el) => autocomplete(el).includes("new-password"));
     const change = fresh.length > 0 || all.length >= 2;
@@ -298,7 +327,7 @@
     else if (all.length === 2) password = all[all.length - 1];
     if (!password) return null;
     const first = all[0] as HTMLInputElement;
-    const named = Array.from(root.querySelectorAll<HTMLInputElement>("input")).find(
+    const named = deepQuery<HTMLInputElement>(root, "input").find(
       (el) => autocomplete(el).includes("username") && el.value !== "",
     );
     const user = named ?? usernameBefore(first);
@@ -408,15 +437,24 @@
     );
   }
 
+  /** 当前获得焦点的元素，进入开放的 shadow root。 */
+  function deepActive(): Element | null {
+    let el = document.activeElement;
+    while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+    return el;
+  }
+
   // ---- 事件
 
   document.addEventListener(
     "focusin",
     (e) => {
-      const kind = classify(e.target);
+      // 焦点在开放的 shadow root 中时，e.target 被改写为宿主元素：取事件路径上的第一个元素
+      const target = e.composedPath()[0] ?? e.target;
+      const kind = classify(target);
       if (!kind) return;
-      if (menu && e.target !== anchor) closeMenu(false);
-      anchor = e.target as HTMLInputElement;
+      if (menu && target !== anchor) closeMenu(false);
+      anchor = target as HTMLInputElement;
       anchorKind = kind;
       if (visible(anchor)) showIcon(anchor);
     },
@@ -427,7 +465,7 @@
     () => {
       // 焦点进入菜单（iframe）时保留图标；稍后再判断，等新的焦点落定
       setTimeout(() => {
-        if (!menu && document.activeElement !== anchor) hideIcon();
+        if (!menu && deepActive() !== anchor) hideIcon();
       }, 150);
     },
     true,
@@ -444,7 +482,7 @@
   document.addEventListener(
     "keydown",
     (e) => {
-      if (!e.isTrusted || !anchor || e.target !== anchor) return;
+      if (!e.isTrusted || !anchor || e.composedPath()[0] !== anchor) return;
       if (e.key === "Escape" && menu) closeMenu(true);
       // 在字段中按 ↓：菜单已打开时把焦点移入菜单；字段为空时打开菜单。
       // 字段有内容时不拦截，留给浏览器自带的自动填充下拉
@@ -506,9 +544,10 @@
         return false;
       case "open_menu": {
         // 快捷键：用户按下快捷键时焦点所在的字段
-        const kind = document.hasFocus() ? classify(document.activeElement) : null;
+        const focused = deepActive();
+        const kind = document.hasFocus() ? classify(focused) : null;
         if (kind) {
-          anchor = document.activeElement as HTMLInputElement;
+          anchor = focused as HTMLInputElement;
           anchorKind = kind;
           showIcon(anchor);
           void openMenu();
