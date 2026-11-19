@@ -168,8 +168,8 @@ keevo://<保险库>/<条目>[/<分区>]/<字段>[?attribute=otp&profile=prod]
 
 ### 5.7 导入、导出与备份
 
-- **导入**：1Password（1PUX）、Bitwarden（JSON，含密码保护的加密 JSON）、Chrome / Safari / Firefox CSV、KeePass（KDBX 4）、LastPass CSV。导入前预览，导入后可一键回滚。
-- **导出**：Keevo 加密格式（推荐）、明文 JSON/CSV。明文导出需重新验证，并显示风险提示。
+- **导入**：1Password（1PUX）、Bitwarden（JSON，含密码保护的加密 JSON）、Chrome / Safari / Firefox CSV、LastPass CSV、Keevo 导出文件；KeePass（KDBX 4）稍后支持。导入前预览（与已有登录完全相同的跳过；银行卡、身份等作为安全笔记导入，字段保留），导入前自动备份，导入后可一键撤销（导入的条目移到最近删除）。
+- **导出**：Keevo 加密格式（推荐，[spec/export.md](../spec/export.md)）、明文 JSON/CSV。明文导出需重新验证，并显示风险提示。
 - **自动加密备份**：每日一次；导入、迁移、批量删除等重大操作前额外备份。备份与保险库同等加密，可指定外部位置。
 - **应急包**：账户密钥 + 二维码 + 主密码书写处，PDF，引导打印保存。
 - **后续**：支持 FIDO 联盟的凭证交换格式（CXF），与系统级导入导出对接。

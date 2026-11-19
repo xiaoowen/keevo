@@ -92,3 +92,10 @@ name = "ssh_agent_request"
 path = "fuzz_targets/ssh_agent_request.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "import_parse"
+path = "fuzz_targets/import_parse.rs"
+test = false
+doc = false
+bench = false

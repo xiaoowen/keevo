@@ -132,6 +132,25 @@ public enum Snapshots {
         if let backup = model.backups.first(where: { $0.kind == "import" }) {
             await shooter.shoot("restore-confirm", sheet: true) { RestoreConfirmSheet(backup: backup) }
         }
+        // 导入与导出
+        let exportFile = URL(fileURLWithPath: "/Users/me/Downloads/bitwarden_export_20261119.json")
+        let preview = ImportPreview(groups: [
+            ImportGroup(itemType: "login", original: nil, count: 142),
+            ImportGroup(itemType: "secure_note", original: nil, count: 12),
+            ImportGroup(itemType: "ssh_key", original: nil, count: 1),
+            ImportGroup(itemType: "secure_note", original: "credit_card", count: 3),
+            ImportGroup(itemType: "secure_note", original: "identity", count: 1),
+        ], total: 159, duplicates: 4, withAttachments: 2)
+        await shooter.shoot("import-source", sheet: true) { ImportSheet(file: exportFile) }
+        await shooter.shoot("import-password", sheet: true) { ImportSheet(step: .password, file: exportFile) }
+        await shooter.shoot("import-preview", sheet: true) { ImportSheet(step: .preview, file: exportFile, preview: preview) }
+        await shooter.shoot("import-done", sheet: true) {
+            ImportSheet(step: .done, file: exportFile, preview: preview,
+                        result: ImportResult(itemIds: Array(repeating: "x", count: 159), skipped: 4, withAttachments: 2),
+                        backup: model.backups.first)
+        }
+        await shooter.shoot("export", sheet: true) { ExportSheet() }
+        await shooter.shoot("export-plain", sheet: true) { ExportPlainSheet { _ in false } }
         await shooter.shoot("settings-browser", sheet: true) { SettingsView(initialPage: .browser) }
         model.refreshDeveloper()
         await shooter.shoot("settings-developer", sheet: true) { SettingsView(initialPage: .developer) }

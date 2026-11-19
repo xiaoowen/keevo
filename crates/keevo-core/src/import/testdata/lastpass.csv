@@ -1,0 +1,4 @@
+url,username,password,totp,extra,name,grouping,fav
+https://figma.com,design@studio.example,Fg!8kd92-ab,JBSWY3DPEHPK3PXP,,Figma,Work\Design,1
+http://sn,,,,"NoteType:Server
+Hostname:10.0.0.1",Router notes,Home,0

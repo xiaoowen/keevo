@@ -45,6 +45,14 @@ public struct KeevoApp: App {
                     .keyboardShortcut("g", modifiers: [.command, .shift])
                     .disabled(model.phase != .unlocked)
             }
+            CommandGroup(after: .importExport) {
+                Button("导入…") { model.showingImport = true }
+                    .keyboardShortcut("i", modifiers: [.command, .shift])
+                    .disabled(model.phase != .unlocked || model.vaults.isEmpty)
+                Button("导出…") { model.showingExport = true }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                    .disabled(model.phase != .unlocked)
+            }
             CommandGroup(after: .textEditing) {
                 Button("搜索条目") { model.mainRequest = .focusSearch }
                     .keyboardShortcut("f")

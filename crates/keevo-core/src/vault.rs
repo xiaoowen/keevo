@@ -1078,51 +1078,61 @@ impl Vault {
         let hlc = self.tick()?;
         let item_id = Id128::random()?;
         let rev_id = Id128::random()?;
-        let mut doc = ItemDoc::new(template.item_type);
-        doc.set(
-            RecordKey::attr("title"),
-            RecordValue::Text(title.into()),
-            hlc,
-            rev_id,
-        )?;
-        let section_ids: Vec<Id128> = template
-            .sections
-            .iter()
-            .map(|_| Id128::random())
-            .collect::<core::result::Result<_, _>>()?;
-        for ((id, label), order) in section_ids
-            .iter()
-            .zip(&template.sections)
-            .zip(order_sequence(template.sections.len()))
-        {
-            doc.set(
-                RecordKey::Section(*id),
-                RecordValue::Section(SectionValue {
-                    label: label.clone(),
-                    order,
-                }),
-                hlc,
-                rev_id,
-            )?;
-        }
-        // 每个分区内单独编号
-        let mut groups: Vec<(Option<Id128>, Vec<NewField>)> = Vec::new();
-        for (section, field) in template.fields {
-            let section = section.and_then(|i| section_ids.get(i).copied());
-            match groups.iter_mut().find(|(s, _)| *s == section) {
-                Some((_, list)) => list.push(field),
-                None => groups.push((section, vec![field])),
-            }
-        }
-        for (section, fields) in groups {
-            let orders = order_sequence(fields.len());
-            for (field, order) in fields.into_iter().zip(orders) {
-                add_field(&mut doc, field, section, order, hlc, rev_id)?;
-            }
-        }
+        let doc = template_doc(title, template, Vec::new(), hlc, rev_id)?;
         let ik = SymmetricKey::generate()?;
         self.write_item_revision(vault_id, item_id, rev_id, Vec::new(), &ik, Some(&doc))?;
         Ok(item_id)
+    }
+
+    /// 导入（[`crate::import`]）：在**一个事务**中新建全部条目，失败时什么都不写。每个条目加上 `tag`（例如
+    /// "导入 · Bitwarden"）。返回新条目的 ID，按输入顺序。
+    ///
+    /// # Errors
+    /// 已锁定；保险库不存在；某个条目过大（[`CoreError::ItemTooLarge`]）；SQLite 错误。
+    pub fn import_items(
+        &mut self,
+        vault_id: Id128,
+        items: Vec<crate::import::Imported>,
+        tag: Option<&str>,
+    ) -> Result<Vec<Id128>> {
+        if !self.session()?.vault_keys.contains_key(&vault_id) {
+            return Err(CoreError::NotFound);
+        }
+        let mut rows = Vec::with_capacity(items.len());
+        let mut ids = Vec::with_capacity(items.len());
+        let mut last = None;
+        for item in items {
+            let hlc = self.clock.next(now_ms())?;
+            last = Some(hlc);
+            let item_id = Id128::random()?;
+            let rev_id = Id128::random()?;
+            let mut extra: Vec<Edit> = item.tags.into_iter().map(Edit::AddTag).collect();
+            extra.extend(tag.map(|t| Edit::AddTag(t.to_owned())));
+            if item.favorite {
+                extra.push(Edit::SetFavorite(true));
+            }
+            let template = crate::templates::Template {
+                item_type: item.item_type,
+                sections: item.sections,
+                fields: item.fields,
+            };
+            let doc = template_doc(&item.title, template, extra, hlc, rev_id)?;
+            let ik = SymmetricKey::generate()?;
+            rows.push(self.item_revision_row(
+                vault_id,
+                item_id,
+                rev_id,
+                Vec::new(),
+                &ik,
+                Some(&doc),
+            )?);
+            ids.push(item_id);
+        }
+        if let Some(hlc) = last {
+            self.store.set_meta(META_HLC, &hlc.0.to_be_bytes())?;
+        }
+        self.store.insert_revisions(&rows)?;
+        Ok(ids)
     }
 
     /// 读取条目：合并全部头修订。
@@ -1763,6 +1773,62 @@ fn context(
         rev_id,
         binding: [0; 32],
     }
+}
+
+/// 按模板构造一个新条目的文档：标题、分区、字段，再应用 `extra`（标签、收藏）。
+fn template_doc(
+    title: &str,
+    template: crate::templates::Template,
+    extra: Vec<Edit>,
+    hlc: Hlc,
+    rev_id: Id128,
+) -> Result<ItemDoc> {
+    let mut doc = ItemDoc::new(template.item_type);
+    doc.set(
+        RecordKey::attr("title"),
+        RecordValue::Text(title.into()),
+        hlc,
+        rev_id,
+    )?;
+    let section_ids: Vec<Id128> = template
+        .sections
+        .iter()
+        .map(|_| Id128::random())
+        .collect::<core::result::Result<_, _>>()?;
+    for ((id, label), order) in section_ids
+        .iter()
+        .zip(&template.sections)
+        .zip(order_sequence(template.sections.len()))
+    {
+        doc.set(
+            RecordKey::Section(*id),
+            RecordValue::Section(SectionValue {
+                label: label.clone(),
+                order,
+            }),
+            hlc,
+            rev_id,
+        )?;
+    }
+    // 每个分区内单独编号
+    let mut groups: Vec<(Option<Id128>, Vec<NewField>)> = Vec::new();
+    for (section, field) in template.fields {
+        let section = section.and_then(|i| section_ids.get(i).copied());
+        match groups.iter_mut().find(|(s, _)| *s == section) {
+            Some((_, list)) => list.push(field),
+            None => groups.push((section, vec![field])),
+        }
+    }
+    for (section, fields) in groups {
+        let orders = order_sequence(fields.len());
+        for (field, order) in fields.into_iter().zip(orders) {
+            add_field(&mut doc, field, section, order, hlc, rev_id)?;
+        }
+    }
+    for edit in extra {
+        apply(&mut doc, edit, hlc, rev_id)?;
+    }
+    Ok(doc)
 }
 
 fn add_field(

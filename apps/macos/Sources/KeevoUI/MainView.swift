@@ -39,6 +39,8 @@ enum MainRequest: Equatable {
     case showItem(String)
     /// 选中一个条目并打开编辑器（安全中心的"修改密码"）。
     case editItem(String)
+    /// 显示某个标签下的条目（导入完成后的"查看导入的条目"）。
+    case showTag(String)
 }
 
 struct MainView: View {
@@ -126,6 +128,12 @@ struct MainView: View {
                 selectedItem = id
             }
         }
+        .sheet(isPresented: Binding(get: { model.showingImport }, set: { model.showingImport = $0 })) {
+            ImportSheet()
+        }
+        .sheet(isPresented: Binding(get: { model.showingExport }, set: { model.showingExport = $0 })) {
+            ExportSheet()
+        }
         .sheet(isPresented: $showingGenerator) {
             GeneratorView()
         }
@@ -162,6 +170,9 @@ struct MainView: View {
                 selectAfterSidebarChange = id
                 sidebar = .all
             }
+        case .showTag(let tag):
+            search = ""
+            sidebar = .tag(tag)
         }
     }
 

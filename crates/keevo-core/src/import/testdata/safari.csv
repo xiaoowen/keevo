@@ -1,0 +1,2 @@
+Title,URL,Username,Password,Notes,OTPAuth
+Apple ID (appleid.apple.com),https://appleid.apple.com/,me@icloud.com,correct-horse-42,,otpauth://totp/Apple:me?secret=JBSWY3DPEHPK3PXP&issuer=Apple

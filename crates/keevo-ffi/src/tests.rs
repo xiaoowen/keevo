@@ -1376,3 +1376,111 @@ fn backup_and_restore() {
         matches!(f.vault.check_backup(theirs.path), Err(KeevoError::Backup { code }) if code == "other_account")
     );
 }
+
+#[test]
+fn import_and_export() {
+    let f = Fixture::new();
+    let sample = |name: &str| {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../keevo-core/src/import/testdata")
+            .join(name)
+            .to_string_lossy()
+            .into_owned()
+    };
+    assert!(import_sources().contains(&"1password".to_owned()));
+    assert!(matches!(
+        f.vault.prepare_import(sample("bitwarden-encrypted.json"), "bitwarden".into(), None),
+        Err(KeevoError::Import { code }) if code == "password_required"
+    ));
+    let preview = f
+        .vault
+        .prepare_import(
+            sample("bitwarden-encrypted.json"),
+            "bitwarden".into(),
+            Some("correct horse battery".into()),
+        )
+        .unwrap();
+    assert_eq!((preview.total, preview.duplicates), (6, 0));
+    assert!(preview.groups.contains(&ImportGroup {
+        item_type: "secure_note".into(),
+        original: Some("credit_card".into()),
+        count: 1
+    }));
+    let result = f
+        .vault
+        .commit_import(f.vault_id.clone(), Some("导入 · Bitwarden".into()))
+        .unwrap();
+    assert_eq!(result.item_ids.len(), 6);
+    assert!(
+        f.vault.commit_import(f.vault_id.clone(), None).is_err(),
+        "只能写入一次"
+    );
+    assert_eq!(f.vault.items().unwrap().len(), 6);
+
+    // 再导入同一个文件：两个登录重复
+    let again = f
+        .vault
+        .prepare_import(sample("bitwarden.json"), "bitwarden".into(), None)
+        .unwrap();
+    assert_eq!((again.total, again.duplicates), (4, 2));
+    f.vault.cancel_import();
+
+    // 明文导出要求刚刚重新验证过，且只能用一次
+    let out = f.dir.join("out.csv").to_string_lossy().into_owned();
+    assert!(matches!(
+        f.vault.export_vault(out.clone(), "csv".into(), None, None),
+        Err(KeevoError::InvalidInput { message }) if message == "reverify"
+    ));
+    // 夹具没有本机密钥，无法走主密码验证；这里直接记下"刚刚验证过"（reverify 成功时做的就是这件事）
+    f.vault.note_reverified();
+    assert_eq!(
+        f.vault
+            .export_vault(out.clone(), "csv".into(), None, None)
+            .unwrap(),
+        2,
+        "CSV 只有登录"
+    );
+    assert!(
+        f.vault
+            .export_vault(out.clone(), "csv".into(), None, None)
+            .is_err()
+    );
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&out).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+    // 加密导出不需要重新验证；再导入另一个账户
+    let enc = f
+        .dir
+        .join("all.keevo-export")
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(
+        f.vault
+            .export_vault(
+                enc.clone(),
+                "keevo".into(),
+                None,
+                Some("export password".into())
+            )
+            .unwrap(),
+        6
+    );
+    assert!(is_keevo_export(enc.clone()));
+    let other = Fixture::new();
+    let preview = other
+        .vault
+        .prepare_import(enc, "keevo".into(), Some("export password".into()))
+        .unwrap();
+    assert_eq!(preview.total, 6);
+    other
+        .vault
+        .commit_import(other.vault_id.clone(), None)
+        .unwrap();
+    assert_eq!(other.vault.items().unwrap().len(), 6);
+
+    // 撤销：移到最近删除
+    assert_eq!(f.vault.undo_import(result.item_ids.clone()).unwrap(), 6);
+    assert!(f.vault.items().unwrap().iter().all(|i| i.trashed));
+}

@@ -21,9 +21,11 @@
 //! - [`Handshake`] / [`Transport`]：本地 IPC 的 Noise 握手与传输加密（`spec/ipc.md`）。
 //! - [`openssh_decrypt`]：导入有口令保护的 OpenSSH 私钥（`spec/ssh-agent.md` §3）。
 
+mod bitwarden;
 mod ed25519;
 mod envelope;
 mod error;
+mod export;
 mod hkdf;
 mod id;
 mod kdf;
@@ -46,6 +48,9 @@ mod kat;
 #[cfg(test)]
 mod vectors;
 
+pub use bitwarden::{
+    BITWARDEN_MAX_ARGON2, BITWARDEN_MAX_PBKDF2_ITERATIONS, BitwardenKdf, BitwardenKey,
+};
 pub use ed25519::{
     ED25519_PUBLIC_LEN, ED25519_SEED_LEN, ED25519_SIGNATURE_LEN, Ed25519SigningKey, ed25519_verify,
 };
@@ -54,6 +59,7 @@ pub use envelope::{
     ObjectType, Part, envelope_key_id, open, seal,
 };
 pub use error::{CryptoError, Result, SecretKeyError};
+pub use export::{EXPORT_MAGIC, MAX_EXPORT_LEN, is_export, open_export, seal_export};
 pub use id::{Id128, KeyId};
 pub use kdf::KdfParams;
 pub use key::SymmetricKey;

@@ -487,7 +487,7 @@ fn is_expiry_label(label: &str) -> bool {
 }
 
 /// 网址的主机名（小写）与协议。
-fn host_of(url: &str) -> Option<(String, String)> {
+pub(crate) fn host_of(url: &str) -> Option<(String, String)> {
     let url = url.trim();
     let (scheme, rest) = url.split_once("://").unwrap_or(("https", url));
     let authority = rest.split(['/', '?', '#']).next()?;

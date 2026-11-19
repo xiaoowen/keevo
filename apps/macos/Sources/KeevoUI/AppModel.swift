@@ -61,6 +61,9 @@ final class AppModel {
     var backups: [BackupInfo] = []
     /// 上次自动备份失败的原因（例如外部硬盘没有连接）。
     var backupError: String?
+    /// 导入向导与导出（「文件 → 导入…」「文件 → 导出…」）。
+    var showingImport = false
+    var showingExport = false
     /// 锁屏上显示一次的说明（例如"已从备份恢复"），解锁后清除。
     var lockNotice: String?
     @ObservationIgnored var backupTimer: Task<Void, Never>?
@@ -420,6 +423,8 @@ final class AppModel {
         pausedPairing = nil
         securityTask?.cancel()
         securityReport = nil
+        showingImport = false
+        showingExport = false
         breachChecking = false
         pendingSecretKey = nil
         pendingKdf = nil

@@ -1,0 +1,4 @@
+name,url,username,password,note
+github.com,https://github.com/login,octocat,Tr0ub4dor&3-horse,
+example.com,https://example.com/,"me, myself","pa""ss,word","line one
+line two"

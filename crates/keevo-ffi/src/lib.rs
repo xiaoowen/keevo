@@ -86,6 +86,12 @@ pub enum KeevoError {
         /// 不支持的算法名（`unsupported`）或加密方式（`cipher`）。
         detail: String,
     },
+    /// 导入文件无法导入（`not_recognized`、`password_required`、`wrong_password`、`account_restricted`、
+    /// `too_large`、`malformed`、`empty`）。
+    Import {
+        /// 原因代码。
+        code: String,
+    },
     /// 备份文件无法用来恢复（`not_backup`、`newer_version`、`other_account`）。
     Backup {
         /// 原因代码。
@@ -130,6 +136,7 @@ impl fmt::Display for KeevoError {
             }
             Self::SshKey { code, detail } => write!(f, "ssh key: {code} {detail}"),
             Self::Backup { code } => write!(f, "backup: {code}"),
+            Self::Import { code } => write!(f, "import: {code}"),
             Self::InvalidInput { message } => write!(f, "invalid input: {message}"),
             Self::Internal { message } => write!(f, "internal: {message}"),
         }
@@ -980,6 +987,10 @@ pub struct KeevoVault {
     search_index: Mutex<Option<SearchIndex>>,
     /// 安全中心的检查结果与泄露检查，锁定时丢弃。加锁顺序：保险库 → 安全中心 → 搜索索引。
     security: Mutex<security::SecurityState>,
+    /// 等待确认的导入（解析结果），锁定时丢弃。
+    pending_import: Mutex<Option<import::Pending>>,
+    /// 最近一次重新验证用户的时间（明文导出用，用一次即清除），锁定时清除。
+    reverified: Mutex<Option<std::time::Instant>>,
 }
 
 impl KeevoVault {
@@ -991,11 +1002,25 @@ impl KeevoVault {
             secrets: SecretRegistry::default(),
             search_index: Mutex::new(None),
             security: Mutex::default(),
+            pending_import: Mutex::new(None),
+            reverified: Mutex::new(None),
         }
     }
 
     fn security_state(&self) -> MutexGuard<'_, security::SecurityState> {
         self.security
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn pending_import(&self) -> MutexGuard<'_, Option<import::Pending>> {
+        self.pending_import
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn reverified(&self) -> MutexGuard<'_, Option<std::time::Instant>> {
+        self.reverified
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
@@ -1118,6 +1143,8 @@ impl KeevoVault {
         self.secrets.wipe();
         *self.security_state() = security::SecurityState::default();
         *self.index() = None;
+        *self.pending_import() = None;
+        *self.reverified() = None;
     }
 
     /// 全部保险库。
@@ -1534,7 +1561,9 @@ impl KeevoVault {
             keevo_core::Reverify::TouchId,
             keevo_core::Reverify::Password,
         );
-        Ok(self.vault().reverify(proof)?)
+        self.vault().reverify(proof)?;
+        self.note_reverified();
+        Ok(())
     }
 
     /// 已配对的浏览器扩展（"设置 → 浏览器"）。服务未启动或首次解锁前为空。
@@ -2429,12 +2458,14 @@ fn purpose_from(name: &str) -> Option<Purpose> {
 
 mod backup;
 mod developer;
+mod import;
 mod security;
 pub use backup::{BackupInfo, auto_backup_due, list_backups, prune_backups};
 pub use developer::{
     CliSessionInfo, DeveloperPrompt, RequestOrigin, SshAgentInfo, SshKeyInfo, SshSignRequest,
     ssh_agent_link_path,
 };
+pub use import::{ImportGroup, ImportPreview, ImportResult, import_sources, is_keevo_export};
 pub use security::{
     ItemSecurity, PasswordStrengthInfo, SecurityFinding, SecurityReport, password_strength,
     security_checks,
