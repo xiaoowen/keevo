@@ -158,6 +158,21 @@ C
   [[ "$CODE" == 3 ]] || fail "Library Validation 没有拒绝临时签名的库：$REFUSED"
   REASON="$(grep -oE 'not valid for use in process: [^,]*' <<<"$REFUSED" | head -1 | sed 's/)$//')"
   pass "Library Validation 拒绝临时签名的库，放行系统库（${REASON:-$REFUSED}）"
+
+  # 真实 Chrome 启动应用包内的 host：父进程校验与 cdhash 校验（spec/ipc.md §3），反例为没有经过打包签名的 host
+  echo "真实浏览器链路"
+  CHROME_BIN="${KEEVO_CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+  if [[ ! -x "$CHROME_BIN" ]]; then
+    echo "  · 跳过：没有找到 Chrome（可用 KEEVO_CHROME 指定）"
+  elif ! command -v node >/dev/null; then
+    echo "  · 跳过：没有 Node.js"
+  elif [[ ! -f "$ROOT/apps/browser-extension/dist/manifest.json" ]]; then
+    echo "  · 跳过：扩展还没有构建（先运行 scripts/build-extension.sh）"
+  else
+    node "$ROOT/apps/browser-extension/test/packaged.mjs" "$APP" "$APP_SRC/.build/release/keevo-smoke" >"$WORK/browser.log" 2>&1 \
+      || { cat "$WORK/browser.log"; fail "真实浏览器链路测试失败"; }
+    grep '✓' "$WORK/browser.log" | sed 's/^ *✓ /  ✓ /'
+  fi
 fi
 
 if [[ "$LAUNCH" == 1 ]]; then

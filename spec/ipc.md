@@ -68,6 +68,7 @@ CLI 的会话授权（按终端会话划分）在 v0.2 定义。
 > - §3.2 父进程校验：已实现，按代码签名（`crates/keevo-macos`）。白名单目前只有已在构建机上核实的 Google Chrome（Team ID `EQHXZ8M8AV`）。
 > - §3.1 socket 对端校验：已实现。`scripts/package-macos.sh` 先签名 native host，把它的 cdhash 编译进主程序（`KEEVO_HOST_CDHASHES`），再签名主程序；host 放在应用包的 `Contents/Helpers/` 中。Vault Service 在 Keevo.app 内运行，要求对端满足 `cdhash H"…"`；没有编译进 cdhash 的 release 构建拒绝启动服务。
 > - §4.2 配对记录：存入加密的保险库数据库（`crypto.md` §8.8 本机记录），开发服务也使用它，未认证的 JSON 文件存储已删除。
+> - 真实浏览器验证（`scripts/package-macos.sh --verify`）：真实 Chrome 启动应用包内的 host，host 通过 §3.2 的父进程校验，服务按 §3.1 的 cdhash 校验接受它；同一份代码但没有经过打包签名的 host 被服务关闭连接。白名单的维护流程见 [docs/browser-allowlist.md](../docs/browser-allowlist.md)。
 > - 仅 debug 构建可用 `KEEVO_DEV_ALLOW_ANY_PARENT` 跳过父进程校验、用 `KEEVO_DEV_SOCKET` 指定 socket 路径、只依赖 socket 目录权限，供端到端测试使用。
 
 ## 4. 端到端加密
