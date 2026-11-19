@@ -19,6 +19,7 @@
 //! - [`AccountKeyset`]：账户密钥集，由 AUK 封装。
 //! - [`seal`] / [`open`]：加密信封；[`SymmetricKey::wrap_key`] / [`SymmetricKey::unwrap_key`]：密钥包裹。
 //! - [`Handshake`] / [`Transport`]：本地 IPC 的 Noise 握手与传输加密（`spec/ipc.md`）。
+//! - [`openssh_decrypt`]：导入有口令保护的 OpenSSH 私钥（`spec/ssh-agent.md` §3）。
 
 mod ed25519;
 mod envelope;
@@ -31,6 +32,7 @@ mod keyset;
 mod local_record;
 mod local_wrap;
 mod noise;
+mod openssh;
 mod padding;
 mod random;
 mod secret_key;
@@ -66,6 +68,7 @@ pub use noise::{
     Handshake, MAX_NOISE_MESSAGE, PAIR_NONCE_LEN, StaticKeypair, Transport, pairing_commitment,
     pairing_nonce,
 };
+pub use openssh::{OPENSSH_CIPHER_BLOCK, OPENSSH_CIPHERS, OPENSSH_MAX_ROUNDS, openssh_decrypt};
 pub use random::random_below;
 
 /// SHA-256。只用于非秘密值（例如 SSH 公钥指纹，`spec/ssh-agent.md` §3）。

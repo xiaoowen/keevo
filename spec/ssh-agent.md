@@ -1,6 +1,6 @@
 # SSH Agent
 
-- **版本**：0.1（草案，M1.4）
+- **版本**：0.2（草案，M1.4）
 - **协议**：SSH agent 协议（draft-miller-ssh-agent，即 OpenSSH `PROTOCOL.agent`），以及 OpenSSH 的 `session-bind@openssh.com` 扩展。
 - **原则**：私钥永远不离开 Keevo（`docs/product.md` §5.5）。Agent 只代为签名，不导出私钥，不接受外部密钥。
 
@@ -34,9 +34,23 @@ Agent 提供的密钥同时满足：
 2. 条目属性 `ssh_agent`（`spec/vault-format.md` §2.1）为 `ask`、`session` 或 `unlocked`；
 3. 条目中恰好有一个 `ssh_private_key` 字段，内容是未加密的 OpenSSH 私钥（`openssh-key-v1`，即 `ssh-keygen` 的默认格式），且算法受支持。
 
-- **算法**：M1.4 支持 Ed25519。ECDSA P-256 与 RSA（`rsa-sha2-256`/`rsa-sha2-512`）需要经过审计的实现，之后加入；包含这些算法私钥的条目不出现在列表中，界面说明原因。
+- **算法**：M1.4 支持 Ed25519。ECDSA P-256 与 RSA（`rsa-sha2-256`/`rsa-sha2-512`）所需的密码学库（RustCrypto 的 `p256`、`rsa` 0.10 等 34 个 crate）通过供应链审计后加入；包含这些算法私钥的条目不出现在列表中，界面说明原因。
 - 公钥与指纹由私钥计算，不信任条目中"公钥""指纹"字段的文本。
 - 列表按条目标题排序。私钥只在签名时解码，用后清零。
+
+**导入**（Keevo.app 中"导入私钥…"）：
+
+| 输入 | 处理 |
+|---|---|
+| 未加密的 OpenSSH 私钥 | 导入 |
+| 有口令保护的 OpenSSH 私钥：`bcrypt` + `aes128-ctr`、`aes192-ctr` 或 `aes256-ctr`（`ssh-keygen` 的默认） | 在 Keevo.app 中输入口令后解密导入。口令只用于这一次解密，不保存；bcrypt 轮数上限 1024。私钥段开头的两个校验数不一致即"口令不对"（与 OpenSSH 相同） |
+| 未加密的 PKCS#8 PEM（`BEGIN PRIVATE KEY`，RFC 8410 的 Ed25519，v1 或带公钥的 v2） | 导入；没有注释，用条目标题；v2 的公钥必须与私钥一致 |
+| `aes256-gcm@openssh.com` 等带认证的加密方式 | 说明转换方法：`ssh-keygen -p -Z aes256-ctr -f <文件>` |
+| 加密的 PEM（旧式 `Proc-Type: 4,ENCRYPTED`，或 `BEGIN ENCRYPTED PRIVATE KEY`） | 说明转换方法：`ssh-keygen -p -f <文件>`（转换为 OpenSSH 格式，可以保留口令） |
+| RSA、ECDSA、DSA 私钥（OpenSSH 或 PEM） | 说明暂不支持；算法取自公钥，不需要先输入口令 |
+
+- 不论原来是什么格式，导入后都以**未加密的 OpenSSH 格式**写入条目的 `ssh_private_key` 字段，由保险库加密保存（不保存原文件的口令保护）。
+- 测试数据：`crates/keevo-ssh/src/testdata/`（由 `ssh-keygen` 与 `openssl` 生成，命令见其中的 README）。
 
 ## 4. 授权
 
@@ -94,8 +108,8 @@ bool    is_forwarding
 
 | 事项 | 计划 |
 |---|---|
-| ECDSA P-256、RSA（`rsa-sha2-256/512`） | 引入经过审计的实现之后 |
-| 导入加密的 OpenSSH 私钥（`bcrypt` + `aes256-ctr`）与 PEM 格式 | M1.5（导入导出） |
+| ECDSA P-256、RSA（`rsa-sha2-256/512`） | 所需的 34 个 crate 通过供应链审计之后；只做 SHA-2 签名，RSA 至少 2048 位 |
+| 导入加密的 OpenSSH 私钥与 PEM 格式 | ✅ 0.2（§3"导入"）。`aes256-gcm@openssh.com` 与加密的 PEM 说明转换方法 |
 | 按主机生成 `IdentityFile` + `IdentitiesOnly` 配置（避免"Too many authentication failures"） | 与配置助手一起 |
 
 ## 9. 变更记录
@@ -103,3 +117,4 @@ bool    is_forwarding
 | 版本 | 日期 | 说明 |
 |---|---|---|
 | 0.1 | 2026-11-19 | 首个草案（M1.4） |
+| 0.2 | 2026-11-19 | §3 新增"导入"：有口令保护的 OpenSSH 私钥（bcrypt + AES-CTR）与 Ed25519 的 PKCS#8 PEM；不支持的加密方式与格式给出转换方法 |

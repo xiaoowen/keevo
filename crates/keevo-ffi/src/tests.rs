@@ -1138,13 +1138,81 @@ fn ssh_keys_are_generated_imported_and_listed() {
         .unwrap();
     let text = field("私钥").to_owned();
     assert_eq!(
-        f.vault.import_ssh_private_key(other.clone(), text).unwrap(),
+        f.vault
+            .import_ssh_private_key(other.clone(), text, None)
+            .unwrap(),
         fingerprint
     );
-    assert!(matches!(
-        f.vault.import_ssh_private_key(other.clone(), "-----BEGIN RSA PRIVATE KEY-----\nAA\n-----END RSA PRIVATE KEY-----".into()),
-        Err(KeevoError::SshKey { code, .. }) if code == "pem"
-    ));
+    let code_of = |r: Result<String, KeevoError>| match r {
+        Err(KeevoError::SshKey { code, detail }) => format!("{code} {detail}"),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        code_of(f.vault.import_ssh_private_key(
+            other.clone(),
+            "-----BEGIN RSA PRIVATE KEY-----\nAA\n-----END RSA PRIVATE KEY-----".into(),
+            None
+        )),
+        "unsupported ssh-rsa"
+    );
+    // 有口令保护的私钥（keevo-ssh 的测试数据，口令 correct horse）：先说明需要口令，口令不对单独说明，
+    // 正确时导入；条目中保存的是未加密的 OpenSSH 格式（由保险库加密）
+    let encrypted = include_str!("../../keevo-ssh/src/testdata/ed25519-aes256-ctr").to_owned();
+    assert_eq!(
+        code_of(
+            f.vault
+                .import_ssh_private_key(other.clone(), encrypted.clone(), None)
+        ),
+        "encrypted "
+    );
+    assert_eq!(
+        code_of(f.vault.import_ssh_private_key(
+            other.clone(),
+            encrypted.clone(),
+            Some("wrong".into())
+        )),
+        "wrong_passphrase "
+    );
+    assert_eq!(
+        f.vault
+            .import_ssh_private_key(other.clone(), encrypted, Some("correct horse".into()))
+            .unwrap(),
+        "SHA256:no/e8WdACPEYj7f3n0KxqP6g4k7PJnw0N95kIGpQmVg"
+    );
+    let stored = f.vault.item(other.clone()).unwrap();
+    let private = stored.fields.iter().find(|x| x.label == "私钥").unwrap();
+    let private = private.value.expose();
+    assert!(private.contains("BEGIN OPENSSH PRIVATE KEY"));
+    assert!(
+        keevo_ssh::PrivateKey::parse(&private).is_ok(),
+        "保存的私钥不需要口令"
+    );
+    assert_eq!(
+        code_of(f.vault.import_ssh_private_key(
+            other.clone(),
+            include_str!("../../keevo-ssh/src/testdata/ed25519-aes256-gcm").into(),
+            Some("correct horse".into())
+        )),
+        "cipher aes256-gcm@openssh.com"
+    );
+    // PKCS#8 没有注释：用条目标题
+    f.vault
+        .import_ssh_private_key(
+            other.clone(),
+            include_str!("../../keevo-ssh/src/testdata/ed25519-pkcs8.pem").into(),
+            None,
+        )
+        .unwrap();
+    let keys = f.vault.ssh_keys().unwrap();
+    let imported = keys.iter().find(|k| k.item_id == other).unwrap();
+    assert!(
+        imported
+            .public_key
+            .as_deref()
+            .unwrap_or("")
+            .ends_with(" 副本"),
+        "{imported:?}"
+    );
     // 不是 SSH 密钥条目
     let login = f.login("网站");
     assert!(f.vault.generate_ssh_key(login).is_err());

@@ -147,9 +147,9 @@
 | ✅ | SSH Agent | `keevo-ssh`：OpenSSH 私钥与公钥格式、指纹、agent 消息、session-bind（Ed25519 主机密钥验证签名）；Ed25519 签名基于 curve25519-dalek，RFC 8032 已知答案。只提供开启了的 Ed25519 密钥，按密钥的策略（每次确认 / 每个会话一次 / 解锁期间自动）在原生界面确认并显示来源（应用、命令、启动者、目标主机）；转发的连接一律逐次确认并警告；拒绝 `ssh-add` 添加外部密钥；锁定时请应用解锁并等待 30 秒（只在程序坞提示，30 秒内最多一次）；"设置 → 开发者"列出最近使用（只在内存中）。互通测试由系统的 `ssh-add -L`、`ssh-keygen -Y sign/verify` 驱动 |
 | ✅ | SSH 密钥与配置助手 | 新建 SSH 密钥条目时生成 Ed25519 密钥（私钥不经过 FFI）；导入未加密的 OpenSSH 私钥（加密与 PEM 格式给出转换方法）；条目详情中设置 Agent 策略；写入 `~/.ssh/config`（先显示改动、备份原文件）；配置 Git 提交签名（显示将运行的命令，`gpg.ssh.program` 为 `keevo-ssh-sign`） |
 | ✅ | 打包实测 | `scripts/package-macos.sh --verify`：应用包内的 `keevo` 通过 cdhash 校验并读取引用；同一份代码重新签名后被拒绝（退出码 3）；Agent 列出保险库中的密钥，`keevo-ssh-sign` 经 Agent 签名、`ssh-keygen -Y verify` 通过 |
-| ☐ | ECDSA P-256 与 RSA | 需要经过审计的实现（RustCrypto 的 `p256`、常数时间的 RSA）与供应链审计，之后加入；目前导入这些私钥时说明原因 |
-| ☐ | 导入加密的 OpenSSH 私钥与 PEM | 随 M1.5 的导入导出（需要 bcrypt-pbkdf 与 AES-CTR） |
-| ☐ | `keevo run` 使用伪终端 | 遮蔽的同时保留颜色；目前子进程输出连到管道 |
+| ☐ | ECDSA P-256 与 RSA | 2026-11-19 评估：RustCrypto 的 `p256` 0.14 与常数时间的 `rsa` 0.10 已通过 `cargo deny`，但连同依赖共 34 个 crate 在 `cargo vet` 中没有可信审计。决定等供应链审计后再加入；目前导入这些私钥时说明原因 |
+| ✅ | 导入有口令保护的私钥与 PEM | 在 Keevo.app 中输入口令，解密 `bcrypt` + `aes*-ctr` 的 OpenSSH 私钥（口令不保存）；导入 Ed25519 的 PKCS#8 PEM。`aes256-gcm@openssh.com`、加密的 PEM 与不支持的算法说明原因并给出转换命令。新增 `aes`、`ctr`、`bcrypt-pbkdf` 等 7 个 crate（`cargo vet` 中登记为豁免）。测试数据由 `ssh-keygen` 与 `openssl` 生成 |
+| ✅ | `keevo run` 使用伪终端 | 遮蔽时，输出到终端的那一路改用伪终端：保留颜色与进度条，窗口大小跟随终端；输出被重定向时仍用管道 |
 
 **人工检查**：Keevo.app 中 CLI 与 SSH 确认界面的实际操作（Touch ID、主密码）；写入 `~/.ssh/config` 与 Git 签名配置的实际效果；真实终端（iTerm2、Terminal）中会话键的划分。
 

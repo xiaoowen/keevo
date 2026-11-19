@@ -80,9 +80,10 @@ pub enum KeevoError {
     },
     /// SSH 私钥无法使用（`spec/ssh-agent.md` §3）。
     SshKey {
-        /// `not_openssh`、`pem`、`encrypted`、`unsupported`、`malformed`。
+        /// `not_openssh`、`pem`（加密的 PEM）、`encrypted`（需要口令）、`wrong_passphrase`、`cipher`（加密方式不支持）、
+        /// `unsupported`（算法不支持）、`malformed`。
         code: String,
-        /// 不支持的算法名（`unsupported` 时）。
+        /// 不支持的算法名（`unsupported`）或加密方式（`cipher`）。
         detail: String,
     },
     /// 输入不合法。

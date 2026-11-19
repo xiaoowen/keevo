@@ -1,15 +1,18 @@
-//! SSH 密钥：公钥的线上编码（blob）、公钥行与指纹、OpenSSH 私钥格式（`openssh-key-v1`，未加密）。
+//! SSH 密钥：公钥的线上编码（blob）、公钥行与指纹、OpenSSH 私钥格式（`openssh-key-v1`）。
 //!
-//! 格式依据 OpenSSH 的 `PROTOCOL.key` 与 RFC 8709（Ed25519）。M1.4 只支持 Ed25519
-//! （`spec/ssh-agent.md` §3），其他算法解析为 [`KeyError::Unsupported`]，由界面说明原因。
+//! 格式依据 OpenSSH 的 `PROTOCOL.key`、RFC 8709（Ed25519）与 RFC 8410（PKCS#8 中的 Ed25519）。
+//! 只支持 Ed25519（`spec/ssh-agent.md` §3），其他算法解析为 [`KeyError::Unsupported`]，由界面说明原因。
+//!
+//! 导入时接受：未加密或以 `aes*-ctr` + bcrypt 口令保护的 OpenSSH 私钥；未加密的 PKCS#8 PEM（Ed25519）。
+//! 写出时只写未加密的 OpenSSH 格式（私钥由保险库加密保存）。
 
 use std::fmt;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD};
 use keevo_crypto::{
-    ED25519_PUBLIC_LEN, ED25519_SEED_LEN, ED25519_SIGNATURE_LEN, Ed25519SigningKey, ed25519_verify,
-    random_below, sha256,
+    CryptoError, ED25519_PUBLIC_LEN, ED25519_SEED_LEN, ED25519_SIGNATURE_LEN, Ed25519SigningKey,
+    OPENSSH_CIPHER_BLOCK, OPENSSH_CIPHERS, ed25519_verify, openssh_decrypt, random_below, sha256,
 };
 use zeroize::Zeroizing;
 
@@ -31,10 +34,15 @@ pub const MAX_PRIVATE_KEY_TEXT: usize = 64 * 1024;
 pub enum KeyError {
     /// 不是 OpenSSH 私钥格式。
     NotOpenSsh,
-    /// PEM 格式（`BEGIN RSA PRIVATE KEY` 等）：需要先用 `ssh-keygen -p` 转换为 OpenSSH 格式。
+    /// 加密的 PEM（旧式 `Proc-Type: 4,ENCRYPTED` 或 `ENCRYPTED PRIVATE KEY`）：需要先用 `ssh-keygen -p`
+    /// 转换为 OpenSSH 格式（可以保留口令）。
     Pem,
-    /// 私钥有口令保护（M1.4 不支持导入加密的私钥）。
+    /// 私钥有口令保护，需要提供口令。
     Encrypted,
+    /// 口令不对。
+    WrongPassphrase,
+    /// 不支持的加密方式（例如 `aes256-gcm@openssh.com`）：需要先用 `ssh-keygen -p -Z aes256-ctr` 转换。
+    UnsupportedCipher(String),
     /// 不支持的算法。
     Unsupported(String),
     /// 结构错误。
@@ -49,6 +57,8 @@ impl KeyError {
             Self::NotOpenSsh => "not_openssh",
             Self::Pem => "pem",
             Self::Encrypted => "encrypted",
+            Self::WrongPassphrase => "wrong_passphrase",
+            Self::UnsupportedCipher(_) => "cipher",
             Self::Unsupported(_) => "unsupported",
             Self::Malformed => "malformed",
         }
@@ -59,6 +69,7 @@ impl fmt::Display for KeyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unsupported(alg) => write!(f, "unsupported key type: {alg}"),
+            Self::UnsupportedCipher(c) => write!(f, "unsupported cipher: {c}"),
             other => f.write_str(other.code()),
         }
     }
@@ -218,88 +229,78 @@ impl PrivateKey {
         w.into_inner()
     }
 
-    /// 解析 OpenSSH 私钥文本（`-----BEGIN OPENSSH PRIVATE KEY-----`）。
+    /// 解析私钥文本（未加密）。有口令保护时返回 [`KeyError::Encrypted`]。
     ///
     /// # Errors
-    /// 见 [`KeyError`]。
+    /// 见 [`PrivateKey::parse_with_passphrase`]。
     pub fn parse(text: &str) -> Result<Self, KeyError> {
+        Self::parse_with_passphrase(text, None)
+    }
+
+    /// 解析私钥文本：OpenSSH 格式（可以有口令保护），或未加密的 PKCS#8 PEM（Ed25519）。
+    ///
+    /// # Errors
+    /// - 不是私钥：[`KeyError::NotOpenSsh`]；加密的 PEM：[`KeyError::Pem`]；
+    /// - 算法不支持：[`KeyError::Unsupported`]（不需要口令就能判断）；加密方式不支持：[`KeyError::UnsupportedCipher`]；
+    /// - 需要口令而没有给出：[`KeyError::Encrypted`]；口令不对：[`KeyError::WrongPassphrase`]；
+    /// - 结构错误、公私钥不一致：[`KeyError::Malformed`]。
+    pub fn parse_with_passphrase(text: &str, passphrase: Option<&str>) -> Result<Self, KeyError> {
         if text.len() > MAX_PRIVATE_KEY_TEXT {
             return Err(KeyError::Malformed);
         }
         let text = text.trim();
         if text.starts_with("-----BEGIN ") && !text.starts_with(BEGIN) {
-            return Err(KeyError::Pem);
+            return parse_pem(text);
         }
-        let body = text
-            .strip_prefix(BEGIN)
-            .and_then(|t| t.strip_suffix(END))
-            .ok_or(KeyError::NotOpenSsh)?;
-        let b64: Zeroizing<String> =
-            Zeroizing::new(body.chars().filter(|c| !c.is_whitespace()).collect());
-        let bytes = Zeroizing::new(
-            STANDARD
-                .decode(b64.as_bytes())
-                .map_err(|_| KeyError::Malformed)?,
-        );
+        let bytes = pem_body(text, BEGIN, END)?;
         let rest = bytes.strip_prefix(MAGIC).ok_or(KeyError::NotOpenSsh)?;
         let mut r = Reader::new(rest);
         let cipher = r.string()?;
         let kdf = r.string()?;
-        let _kdf_options = r.string()?;
-        if cipher != b"none" || kdf != b"none" {
-            return Err(KeyError::Encrypted);
-        }
+        let kdf_options = r.string()?;
+        let encrypted = match (cipher, kdf) {
+            (b"none", b"none") => false,
+            (_, b"bcrypt") if cipher != b"none" => true,
+            _ => return Err(KeyError::Malformed),
+        };
         if r.u32()? != 1 {
             // 一个文件中有多把密钥：ssh-keygen 不会这样写
             return Err(KeyError::Malformed);
         }
         let public_blob = r.string()?;
         let private = r.string()?;
-        r.finish()?;
-        // 先判断算法：不支持的算法给出名称，而不是笼统的结构错误
+        // 先判断算法（公钥在加密范围之外）：不支持的算法不必先要口令，也给出名称而不是笼统的结构错误
         let public = PublicKey::from_blob(public_blob)?;
+        if !encrypted {
+            r.finish()?;
+            return parse_private(private, &public, BLOCK, false);
+        }
+        let cipher = String::from_utf8_lossy(cipher).into_owned();
+        if !OPENSSH_CIPHERS.contains(&cipher.as_str()) {
+            // 带认证的加密方式在私钥段之后还有认证标签，这里不再往下解析
+            return Err(KeyError::UnsupportedCipher(cipher));
+        }
+        r.finish()?;
+        let passphrase = passphrase
+            .filter(|p| !p.is_empty())
+            .ok_or(KeyError::Encrypted)?;
+        let mut o = Reader::new(kdf_options);
+        let salt = o.string()?;
+        let rounds = o.u32()?;
+        o.finish()?;
+        let mut plain = Zeroizing::new(private.to_vec());
+        openssh_decrypt(&cipher, passphrase.as_bytes(), salt, rounds, &mut plain).map_err(|e| {
+            match e {
+                CryptoError::EmptyPassword => KeyError::Encrypted,
+                _ => KeyError::Malformed,
+            }
+        })?;
+        parse_private(&plain, &public, OPENSSH_CIPHER_BLOCK, true)
+    }
 
-        let mut p = Reader::new(private);
-        let check1 = p.u32()?;
-        let check2 = p.u32()?;
-        if check1 != check2 {
-            return Err(KeyError::Malformed);
-        }
-        let alg = p.string()?;
-        if alg != ED25519.as_bytes() {
-            return Err(KeyError::Unsupported(
-                String::from_utf8_lossy(alg).into_owned(),
-            ));
-        }
-        let pk: [u8; ED25519_PUBLIC_LEN] =
-            p.string()?.try_into().map_err(|_| KeyError::Malformed)?;
-        let sk = p.string()?;
-        let comment = String::from_utf8_lossy(p.string()?).into_owned();
-        // 填充：1, 2, 3, …，补齐到块大小
-        let padding = p.remaining();
-        if padding.len() >= BLOCK
-            || padding
-                .iter()
-                .zip(1u8..)
-                .any(|(&byte, expected)| byte != expected)
-        {
-            return Err(KeyError::Malformed);
-        }
-        // Ed25519 私钥字段是 种子 ‖ 公钥（64 字节）
-        let (seed, embedded_pk) = sk
-            .split_at_checked(ED25519_SEED_LEN)
-            .ok_or(KeyError::Malformed)?;
-        if embedded_pk != pk || PublicKey::Ed25519(pk) != public {
-            return Err(KeyError::Malformed);
-        }
-        let mut seed_arr = Zeroizing::new([0u8; ED25519_SEED_LEN]);
-        seed_arr.copy_from_slice(seed);
-        let key = Ed25519SigningKey::from_seed(seed_arr);
-        // 种子必须与公钥一致，否则是伪造或损坏的文件
-        if key.public_key() != pk {
-            return Err(KeyError::Malformed);
-        }
-        Ok(Self { key, comment })
+    /// 设置注释（例如 PKCS#8 没有注释时，用条目标题）。
+    pub fn set_comment(&mut self, comment: &str) {
+        comment.clone_into(&mut self.comment);
     }
 
     /// 编码为 OpenSSH 私钥文本（未加密），与 `ssh-keygen -t ed25519 -N ''` 的输出格式相同。
@@ -350,6 +351,150 @@ impl PrivateKey {
         out.push('\n');
         Ok(out)
     }
+}
+
+/// 取出 PEM 包装中的 Base64 内容并解码。
+fn pem_body(text: &str, begin: &str, end: &str) -> Result<Zeroizing<Vec<u8>>, KeyError> {
+    let body = text
+        .strip_prefix(begin)
+        .and_then(|t| t.strip_suffix(end))
+        .ok_or(KeyError::NotOpenSsh)?;
+    let b64: Zeroizing<String> =
+        Zeroizing::new(body.chars().filter(|c| !c.is_whitespace()).collect());
+    Ok(Zeroizing::new(
+        STANDARD
+            .decode(b64.as_bytes())
+            .map_err(|_| KeyError::Malformed)?,
+    ))
+}
+
+/// 私钥段（未加密或已解密）：两个校验数、算法、公钥、私钥、注释、填充。`encrypted` 时校验数不一致说明口令不对。
+fn parse_private(
+    private: &[u8],
+    public: &PublicKey,
+    block: usize,
+    encrypted: bool,
+) -> Result<PrivateKey, KeyError> {
+    let mut p = Reader::new(private);
+    let check1 = p.u32()?;
+    let check2 = p.u32()?;
+    if check1 != check2 {
+        return Err(if encrypted {
+            KeyError::WrongPassphrase
+        } else {
+            KeyError::Malformed
+        });
+    }
+    let alg = p.string()?;
+    if alg != ED25519.as_bytes() {
+        return Err(KeyError::Unsupported(
+            String::from_utf8_lossy(alg).into_owned(),
+        ));
+    }
+    let pk: [u8; ED25519_PUBLIC_LEN] = p.string()?.try_into().map_err(|_| KeyError::Malformed)?;
+    let sk = p.string()?;
+    let comment = String::from_utf8_lossy(p.string()?).into_owned();
+    // 填充：1, 2, 3, …，补齐到块大小
+    let padding = p.remaining();
+    if padding.len() >= block
+        || padding
+            .iter()
+            .zip(1u8..)
+            .any(|(&byte, expected)| byte != expected)
+    {
+        return Err(KeyError::Malformed);
+    }
+    // Ed25519 私钥字段是 种子 ‖ 公钥（64 字节）
+    let (seed, embedded_pk) = sk
+        .split_at_checked(ED25519_SEED_LEN)
+        .ok_or(KeyError::Malformed)?;
+    if embedded_pk != pk || &PublicKey::Ed25519(pk) != public {
+        return Err(KeyError::Malformed);
+    }
+    from_seed(seed, &pk, comment)
+}
+
+/// 由种子恢复私钥，并核对与公钥一致：否则是伪造或损坏的文件。
+fn from_seed(
+    seed: &[u8],
+    expected_public: &[u8; 32],
+    comment: String,
+) -> Result<PrivateKey, KeyError> {
+    let mut seed_arr = Zeroizing::new([0u8; ED25519_SEED_LEN]);
+    seed_arr.copy_from_slice(seed.get(..ED25519_SEED_LEN).ok_or(KeyError::Malformed)?);
+    let key = Ed25519SigningKey::from_seed(seed_arr);
+    if &key.public_key() != expected_public {
+        return Err(KeyError::Malformed);
+    }
+    Ok(PrivateKey { key, comment })
+}
+
+/// RFC 8410 的 PKCS#8 v1（`OneAsymmetricKey` 版本 0）中 Ed25519 私钥的固定前缀，之后是 32 字节种子。
+const PKCS8_ED25519_V1: [u8; 16] = [
+    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+];
+/// 版本 1（带公钥）的前缀；种子之后是 `[1] BIT STRING` 形式的公钥。
+const PKCS8_ED25519_V2: [u8; 16] = [
+    0x30, 0x51, 0x02, 0x01, 0x01, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+];
+const PKCS8_V2_PUBLIC: [u8; 3] = [0x81, 0x21, 0x00];
+/// 算法标识（DER 编码的 OID），用于说明不支持的算法。
+const OID_RSA: [u8; 11] = [
+    0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01,
+];
+const OID_EC: [u8; 9] = [0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
+
+/// PEM 格式的私钥：只接受未加密的 PKCS#8（Ed25519）；其他说明原因。
+fn parse_pem(text: &str) -> Result<PrivateKey, KeyError> {
+    let label = text
+        .strip_prefix("-----BEGIN ")
+        .and_then(|t| t.split_once("-----"))
+        .map_or("", |(label, _)| label);
+    let legacy_encrypted = text.contains("Proc-Type: 4,ENCRYPTED");
+    match label {
+        "PRIVATE KEY" => {}
+        "ENCRYPTED PRIVATE KEY" => return Err(KeyError::Pem),
+        "RSA PRIVATE KEY" | "EC PRIVATE KEY" | "DSA PRIVATE KEY" if legacy_encrypted => {
+            return Err(KeyError::Pem);
+        }
+        "RSA PRIVATE KEY" => return Err(KeyError::Unsupported("ssh-rsa".into())),
+        "EC PRIVATE KEY" => return Err(KeyError::Unsupported("ecdsa".into())),
+        "DSA PRIVATE KEY" => return Err(KeyError::Unsupported("ssh-dss".into())),
+        _ => return Err(KeyError::NotOpenSsh),
+    }
+    let der = pem_body(
+        text,
+        "-----BEGIN PRIVATE KEY-----",
+        "-----END PRIVATE KEY-----",
+    )?;
+    let contains = |needle: &[u8]| der.windows(needle.len()).any(|w| w == needle);
+    if der.len() == 48 && der.starts_with(&PKCS8_ED25519_V1) {
+        // v1 不带公钥，没有可核对的
+        let mut seed = Zeroizing::new([0u8; ED25519_SEED_LEN]);
+        seed.copy_from_slice(der.get(16..48).ok_or(KeyError::Malformed)?);
+        return Ok(PrivateKey {
+            key: Ed25519SigningKey::from_seed(seed),
+            comment: String::new(),
+        });
+    }
+    if der.len() == 83 && der.starts_with(&PKCS8_ED25519_V2) {
+        let seed = der.get(16..48).ok_or(KeyError::Malformed)?;
+        if der.get(48..51) != Some(&PKCS8_V2_PUBLIC[..]) {
+            return Err(KeyError::Malformed);
+        }
+        let pk: [u8; 32] = der
+            .get(51..83)
+            .and_then(|b| b.try_into().ok())
+            .ok_or(KeyError::Malformed)?;
+        return from_seed(seed, &pk, String::new());
+    }
+    if contains(&OID_RSA) {
+        return Err(KeyError::Unsupported("ssh-rsa".into()));
+    }
+    if contains(&OID_EC) {
+        return Err(KeyError::Unsupported("ecdsa".into()));
+    }
+    Err(KeyError::Malformed)
 }
 
 #[cfg(test)]
@@ -407,7 +552,7 @@ do6tPTp7v+xDHwie5yS3AAAACnRlc3RAa2Vldm8BAgM=
                 "-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----"
             )
             .err(),
-            Some(KeyError::Pem)
+            Some(KeyError::Unsupported("ssh-rsa".into()))
         );
         assert_eq!(
             PrivateKey::parse("ssh-ed25519 AAAA").err(),
@@ -423,6 +568,127 @@ do6tPTp7v+xDHwie5yS3AAAACnRlc3RAa2Vldm8BAgM=
             "BEGIN OPENSSH PRIVATE KEY-----\nAAAA",
         );
         assert!(PrivateKey::parse(&text).is_err());
+    }
+
+    const PASSPHRASE: &str = "correct horse";
+
+    /// 由 ssh-keygen 生成的有口令保护的私钥（`testdata/README.md`）：三种 AES-CTR 都能用口令解开，
+    /// 得到与 `.pub` 相同的公钥；没有口令、口令不对时分别说明。
+    #[test]
+    fn decrypts_passphrase_protected_keys() {
+        for (text, pub_line, comment) in [
+            (
+                include_str!("testdata/ed25519-aes256-ctr"),
+                "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO9fhNi5eNgkx390VfLRbowBEnQAcpHN6we/lRG6ehH6",
+                "enc256@keevo",
+            ),
+            (
+                include_str!("testdata/ed25519-aes128-ctr"),
+                "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDTFHOeW7xJ893wKuwXvVlQ4ZstbkIshbCNLT62d0tbq",
+                "enc128@keevo",
+            ),
+            (
+                include_str!("testdata/ed25519-aes192-ctr"),
+                "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOzFfdQEalUvbU5EjfPO4uIjik2IPV96g4jMihuKfrM3",
+                "enc192@keevo",
+            ),
+        ] {
+            assert_eq!(PrivateKey::parse(text).err(), Some(KeyError::Encrypted));
+            assert_eq!(
+                PrivateKey::parse_with_passphrase(text, Some("")).err(),
+                Some(KeyError::Encrypted)
+            );
+            assert_eq!(
+                PrivateKey::parse_with_passphrase(text, Some("wrong horse")).err(),
+                Some(KeyError::WrongPassphrase)
+            );
+            let key = PrivateKey::parse_with_passphrase(text, Some(PASSPHRASE)).unwrap();
+            assert_eq!(key.comment(), comment);
+            assert_eq!(key.public_key().to_line(""), pub_line);
+            let sig = key.sign(b"x");
+            assert!(key.public_key().verify(b"x", &sig));
+            // 重新编码为未加密的格式（保险库中保存的形式）后可以直接解析
+            let plain = key.to_openssh().unwrap();
+            assert!(plain.contains(BEGIN));
+            assert_eq!(
+                PrivateKey::parse(&plain).unwrap().public_key(),
+                key.public_key()
+            );
+        }
+    }
+
+    /// 不支持的加密方式与算法：不需要口令就能说明；加密的 PEM 说明转换方法。
+    #[test]
+    fn explains_unsupported_ciphers_and_formats() {
+        assert_eq!(
+            PrivateKey::parse(include_str!("testdata/ed25519-aes256-gcm")).err(),
+            Some(KeyError::UnsupportedCipher("aes256-gcm@openssh.com".into()))
+        );
+        for passphrase in [None, Some(PASSPHRASE)] {
+            assert_eq!(
+                PrivateKey::parse_with_passphrase(
+                    include_str!("testdata/rsa-aes256-ctr"),
+                    passphrase
+                )
+                .err(),
+                Some(KeyError::Unsupported("ssh-rsa".into()))
+            );
+        }
+        assert_eq!(
+            PrivateKey::parse(include_str!("testdata/rsa-legacy-encrypted.pem")).err(),
+            Some(KeyError::Pem)
+        );
+        assert_eq!(
+            PrivateKey::parse(include_str!("testdata/ec.pem")).err(),
+            Some(KeyError::Unsupported("ecdsa".into()))
+        );
+        assert_eq!(
+            PrivateKey::parse(
+                "-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----"
+            )
+            .err(),
+            Some(KeyError::Pem)
+        );
+    }
+
+    /// openssl 生成的 PKCS#8 PEM（RFC 8410）：v1 只有种子；v2 带公钥，必须一致。
+    #[test]
+    fn parses_pkcs8_ed25519() {
+        let key = PrivateKey::parse(include_str!("testdata/ed25519-pkcs8.pem")).unwrap();
+        assert_eq!(
+            key.public_key().to_line(""),
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO/U5n7j7xECrWn4b042vu0pSaJ3cVe6gFLYOjqbAPf5"
+        );
+        assert_eq!(key.comment(), "");
+        // 由同一个种子构造 v2（带公钥）
+        let v1 = include_str!("testdata/ed25519-pkcs8.pem");
+        let body: String = v1.lines().filter(|l| !l.starts_with("-----")).collect();
+        let der = STANDARD.decode(body).unwrap();
+        let pem = |der: &[u8]| {
+            format!(
+                "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+                STANDARD.encode(der)
+            )
+        };
+        let PublicKey::Ed25519(pk) = key.public_key();
+        let mut v2 = PKCS8_ED25519_V2.to_vec();
+        v2.extend_from_slice(&der[16..48]);
+        v2.extend_from_slice(&PKCS8_V2_PUBLIC);
+        v2.extend_from_slice(&pk);
+        assert_eq!(
+            PrivateKey::parse(&pem(&v2)).unwrap().public_key(),
+            key.public_key()
+        );
+        let mut forged = v2.clone();
+        forged[82] ^= 1;
+        assert_eq!(
+            PrivateKey::parse(&pem(&forged)).err(),
+            Some(KeyError::Malformed)
+        );
+        assert_eq!(
+            PrivateKey::parse(&pem(&der[..47])).err(),
+            Some(KeyError::Malformed)
+        );
     }
 
     #[test]

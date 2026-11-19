@@ -244,6 +244,7 @@ fn key_error(e: KeyError) -> KeevoError {
         code: e.code().to_owned(),
         detail: match e {
             KeyError::Unsupported(alg) => alg,
+            KeyError::UnsupportedCipher(cipher) => cipher,
             _ => String::new(),
         },
     }
@@ -497,18 +498,35 @@ impl KeevoVault {
         Ok(key.public_key().fingerprint())
     }
 
-    /// 导入 OpenSSH 私钥（未加密）到 SSH 密钥条目，写入私钥、公钥、指纹等字段。返回指纹。
+    /// 导入私钥到 SSH 密钥条目，写入私钥、公钥、指纹等字段。返回指纹。接受 OpenSSH 格式（有口令保护时需要
+    /// `passphrase`，口令只用于这次解密，不保存）与未加密的 PKCS#8 PEM（Ed25519）；私钥以未加密的 OpenSSH
+    /// 格式写入条目，由保险库加密保存。私钥没有注释时用条目标题。
     ///
     /// # Errors
-    /// 私钥无法使用时返回 [`KeevoError::SshKey`]；不是 SSH 密钥条目、已锁定。
+    /// 私钥无法使用时返回 [`KeevoError::SshKey`]（需要口令为 `encrypted`，口令不对为 `wrong_passphrase`）；
+    /// 不是 SSH 密钥条目、已锁定。
     pub fn import_ssh_private_key(
         &self,
         item_id: String,
         text: String,
+        passphrase: Option<String>,
     ) -> Result<String, KeevoError> {
         let id = parse_id(&item_id)?;
         let text = Zeroizing::new(text);
-        let key = PrivateKey::parse(&text).map_err(key_error)?;
+        let passphrase = passphrase.map(Zeroizing::new);
+        let mut key =
+            PrivateKey::parse_with_passphrase(&text, passphrase.as_deref().map(String::as_str))
+                .map_err(key_error)?;
+        if key.comment().is_empty() {
+            let title = self
+                .vault()
+                .items()?
+                .into_iter()
+                .find(|i| i.id == id)
+                .map(|i| i.overview.title)
+                .ok_or(KeevoError::NotFound)?;
+            key.set_comment(&title);
+        }
         // 以 Keevo 的格式重新编码：去掉多余的空白与旧的校验数
         let normalized = key.to_openssh().map_err(key_error)?;
         self.write_ssh_key(id, &key, &normalized)?;

@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 keevo-core = { path = "../keevo-core" }
 keevo-ipc = { path = "../keevo-ipc" }
+rustix = { version = "1", default-features = false, features = ["std", "pty", "termios", "fs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zeroize = "1"

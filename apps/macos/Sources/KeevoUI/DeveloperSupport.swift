@@ -167,26 +167,54 @@ extension AppModel {
         }
     }
 
-    /// 导入私钥。返回给人看的错误；成功时为 `nil`。
-    func importSshKey(itemId: String, text: String) -> String? {
-        guard let vault else { return "Keevo 已锁定" }
+    /// 导入私钥的结果（设计稿"macOS · 导入 SSH 私钥"）。
+    enum SshImportOutcome {
+        case imported
+        /// 私钥有口令保护：显示口令框。
+        case needsPassphrase
+        case wrongPassphrase
+        case problem(Banner.Kind, String)
+    }
+
+    /// 导入私钥。口令只用于这一次解密，不保存（spec/ssh-agent.md §3）。
+    func importSshKey(itemId: String, text: String, passphrase: String?) -> SshImportOutcome {
+        guard let vault else { return .problem(.danger, "Keevo 已锁定") }
         do {
-            _ = try vault.importSshPrivateKey(itemId: itemId, text: text)
+            _ = try vault.importSshPrivateKey(itemId: itemId, text: text, passphrase: passphrase)
             reloadAfterBrowserWrite()
             refreshDeveloper()
-            return nil
+            return .imported
         } catch KeevoError.SshKey(let code, let detail) {
-            return Self.sshKeyProblem(code: code, detail: detail)
+            switch code {
+            case "encrypted": return .needsPassphrase
+            case "wrong_passphrase": return .wrongPassphrase
+            case "unsupported", "cipher", "pem": return .problem(.warning, Self.sshKeyProblem(code: code, detail: detail))
+            default: return .problem(.danger, Self.sshKeyProblem(code: code, detail: detail))
+            }
         } catch {
-            return Self.describe(error)
+            return .problem(.danger, Self.describe(error))
+        }
+    }
+
+    /// 算法名的显示名。
+    private static func algorithmName(_ alg: String) -> String {
+        switch alg {
+        case "ssh-rsa": "RSA"
+        case "ssh-dss": "DSA"
+        case let a where a.hasPrefix("ecdsa"): "ECDSA"
+        case let a where a.hasPrefix("sk-"): "安全密钥（\(a)）"
+        case "": "这种"
+        default: "「\(alg)」"
         }
     }
 
     static func sshKeyProblem(code: String, detail: String = "") -> String {
         switch code {
-        case "encrypted": "这把私钥有口令保护。请先在终端运行 ssh-keygen -p -f <私钥文件> 去掉口令，再导入；导入后私钥由保险库加密保存。"
-        case "pem": "这是 PEM 格式的私钥。请先在终端运行 ssh-keygen -p -f <私钥文件> 转换为 OpenSSH 格式，再导入。"
-        case "unsupported": "暂不支持\(detail.isEmpty ? "这种" : "「\(detail)」")算法。目前 SSH Agent 只支持 Ed25519。"
+        case "encrypted": "这把私钥有口令保护。输入口令后导入：口令只用于这一次解密，不会保存。"
+        case "wrong_passphrase": "口令不对，请重新输入。"
+        case "pem": "请在终端运行 ssh-keygen -p -f <私钥文件> 转换为 OpenSSH 格式（可以保留口令），再导入。"
+        case "cipher": "暂不支持这种加密方式\(detail.isEmpty ? "" : "（\(detail)）")。请在终端运行 ssh-keygen -p -Z aes256-ctr -f <私钥文件> 改用 aes256-ctr，再导入。"
+        case "unsupported": "暂不支持 \(algorithmName(detail)) 私钥：目前 SSH Agent 只支持 Ed25519。ECDSA 与 RSA 所需的密码学库通过供应链审计后加入。可以在终端运行 ssh-keygen -t ed25519 生成新的 Ed25519 密钥，或在这里直接生成。"
         case "missing": "还没有私钥：生成新的密钥或导入现有私钥。"
         case "multiple": "这个条目中有多个私钥字段，Agent 不知道用哪一个。请删除多余的。"
         default: "无法识别的私钥。请粘贴以 -----BEGIN OPENSSH PRIVATE KEY----- 开头的完整内容。"
@@ -545,51 +573,104 @@ struct SshKeyAgentCard: View {
     }
 }
 
-/// 导入私钥：粘贴或从文件读取（spec/ssh-agent.md §3）。
+/// 导入私钥：粘贴或从文件读取（spec/ssh-agent.md §3，设计稿"macOS · 导入 SSH 私钥"）。
+/// 有口令保护时出现口令框；口令只用于这一次解密，不保存。粘贴的内容改变时口令框随之隐藏。
 struct ImportSshKeySheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let itemId: String
     @ViewState private var text = ""
-    @ViewState private var error: String?
+    @ViewState private var passphrase = ""
+    @ViewState private var needsPassphrase = false
+    @ViewState private var problem: (Banner.Kind, String)?
+    @FocusState private var passphraseFocused: Bool
+
+    init(itemId: String) {
+        self.itemId = itemId
+    }
+
+    /// 截图用：指定初始的内容与状态。
+    init(itemId: String, text: String, passphrase: String = "", needsPassphrase: Bool, problem: (Banner.Kind, String)? = nil) {
+        self.itemId = itemId
+        _text = ViewState(initialValue: text)
+        _passphrase = ViewState(initialValue: passphrase)
+        _needsPassphrase = ViewState(initialValue: needsPassphrase)
+        _problem = ViewState(initialValue: problem)
+    }
+
+    private var importDisabled: Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (needsPassphrase && passphrase.isEmpty)
+    }
 
     var body: some View {
         SheetScaffold(
             title: "导入 SSH 私钥",
-            subtitle: "粘贴私钥文件的内容（以 -----BEGIN OPENSSH PRIVATE KEY----- 开头），或从文件读取。导入后私钥由保险库加密保存，原文件可以删除。",
+            subtitle: "粘贴私钥文件的内容，或从文件读取。支持 OpenSSH 格式（可以有口令保护）与 Ed25519 的 PKCS#8 PEM。导入后私钥由保险库加密保存，原文件可以删除。",
             systemImage: "square.and.arrow.down",
             width: 560
         ) {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
                 TextEditor(text: $text)
                     .font(KV.Typography.mono)
-                    .frame(height: 180)
+                    .frame(height: 132)
                     .scrollContentBackground(.hidden)
                     .padding(KV.Space.s2)
                     .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .accessibilityLabel("私钥")
+                    .onChange(of: text) {
+                        needsPassphrase = false
+                        passphrase = ""
+                        problem = nil
+                    }
                 Button { chooseFile() } label: { Label("从文件读取…", systemImage: "folder") }
                     .buttonStyle(.kvLink)
-                if let error {
-                    Banner(kind: .danger, message: error)
+                if needsPassphrase {
+                    if problem == nil {
+                        Banner(kind: .info, message: AppModel.sshKeyProblem(code: "encrypted"))
+                    }
+                    LabeledInput(label: "私钥口令") {
+                        SecureField("", text: $passphrase)
+                            .focused($passphraseFocused)
+                            .onSubmit { if !importDisabled { submit() } }
+                    }
+                }
+                if let problem {
+                    Banner(kind: problem.0, message: problem.1)
                 }
             }
         } footer: {
             Button("取消") { dismiss() }
                 .buttonStyle(.kvSecondary)
                 .keyboardShortcut(.cancelAction)
-            Button("导入") {
-                if let problem = model.importSshKey(itemId: itemId, text: text) {
-                    error = problem
-                } else {
-                    text = ""
-                    dismiss()
-                }
-            }
-            .buttonStyle(.kvPrimary)
-            .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button("导入") { submit() }
+                .buttonStyle(.kvPrimary)
+                .disabled(importDisabled)
         }
-        .onDisappear { text = "" }
+        .onDisappear {
+            text = ""
+            passphrase = ""
+        }
+    }
+
+    private func submit() {
+        let outcome = model.importSshKey(itemId: itemId, text: text, passphrase: needsPassphrase ? passphrase : nil)
+        switch outcome {
+        case .imported:
+            text = ""
+            passphrase = ""
+            dismiss()
+        case .needsPassphrase:
+            needsPassphrase = true
+            problem = nil
+            passphraseFocused = true
+        case .wrongPassphrase:
+            // 输错口令不清空私钥，焦点回到口令框
+            passphrase = ""
+            problem = (.danger, AppModel.sshKeyProblem(code: "wrong_passphrase"))
+            passphraseFocused = true
+        case .problem(let kind, let message):
+            problem = (kind, message)
+        }
     }
 
     private func chooseFile() {

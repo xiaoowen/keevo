@@ -101,6 +101,23 @@ public enum Snapshots {
         await shooter.shoot("dialog-reverify", sheet: true) {
             ReverifySheet(title: "解除「Chrome · 个人」的配对", message: "解除后，这个扩展立即断开，不能再取用任何密码。请先确认是你本人。", confirmTitle: "解除配对", destructive: true) { _ in false }
         }
+        // 导入 SSH 私钥（设计稿"macOS · 导入 SSH 私钥"）：有口令保护、口令错误、不支持的算法
+        let encryptedKey = """
+        -----BEGIN OPENSSH PRIVATE KEY-----
+        b3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABA9aYwopX
+        …
+        -----END OPENSSH PRIVATE KEY-----
+        """
+        let rsaKey = encryptedKey.replacingOccurrences(of: "AAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABA9aYwopX", with: "AAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAACFwAAAAdzc2gtcnNh")
+        await shooter.shoot("ssh-import-passphrase", sheet: true) {
+            ImportSshKeySheet(itemId: ids.ssh, text: encryptedKey, passphrase: "correct horse", needsPassphrase: true)
+        }
+        await shooter.shoot("ssh-import-wrong", sheet: true) {
+            ImportSshKeySheet(itemId: ids.ssh, text: encryptedKey, needsPassphrase: true, problem: (.danger, AppModel.sshKeyProblem(code: "wrong_passphrase")))
+        }
+        await shooter.shoot("ssh-import-unsupported", sheet: true) {
+            ImportSshKeySheet(itemId: ids.ssh, text: rsaKey, needsPassphrase: false, problem: (.warning, AppModel.sshKeyProblem(code: "unsupported", detail: "ssh-rsa")))
+        }
         await shooter.shoot("kdf-confirm", sheet: true) {
             KdfConfirmSheet(info: KdfInfo(memoryKib: 4 * 1024 * 1024, iterations: 12, parallelism: 4)) {}
         }
