@@ -73,6 +73,18 @@ pub enum KeevoError {
         /// 原因（不含秘密）。
         reason: String,
     },
+    /// 命令行工具的服务或 SSH Agent 无法启动。
+    DeveloperServiceUnavailable {
+        /// 原因（不含秘密）。
+        reason: String,
+    },
+    /// SSH 私钥无法使用（`spec/ssh-agent.md` §3）。
+    SshKey {
+        /// `not_openssh`、`pem`、`encrypted`、`unsupported`、`malformed`。
+        code: String,
+        /// 不支持的算法名（`unsupported` 时）。
+        detail: String,
+    },
     /// 输入不合法。
     InvalidInput {
         /// 说明。
@@ -107,6 +119,10 @@ impl fmt::Display for KeevoError {
             Self::BrowserServiceUnavailable { reason } => {
                 write!(f, "browser service unavailable: {reason}")
             }
+            Self::DeveloperServiceUnavailable { reason } => {
+                write!(f, "developer service unavailable: {reason}")
+            }
+            Self::SshKey { code, detail } => write!(f, "ssh key: {code} {detail}"),
             Self::InvalidInput { message } => write!(f, "invalid input: {message}"),
             Self::Internal { message } => write!(f, "internal: {message}"),
         }
@@ -950,6 +966,8 @@ pub struct KeevoVault {
     inner: Arc<Mutex<Vault>>,
     /// 浏览器扩展的本地服务（`spec/ipc.md`），由 [`KeevoVault::start_browser_service`] 启动。
     service: Mutex<Option<keevo_service::VaultService>>,
+    /// 命令行工具的服务与 SSH Agent（`spec/cli.md`、`spec/ssh-agent.md`）。
+    developer: Mutex<Option<developer::DeveloperServices>>,
     secrets: SecretRegistry,
     /// 搜索索引（解密后的概要），锁定时丢弃。
     search_index: Mutex<Option<SearchIndex>>,
@@ -960,6 +978,7 @@ impl KeevoVault {
         Self {
             inner: Arc::new(Mutex::new(vault)),
             service: Mutex::new(None),
+            developer: Mutex::new(None),
             secrets: SecretRegistry::default(),
             search_index: Mutex::new(None),
         }
@@ -2333,6 +2352,12 @@ fn purpose_from(name: &str) -> Option<Purpose> {
     .into_iter()
     .find(|p| purpose_name(*p) == name)
 }
+
+mod developer;
+pub use developer::{
+    CliSessionInfo, DeveloperPrompt, RequestOrigin, SshAgentInfo, SshKeyInfo, SshSignRequest,
+    ssh_agent_link_path,
+};
 
 #[cfg(test)]
 mod tests;

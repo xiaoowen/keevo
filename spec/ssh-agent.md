@@ -87,7 +87,7 @@ bool    is_forwarding
 
 ## 7. Git 提交签名
 
-- `git config gpg.format ssh`，`user.signingkey` 为 `key::<公钥行>`，`gpg.ssh.program` 为 `keevo ssh-sign`（`spec/cli.md` §7）：后者把 `SSH_AUTH_SOCK` 设为 Keevo 的 Agent，再执行 `/usr/bin/ssh-keygen`，签名经 Agent 完成。
+- `git config gpg.format ssh`，`user.signingkey` 为 `key::<公钥行>`，`gpg.ssh.program` 为 `keevo-ssh-sign`（指向 `keevo` 的软链，`spec/cli.md` §7）：它把 `SSH_AUTH_SOCK` 设为 Keevo 的 Agent，再执行 `/usr/bin/ssh-keygen`，签名经 Agent 完成。
 - 界面在执行前显示将运行的命令。
 
 ## 8. 未决事项

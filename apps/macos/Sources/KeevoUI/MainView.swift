@@ -615,6 +615,8 @@ struct NewItemSheet: View {
     let created: (String) -> Void
     @ViewState private var title = ""
     @ViewState private var vault: String?
+    /// SSH 密钥：新建后直接生成 Ed25519 密钥（docs/ux.md §3.6 第 2 步）。
+    @ViewState private var generateKey = true
     @FocusState private var titleFocused: Bool
 
     private var canCreate: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty && (vault ?? defaultVault) != nil }
@@ -629,6 +631,11 @@ struct NewItemSheet: View {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
                 LabeledInput(label: "标题") {
                     TextField("", text: $title).focused($titleFocused).onSubmit(create)
+                }
+                if choice.itemType == "ssh_key" {
+                    Toggle("生成新的 Ed25519 密钥（也可以之后导入现有私钥）", isOn: $generateKey)
+                        .toggleStyle(.checkbox)
+                        .font(KV.Typography.body)
                 }
                 if model.vaults.count > 1 {
                     VStack(alignment: .leading, spacing: 6) {
@@ -662,6 +669,9 @@ struct NewItemSheet: View {
     private func create() {
         guard canCreate, let vault = vault ?? defaultVault else { return }
         if let id = model.createItem(vaultId: vault, itemType: choice.itemType, preset: choice.preset, title: title) {
+            if choice.itemType == "ssh_key", generateKey {
+                model.generateSshKey(itemId: id)
+            }
             created(id)
         }
         dismiss()

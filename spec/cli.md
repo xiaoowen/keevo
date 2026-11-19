@@ -113,7 +113,7 @@ keevo（CLI）──Unix socket（cli.sock）──► Keevo.app 中的 Vault Se
   - **遮蔽**：默认把子进程标准输出与标准错误中出现的已解析值（长度至少 4 个字符）替换为 `<concealed by keevo>`。子进程的输出因此连到管道而不是终端，部分程序会因此关闭颜色；`--no-masking` 让子进程直接继承终端。跨两次写入的值在 100 毫秒内会被拼接后遮蔽，间隔更长时可能漏遮，因此遮蔽只是防止意外露出，不是安全边界。
   - 子进程的退出码原样作为 `keevo run` 的退出码；被信号终止时为 128 + 信号编号。
 - **`keevo inject -i <模板> -o <输出>`**：把模板中的 `{{ keevo://… }}`（花括号内两侧空白可选）替换为解析后的值；输出文件权限 0600，已存在时需要 `--force`；不给 `-o` 时写到标准输出（标准输出是终端时同样要求 `--reveal`）。
-- **`keevo ssh-sign`**：Git 的 `gpg.ssh.program`。把参数原样交给 `/usr/bin/ssh-keygen`，并把 `SSH_AUTH_SOCK` 设为 Keevo 的 SSH Agent（`spec/ssh-agent.md`），让 `ssh-keygen -Y sign` 经 Agent 签名，私钥不离开 Keevo。
+- **`keevo ssh-sign`**：把参数原样交给 `/usr/bin/ssh-keygen`，并把 `SSH_AUTH_SOCK` 设为 Keevo 的 SSH Agent（`spec/ssh-agent.md`），让 `ssh-keygen -Y sign` 经 Agent 签名，私钥不离开 Keevo。Git 的 `gpg.ssh.program` 只能是一个可执行文件，因此 CLI 以 `keevo-ssh-sign` 的名字运行（软链）时等同于 `keevo ssh-sign`。
 
 ## 8. 未决事项
 

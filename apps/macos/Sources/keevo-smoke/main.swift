@@ -11,7 +11,9 @@ import CryptoKit
 import Foundation
 import KeevoKit
 
-if let code = runTouchIDCheckIfRequested() ?? runDlopenCheckIfRequested() ?? runBrowserServiceIfRequested() {
+if let code = runTouchIDCheckIfRequested() ?? runDlopenCheckIfRequested() ?? runBrowserServiceIfRequested()
+    ?? runDeveloperServiceIfRequested()
+{
     exit(code)
 }
 

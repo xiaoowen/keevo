@@ -130,6 +130,8 @@ struct RootView: View {
             case .pairing(let request): PairingConfirmSheet(request: request).interactiveDismissDisabled()
             case .fill(let request): FillAuthorizationSheet(request: request).interactiveDismissDisabled()
             case .update(let request): UpdateConfirmationSheet(request: request).interactiveDismissDisabled()
+            case .cli(let request): CliAuthorizationSheet(request: request).interactiveDismissDisabled()
+            case .ssh(let request): SshSignSheet(request: request).interactiveDismissDisabled()
             }
         }
         // 频率限制触发的暂停（spec/ipc.md §5.2 第 3 条）：用户确认后才恢复

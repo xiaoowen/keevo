@@ -141,6 +141,9 @@ struct ItemDetailView: View {
                     }
                 }
             }
+            if d.itemType == "ssh_key", !d.trashed {
+                SshKeyAgentCard(itemId: d.id)
+            }
             footer(d)
         }
         .padding(.horizontal, 28)

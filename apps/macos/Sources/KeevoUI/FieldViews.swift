@@ -37,8 +37,9 @@ struct FieldDisplay: View {
         switch field.kind {
         case "totp":
             OtpRow(itemId: itemId, field: field)
+                .contextMenu { ReferenceMenu(itemId: itemId, fieldId: field.id, otp: true) }
         case "kv_list":
-            KvRows(field: field, revealed: revealed, toggle: toggle)
+            KvRows(itemId: itemId, field: field, revealed: revealed, toggle: toggle)
         case "recovery_codes":
             CodesRows(itemId: itemId, field: field, revealed: revealed, toggle: toggle)
         default:
@@ -48,6 +49,7 @@ struct FieldDisplay: View {
                 toggle: { toggle(field.id) },
                 largeType: { largeType(field.value.expose()) }
             )
+            .contextMenu { ReferenceMenu(itemId: itemId, fieldId: field.id) }
         }
     }
 
@@ -264,6 +266,7 @@ struct CountdownRing: View {
 
 /// 键值对（环境变量等）：键为等宽粗体，值为等宽；秘密值默认隐藏，显示时整行高亮，30 秒后自动隐藏。
 struct KvRows: View {
+    let itemId: String
     let field: FieldEntry
     let revealed: Set<String>
     let toggle: (String) -> Void
@@ -317,6 +320,26 @@ struct KvRows: View {
                 }
                 CopyButton(label: entry.key) { entry.value.expose() }
             }
+            .contextMenu { ReferenceMenu(itemId: itemId, fieldId: field.id, kvKey: entry.key) }
+        }
+    }
+}
+
+/// 右键菜单："复制 keevo:// 引用"（spec/secret-refs.md §5）。引用不含秘密，可以写进代码与配置。
+struct ReferenceMenu: View {
+    @Environment(AppModel.self) private var model
+    let itemId: String
+    let fieldId: String
+    var kvKey: String?
+    /// 一次性密码：另外提供取当前验证码的引用。
+    var otp = false
+
+    var body: some View {
+        Button("复制 keevo:// 引用") { model.copyReference(itemId: itemId, fieldId: fieldId, kvKey: kvKey) }
+        if otp {
+            Button("复制验证码的 keevo:// 引用") {
+                model.copyReference(itemId: itemId, fieldId: fieldId, kvKey: nil, suffix: "?attribute=otp")
+            }
         }
     }
 }
@@ -366,7 +389,7 @@ struct EnvironmentView: View {
                     ForEach(Array(current.fields.enumerated()), id: \.element.id) { index, field in
                         if index > 0 { CardRowDivider() }
                         if field.kind == "kv_list" {
-                            KvRows(field: field, revealed: revealed, toggle: toggle, showHeader: false)
+                            KvRows(itemId: itemId, field: field, revealed: revealed, toggle: toggle, showHeader: false)
                         } else {
                             FieldDisplay(itemId: itemId, field: field, revealed: revealed, toggle: toggle, largeType: { _ in })
                         }

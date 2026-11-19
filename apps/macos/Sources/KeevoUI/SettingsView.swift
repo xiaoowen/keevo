@@ -6,13 +6,14 @@ import SwiftUI
 
 struct SettingsView: View {
     enum Page: Int, CaseIterable, Identifiable {
-        case security, browser
+        case security, browser, developer
         var id: Int { rawValue }
 
         var title: String {
             switch self {
             case .security: "安全"
             case .browser: "浏览器"
+            case .developer: "开发者"
             }
         }
 
@@ -20,6 +21,7 @@ struct SettingsView: View {
             switch self {
             case .security: "lock.shield"
             case .browser: "puzzlepiece.extension"
+            case .developer: "terminal"
             }
         }
     }
@@ -53,6 +55,7 @@ struct SettingsView: View {
                     switch page {
                     case .security: SecuritySettings()
                     case .browser: BrowserSettings()
+                    case .developer: DeveloperSettings()
                     }
                 }
                 .padding(KV.Space.s6)

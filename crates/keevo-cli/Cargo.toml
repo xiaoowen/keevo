@@ -1,0 +1,27 @@
+[package]
+name = "keevo-cli"
+description = "命令行工具 keevo（spec/cli.md）：经 Unix socket 向 Keevo.app 中的 Vault Service 请求，不持有任何密钥。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "keevo"
+path = "src/main.rs"
+
+[dependencies]
+keevo-core = { path = "../keevo-core" }
+keevo-ipc = { path = "../keevo-ipc" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zeroize = "1"
+
+[dev-dependencies]
+keevo-crypto = { path = "../keevo-crypto" }
+keevo-service = { path = "../keevo-service" }
+
+[lints]
+workspace = true

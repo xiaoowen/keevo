@@ -106,6 +106,8 @@ public enum Snapshots {
         }
         await shooter.shoot("settings-security", sheet: true) { SettingsView(initialTab: 0) }
         await shooter.shoot("settings-browser", sheet: true) { SettingsView(initialTab: 1) }
+        model.refreshDeveloper()
+        await shooter.shoot("settings-developer", sheet: true) { SettingsView(initialTab: 2) }
 
         let words = zip(["秋千", "珍珠", "薄荷", "稻米", "企鹅", "胡同"], ["swing", "pearl", "mint", "rice", "penguin", "alley"])
             .map { SasWord(zh: $0, en: $1) }
@@ -122,7 +124,36 @@ public enum Snapshots {
             UpdateConfirmationSheet(request: UpdateConfirmationRequest(request: update, changed: true, deadline: deadline) { _ in })
         }
 
+        let terminal = RequestOrigin(
+            app: "iTerm", command: "keevo run --env-file .env.keevo -- npm run dev", parentName: "zsh",
+            parentCommand: nil, inTerminal: true
+        )
+        await shooter.shoot("dialog-cli", sheet: true) {
+            CliAuthorizationSheet(request: CliAuthorizationRequest(origin: terminal, deadline: deadline) { _ in })
+        }
+        let sshOrigin = RequestOrigin(
+            app: "iTerm", command: "ssh git@github.com git-receive-pack me/keevo.git",
+            parentName: "git", parentCommand: "git push", inTerminal: true
+        )
+        let sign = SshSignRequest(
+            origin: sshOrigin, itemId: ids.ssh, keyTitle: "GitHub SSH 密钥",
+            fingerprint: "SHA256:7c8GBuOAt2qcDj3Pik3RNArB+fLS3hcl/jaWXEu0Xq0",
+            hostFingerprint: "SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU", hostVerified: true,
+            forwarded: false, policy: "session"
+        )
+        await shooter.shoot("dialog-ssh", sheet: true) {
+            SshSignSheet(request: SshAuthorizationRequest(request: sign, deadline: deadline) { _ in })
+        }
+        var forwardedSign = sign
+        forwardedSign.forwarded = true
+        await shooter.shoot("dialog-ssh-forwarded", sheet: true) {
+            SshSignSheet(request: SshAuthorizationRequest(request: forwardedSign, deadline: deadline) { _ in })
+        }
+
         model.lock()
+        model.unlockWaiter = .cli
+        await shooter.shoot("lock-waiting", size: CGSize(width: 960, height: 640)) { RootView() }
+        model.unlockWaiter = nil
         await shooter.shoot("lock", size: CGSize(width: 960, height: 640)) { RootView() }
         await shooter.shoot("enclave-unavailable", size: CGSize(width: 960, height: 640)) { EnclaveUnavailableView() }
         print("截图完成：\(shooter.count) 张，保存在 \(out.path)")
@@ -231,12 +262,10 @@ enum SampleData {
             "IMAP 服务器": "outlook.office365.com", "IMAP 端口": "993", "SMTP 服务器": "smtp.office365.com", "SMTP 端口": "587",
         ])
         ids.note = try make("secure_note", "家里的 Wi-Fi", values: ["正文": "网络名称：Keevo-Home\n密码：purple-elephant-42\n路由器管理地址：192.168.1.1"])
-        ids.ssh = try make("ssh_key", "GitHub SSH 密钥", values: [
-            "私钥": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n-----END OPENSSH PRIVATE KEY-----",
-            "公钥": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl me@mac",
-            "指纹": "SHA256:3Fq1x9QmNbV2dWkP8sY5rT7uLz0aHcJeGfK4oI6pX9Q",
-            "算法": "Ed25519", "注释": "me@mac", "主机": "github.com",
-        ], tags: ["开发"])
+        // 真实生成的 Ed25519 密钥：私钥、公钥、指纹由 Keevo 写入，Agent 策略为"每个会话确认一次"
+        ids.ssh = try make("ssh_key", "GitHub SSH 密钥", values: ["主机": "github.com"], tags: ["开发"])
+        _ = try vault.generateSshKey(itemId: ids.ssh)
+        try vault.setSshAgentPolicy(itemId: ids.ssh, policy: "session")
         ids.api = try make("api_credential", "OpenAI API 密钥", values: [
             "提供商": "OpenAI", "Key ID": "proj_8f3a9", "Secret": "sk-proj-Xa7Hq2Lm9Pz4Rt6Vb1Nc8Dw3Ek5Fy0Gs", "作用域": "chat, embeddings",
             "端点": "https://api.openai.com/v1", "过期时间": "2026-12-21",

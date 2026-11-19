@@ -101,7 +101,7 @@
 
 ### 3.6 SSH Agent 与 Git 签名
 
-1. **开启 Agent**：在"开发者 → SSH Agent"中开启。Keevo 生成要加入 `~/.ssh/config` 的配置（`IdentityAgent` 指向 Keevo 的 socket），**先展示 diff**，确认后写入。
+1. **开启 Agent**：在"设置 → 开发者 → SSH Agent"中开启。Keevo 生成要加入 `~/.ssh/config` 的配置（`IdentityAgent` 指向 `~/.keevo/agent.sock`），**先展示改动**，确认后写入，原文件备份。
 2. **新建密钥**：默认 Ed25519。点"添加到 GitHub"会复制公钥并打开 GitHub 的 SSH 设置页，扩展可帮忙填写表单。
 3. **授权**：终端执行 `git push` 时，Keevo 弹出"iTerm2 中的 `ssh` 请求使用密钥『GitHub』"→ Touch ID。按策略在本会话内免重复授权。
 4. **Git 签名**：一键配置 git 的 SSH 签名，执行前展示将运行的命令。

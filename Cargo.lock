@@ -789,6 +789,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "keevo-cli"
+version = "0.0.0"
+dependencies = [
+ "keevo-core",
+ "keevo-crypto",
+ "keevo-ipc",
+ "keevo-service",
+ "serde",
+ "serde_json",
+ "zeroize",
+]
+
+[[package]]
 name = "keevo-core"
 version = "0.0.0"
 dependencies = [
@@ -830,6 +843,7 @@ dependencies = [
  "keevo-format",
  "keevo-ipc",
  "keevo-service",
+ "keevo-ssh",
  "serde_json",
  "uniffi",
  "zeroize",

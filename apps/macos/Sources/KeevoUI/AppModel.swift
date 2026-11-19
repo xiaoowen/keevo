@@ -68,6 +68,27 @@ final class AppModel {
     private(set) var pendingRevocationWarning = false
     @ObservationIgnored private lazy var browserPrompt = BrowserPromptBridge(model: self)
 
+    // MARK: 开发者（spec/cli.md、spec/ssh-agent.md）
+
+    @ObservationIgnored lazy var developerPrompt = DeveloperPromptBridge(model: self)
+    /// 命令行工具的服务没有启动的原因。
+    var developerServiceError: String?
+    /// SSH Agent 的状态。
+    var sshAgent: SshAgentInfo?
+    /// SSH Agent 没有启动的原因。
+    var sshAgentError: String?
+    /// 已授权的终端会话。
+    var cliSessions: [CliSessionInfo] = []
+    /// SSH 密钥条目在 Agent 中的状态。
+    var sshKeys: [SshKeyInfo] = []
+    /// 命令行工具或 SSH 正在等待解锁（锁屏上说明）。
+    var unlockWaiter: UnlockWaiter?
+    /// SSH Agent 是否开启（记在本机，默认关闭，spec/ssh-agent.md §1）。
+    var sshAgentEnabled: Bool {
+        didSet { UserDefaults.standard.set(sshAgentEnabled, forKey: Self.sshAgentKey) }
+    }
+    static let sshAgentKey = "sshAgentEnabled"
+
     /// 本机没有可用的账户密钥，解锁时需要用户从应急包输入。
     private(set) var needsSecretKey = false
     /// Touch ID 已启用且未失效。
@@ -118,6 +139,7 @@ final class AppModel {
         let stored = UserDefaults.standard.integer(forKey: Self.autoLockKey)
         autoLockMinutes = Self.autoLockChoices.contains(stored) ? stored : 10
         hideFromScreenCapture = UserDefaults.standard.bool(forKey: Self.hideFromCaptureKey)
+        sshAgentEnabled = UserDefaults.standard.bool(forKey: Self.sshAgentKey)
 
         try? FileManager.default.createDirectory(
             at: support, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]
@@ -134,6 +156,8 @@ final class AppModel {
     }
 
     private let background: Bool
+    /// 是否为正式运行（监听系统事件、启动本地服务）；截图程序中为 `false`。
+    var isBackground: Bool { background }
 
     /// Touch ID 在这台 Mac 上是否可用（登记了指纹）。
     var touchIDAvailable: Bool { SecureEnclaveBridge.touchIDAvailable }
@@ -155,6 +179,7 @@ final class AppModel {
             refreshLocalState()
             phase = .locked
             startBrowserService()
+            startDeveloperServices()
         } catch KeevoError.EnclaveUnavailable {
             phase = .unavailable
         } catch {
@@ -175,6 +200,7 @@ final class AppModel {
             self.pendingSecretKey = account.secretKey
             try self.didUnlock()
             self.startBrowserService()
+            self.startDeveloperServices()
         }
     }
 
@@ -344,6 +370,8 @@ final class AppModel {
         vault?.lock()
         vaults = []
         items = []
+        sshKeys = []
+        cliSessions = []
         browserPairings = []
         browserAuthorizations = [:]
         browserDialog = nil
@@ -363,6 +391,8 @@ final class AppModel {
         refreshLocalState()
         try reload()
         phase = .unlocked
+        unlockWaiter = nil
+        refreshDeveloper()
     }
 
     private func refreshLocalState() {
@@ -594,7 +624,7 @@ final class AppModel {
         }
     }
 
-    private func report(_ error: Error) {
+    func report(_ error: Error) {
         if case KeevoError.Locked = error {
             lock()
             return
@@ -625,6 +655,12 @@ final class AppModel {
             return "数据似乎被篡改或损坏了，Keevo 已阻止打开它。你可以从历史版本恢复。"
         case .Locked:
             return "保险库已锁定。"
+        case .DeveloperServiceUnavailable(let reason) where reason.contains("cdhash was not compiled in"):
+            return "请从打包的 Keevo.app 运行（scripts/package-macos.sh），命令行工具与 SSH Agent 才能使用。"
+        case .DeveloperServiceUnavailable(let reason):
+            return "无法启动：\(reason)"
+        case .SshKey(let code, let detail):
+            return sshKeyProblem(code: code, detail: detail)
         case .KdfNeedsConfirmation:
             return "这个保险库的解锁参数异常地高，可能被篡改过。为安全起见，Keevo 没有自动解锁。"
         case .ItemTooLarge:

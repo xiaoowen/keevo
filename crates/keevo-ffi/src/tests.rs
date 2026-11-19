@@ -944,3 +944,85 @@ fn browser_service_pairs_lists_and_revokes() {
         "撤销后不能再建立会话"
     );
 }
+
+/// SSH 密钥：生成与导入写入私钥、公钥、指纹等字段，默认"每次确认"；私钥有问题时说明原因。
+#[test]
+fn ssh_keys_are_generated_imported_and_listed() {
+    let f = Fixture::new();
+    let id = f
+        .vault
+        .create_item(f.vault_id.clone(), "ssh_key".into(), None, "GitHub".into())
+        .unwrap();
+    let fingerprint = f.vault.generate_ssh_key(id.clone()).unwrap();
+    let keys = f.vault.ssh_keys().unwrap();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].fingerprint.as_deref(), Some(fingerprint.as_str()));
+    assert_eq!(keys[0].policy.as_deref(), Some("ask"));
+    assert!(
+        keys[0]
+            .public_key
+            .as_deref()
+            .unwrap()
+            .starts_with("ssh-ed25519 ")
+    );
+    let detail = f.vault.item(id.clone()).unwrap();
+    let field = |label: &str| {
+        detail
+            .fields
+            .iter()
+            .find(|x| x.label == label)
+            .map(|x| x.value.expose())
+            .unwrap()
+    };
+    assert!(field("私钥").starts_with("-----BEGIN OPENSSH PRIVATE KEY-----"));
+    assert_eq!(field("指纹"), fingerprint);
+    assert_eq!(field("算法"), "Ed25519");
+
+    f.vault
+        .set_ssh_agent_policy(id.clone(), Some("unlocked".into()))
+        .unwrap();
+    assert_eq!(
+        f.vault.ssh_keys().unwrap()[0].policy.as_deref(),
+        Some("unlocked")
+    );
+    f.vault.set_ssh_agent_policy(id.clone(), None).unwrap();
+    assert_eq!(f.vault.ssh_keys().unwrap()[0].policy, None);
+    assert!(
+        f.vault
+            .set_ssh_agent_policy(id.clone(), Some("always".into()))
+            .is_err()
+    );
+
+    // 导入：同一把密钥导入另一个条目，指纹相同
+    let other = f
+        .vault
+        .create_item(f.vault_id.clone(), "ssh_key".into(), None, "副本".into())
+        .unwrap();
+    let text = field("私钥").to_owned();
+    assert_eq!(
+        f.vault.import_ssh_private_key(other.clone(), text).unwrap(),
+        fingerprint
+    );
+    assert!(matches!(
+        f.vault.import_ssh_private_key(other.clone(), "-----BEGIN RSA PRIVATE KEY-----\nAA\n-----END RSA PRIVATE KEY-----".into()),
+        Err(KeevoError::SshKey { code, .. }) if code == "pem"
+    ));
+    // 不是 SSH 密钥条目
+    let login = f.login("网站");
+    assert!(f.vault.generate_ssh_key(login).is_err());
+}
+
+/// 复制引用：生成的引用指向这个字段。
+#[test]
+fn secret_references_point_at_the_field() {
+    let f = Fixture::new();
+    let id = f.login("GitHub");
+    let detail = f.vault.item(id.clone()).unwrap();
+    let password = detail.fields.iter().find(|x| x.label == "密码").unwrap();
+    let r = f
+        .vault
+        .secret_reference(id, password.id.clone(), None)
+        .unwrap();
+    let vault_name = f.vault.vaults().unwrap()[0].name.clone();
+    assert_eq!(r, format!("keevo://{vault_name}/GitHub/密码"));
+}

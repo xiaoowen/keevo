@@ -34,19 +34,60 @@ struct UpdateConfirmationRequest: Identifiable {
     let answer: (Bool) -> Void
 }
 
-/// 当前显示的浏览器确认界面。配对、填充授权与密码更新共用一个 sheet，逐个显示。
+/// 当前显示的确认界面。浏览器的配对、填充授权、密码更新，以及命令行工具与 SSH 的授权共用一个 sheet，逐个显示。
 enum BrowserPromptItem: Identifiable {
     case pairing(PairingRequest)
     case fill(FillAuthorizationRequest)
     case update(UpdateConfirmationRequest)
+    case cli(CliAuthorizationRequest)
+    case ssh(SshAuthorizationRequest)
 
     var id: UUID {
         switch self {
         case .pairing(let r): r.id
         case .fill(let r): r.id
         case .update(let r): r.id
+        case .cli(let r): r.id
+        case .ssh(let r): r.id
         }
     }
+}
+
+/// 显示一个确认界面并等待回答（在服务的工作线程中调用）。同一时间只显示一个：后到的请求排队，到截止时间仍未
+/// 轮到即按拒绝处理。截止时间到：关闭界面并按拒绝处理（spec/ipc.md §4.2 第 7 步、§5.2 第 1 条，spec/cli.md §5）。
+func presentAndWait(
+    model: AppModel?,
+    timeoutMs: UInt64,
+    make: (Date, @escaping (Bool) -> Void) -> BrowserPromptItem
+) -> Bool {
+    let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000)
+    let until = DispatchTime.now() + .milliseconds(Int(min(timeoutMs, 60_000)))
+    guard PromptSlot.semaphore.wait(timeout: until) == .success else { return false }
+    defer { PromptSlot.semaphore.signal() }
+    let answered = DispatchSemaphore(value: 0)
+    let lock = NSLock()
+    var result = false
+    let item = make(deadline) { accepted in
+        lock.withLock { result = accepted }
+        answered.signal()
+    }
+    DispatchQueue.main.async { [weak model] in
+        if case .pairing = item { model?.pairingNotice = nil }
+        model?.browserDialog = item
+        NSApp.activate()
+    }
+    guard answered.wait(timeout: until) == .success else {
+        DispatchQueue.main.async { [weak model] in
+            if model?.browserDialog?.id == item.id { model?.browserDialog = nil }
+        }
+        return false
+    }
+    return lock.withLock { result }
+}
+
+/// 全部确认界面共用的排队信号量。
+enum PromptSlot {
+    static let semaphore = DispatchSemaphore(value: 1)
 }
 
 /// 因频率限制被暂停的配对（spec/ipc.md §5.2 第 3 条）。
@@ -60,8 +101,6 @@ struct PausedPairing: Identifiable {
 /// 界面只出现在 Keevo.app 中，扩展与网页无法伪造（spec/ipc.md §5.2 第 4 条）。
 final class BrowserPromptBridge: BrowserPrompt, @unchecked Sendable {
     private weak var model: AppModel?
-    /// 一次只显示一个确认界面：后到的请求排队，到截止时间仍未轮到即按拒绝处理。
-    private let slot = DispatchSemaphore(value: 1)
 
     init(model: AppModel) {
         self.model = model
@@ -128,31 +167,8 @@ final class BrowserPromptBridge: BrowserPrompt, @unchecked Sendable {
         }
     }
 
-    /// 显示一个确认界面并等待回答。截止时间到：关闭界面并按拒绝处理（spec/ipc.md §4.2 第 7 步、§5.2 第 1 条）。
     private func ask(timeoutMs: UInt64, make: (Date, @escaping (Bool) -> Void) -> BrowserPromptItem) -> Bool {
-        let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000)
-        let until = DispatchTime.now() + .milliseconds(Int(min(timeoutMs, 60_000)))
-        guard slot.wait(timeout: until) == .success else { return false }
-        defer { slot.signal() }
-        let answered = DispatchSemaphore(value: 0)
-        let lock = NSLock()
-        var result = false
-        let item = make(deadline) { accepted in
-            lock.withLock { result = accepted }
-            answered.signal()
-        }
-        DispatchQueue.main.async { [weak self] in
-            if case .pairing = item { self?.model?.pairingNotice = nil }
-            self?.model?.browserDialog = item
-            NSApp.activate()
-        }
-        guard answered.wait(timeout: until) == .success else {
-            DispatchQueue.main.async { [weak self] in
-                if self?.model?.browserDialog?.id == item.id { self?.model?.browserDialog = nil }
-            }
-            return false
-        }
-        return lock.withLock { result }
+        presentAndWait(model: model, timeoutMs: timeoutMs, make: make)
     }
 }
 

@@ -16,6 +16,7 @@ name = "keevo_ffi"
 keevo-core = { path = "../keevo-core" }
 keevo-ipc = { path = "../keevo-ipc" }
 keevo-service = { path = "../keevo-service" }
+keevo-ssh = { path = "../keevo-ssh" }
 uniffi = "0.32"
 zeroize = "1"
 

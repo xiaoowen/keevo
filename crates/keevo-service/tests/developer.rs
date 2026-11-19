@@ -1,7 +1,6 @@
 //! 开发者服务的集成测试：真实的 Unix socket；SSH Agent 由系统的 `ssh-add`、`ssh-keygen` 驱动。
 //! 只在 macOS 上运行：服务由内核读取对端进程（audit token、进程表），其他平台没有实现。
 #![cfg(target_os = "macos")]
-
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

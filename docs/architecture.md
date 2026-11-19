@@ -212,9 +212,9 @@ sequenceDiagram
    - 某个配对第一次为某个条目在某个站点取用凭据时，需要在 Keevo.app 的原生界面确认；另有频率限制（`spec/ipc.md` §5.2）。
    - 配对可以按浏览器撤销，撤销立即断开已建立的会话。
 
-**CLI**：
-- 同样经 socket 连接并校验代码签名。从源码自行编译的 CLI 首次连接时，需要在 App 中显式信任该二进制（固定其 cdhash）。
-- 授权按"终端会话"划分（TTY + 父 shell 进程），默认闲置 10 分钟失效。
+**CLI**（[spec/cli.md](../spec/cli.md)）：
+- 连接单独的 socket（`ipc/cli.sock`），服务按编译进主程序的 cdhash 校验对端，与 native host 相同。CLI 随 Keevo.app 一起构建与签名；单独编译的 CLI 不被接受（需要连同应用一起构建）。
+- 授权按"终端会话"划分：由内核读取对端进程，会话键为（终端设备，最早使用同一终端的祖先进程的 pid 与启动时间），没有终端时为父进程。第一次请求在 Keevo.app 中确认（Touch ID 或主密码），闲置 10 分钟或最长 12 小时失效，锁定时全部失效。
 
 ## 7. CLI 设计
 
@@ -222,12 +222,13 @@ sequenceDiagram
 |---|---|
 | `keevo status` | 显示连接、锁定与授权状态 |
 | `keevo read <ref>` | 读取单个字段 |
-| `keevo run [--env-file F] [--env <ref>] -- <cmd>` | 解析引用后注入环境变量并运行子进程；默认通过伪终端代理遮蔽输出中的秘密，可用 `--no-masking` 关闭 |
+| `keevo run [--env-file F] [--env <ref>] -- <cmd>` | 解析引用后注入环境变量并运行子进程；默认把子进程输出中的已解析值替换为 `<concealed by keevo>`（子进程的输出因此连到管道，部分程序会关闭颜色），`--no-masking` 关闭 |
 | `keevo inject -i <tpl> -o <out>` | 渲染含引用的配置模板，输出文件权限为 0600 |
 | `keevo item list/get/create/edit` | 条目操作，支持 `--format json` |
 | `keevo totp <item>` | 输出当前验证码 |
 | `keevo generate` | 生成密码或密码短语 |
-| `keevo ssh config` | 输出或写入 SSH 配置片段 |
+| `keevo ssh config` | 输出 SSH 配置片段（写入 `~/.ssh/config` 在 Keevo.app 中进行，先显示改动） |
+| `keevo ssh-sign`（或以 `keevo-ssh-sign` 的名字运行） | Git 的 `gpg.ssh.program`：经 Keevo 的 Agent 执行 `ssh-keygen -Y sign` |
 | `keevo lock` | 立即锁定 |
 
 **原则**：
