@@ -167,6 +167,8 @@ pub enum Edit {
     RemoveSection(Id128),
     /// 设置 SSH Agent 的授权策略（`ssh_key` 条目的属性 `ssh_agent`）；`None` 表示不在 Agent 中提供。
     SetSshAgent(Option<crate::ssh_agent::AgentPolicy>),
+    /// 安全中心是否报告这个条目（属性 `security_alerts`）：`false` 表示"忽略这个条目的提醒"。
+    SetSecurityAlerts(bool),
 }
 
 /// 保险库信息。
@@ -1774,6 +1776,18 @@ fn apply(doc: &mut ItemDoc, edit: Edit, hlc: Hlc, rev: Id128) -> Result<()> {
         )?,
         Edit::SetSshAgent(None) => {
             let key = RecordKey::attr(crate::ssh_agent::ATTRIBUTE);
+            if doc.get(&key).is_some() {
+                doc.delete(key, hlc, rev)?;
+            }
+        }
+        Edit::SetSecurityAlerts(false) => doc.set(
+            RecordKey::attr(crate::security::ATTRIBUTE),
+            RecordValue::Text("off".into()),
+            hlc,
+            rev,
+        )?,
+        Edit::SetSecurityAlerts(true) => {
+            let key = RecordKey::attr(crate::security::ATTRIBUTE);
             if doc.get(&key).is_some() {
                 doc.delete(key, hlc, rev)?;
             }

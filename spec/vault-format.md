@@ -1,6 +1,6 @@
 # Keevo 保险库明文格式
 
-- **版本**：1.2
+- **版本**：1.4
 - **状态**：**已冻结**（2026-11-18，经四轮模型评审）。冻结范围与版本规则见 [README.md](README.md)
 - **参考实现**：`crates/keevo-format`
 - **独立实现与测试向量**：`spec/reference/format_vectors.py`（Python 标准库，只依据本规范编写）生成 `spec/test-vectors/vault-format-v1.json`
@@ -131,6 +131,7 @@
 | `archived` | bool | 归档 |
 | `trashed` | int | 移入回收站的时间（Unix 毫秒）；不在回收站时为墓碑或不存在 |
 | `ssh_agent` | text | `ssh_key` 条目在 SSH Agent 中的授权策略：`ask`、`session`、`unlocked`（`spec/ssh-agent.md` §4.1）。缺省或其他值表示不在 Agent 中提供；其他类型的条目忽略 |
+| `security_alerts` | text | `off` 表示安全中心不报告这个条目（"忽略这个条目的提醒"，`docs/product.md` §5.6）。缺省或其他值表示照常报告 |
 | `purged` | bool | **保留**，客户端不得写入或删除，写入接口返回 `reserved_key`。合并时由墓碑修订产生（revisions.md §5.2）。文档中只允许两种形态，其他形态解码时返回 `reserved_key`：`records` 中只能是墓碑（恢复已确定）；`concurrent` 中只能是墓碑，或 `hlc = 0`、值为 `true` 的删除版本（删除被撤销） |
 
 ### 2.2 条目类型 `type`
@@ -226,3 +227,4 @@
 | 1.1 | 2026-11-18 | 新增测试向量（规范编码、条目详情、概要与保险库元数据的正向与负向解码），由独立的 Python 实现生成。编写独立实现时发现三处未写清的地方，按以下方式澄清：§1.1 错误先后新增第 0 步，版本检查先于结构检查；记录键的语法属于结构（`malformed`），属性名与标签名的规则属于语义（`invalid_key`）；§2.3 写明 `kind` 与 `data` 不对应返回 `value_kind_mismatch`。接受与拒绝的文档集合不变，只是部分被拒绝的文档的错误码由此确定 |
 | 1.2 | 2026-11-18 | §2.3 写明 `totp` 字段文本的约定（`otpauth://totp/` URI 或 Base32 密钥），此前未作规定。解码规则不变 |
 | 1.3 | 2026-11-19 | §2.1 新增属性 `ssh_agent`（SSH Agent 的授权策略）。属性名本来就是开放的，解码规则不变 |
+| 1.4 | 2026-11-19 | §2.1 新增属性 `security_alerts`（安全中心忽略某个条目）；文首版本号补正（1.3 时漏改）。解码规则不变 |

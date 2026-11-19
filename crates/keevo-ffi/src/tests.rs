@@ -1232,3 +1232,93 @@ fn secret_references_point_at_the_field() {
     let vault_name = f.vault.vaults().unwrap()[0].name.clone();
     assert_eq!(r, format!("keevo://{vault_name}/GitHub/密码"));
 }
+
+/// 安全中心（docs/product.md §5.6）：检查结果、搜索 `is:weak`、条目的安全概况、忽略、泄露检查；锁定时丢弃。
+#[test]
+fn security_center() {
+    let f = Fixture::new();
+    // Fixture::login 的密码都是 hunter2：弱密码，且彼此重复
+    let a = f.login("论坛");
+    let b = f.login("旧账户");
+    assert!(f.vault.security_report().unwrap().is_none(), "还没有检查");
+    assert!(f.vault.item_security(a.clone()).unwrap().is_none());
+
+    let report = f.vault.run_security_check().unwrap();
+    let checks_of = |id: &str| {
+        let mut c: Vec<String> = report
+            .findings
+            .iter()
+            .filter(|x| x.item_id == id)
+            .map(|x| x.check.clone())
+            .collect();
+        c.sort();
+        c
+    };
+    assert_eq!(checks_of(&a), ["reused", "weak"]);
+    assert_eq!(report.affected_items, 2);
+    assert!(!report.breach_checked);
+    let mut weak = f.vault.search("is:weak".into()).unwrap();
+    weak.sort();
+    let mut both = vec![a.clone(), b.clone()];
+    both.sort();
+    assert_eq!(weak, both);
+    f.vault.items().unwrap();
+    assert_eq!(
+        f.vault.search("is:weak".into()).unwrap().len(),
+        2,
+        "重建索引后仍然标记"
+    );
+
+    let sec = f.vault.item_security(a.clone()).unwrap().unwrap();
+    assert!(sec.strength.as_ref().unwrap().score <= 1);
+    assert_eq!(sec.reused_with, ["旧账户"]);
+    assert_eq!(sec.breach_count, None, "没有开启泄露检查");
+    assert!(!sec.ignored);
+
+    // 忽略：不再出现在结果中，但概况仍然给出
+    f.vault.set_security_alerts(b.clone(), false).unwrap();
+    let report = f.vault.run_security_check().unwrap();
+    assert!(report.findings.iter().all(|x| x.item_id != b));
+    assert!(f.vault.item_security(b.clone()).unwrap().unwrap().ignored);
+
+    // 泄露检查：前缀交给界面查询，响应在这里比对
+    let prefixes = f.vault.prepare_breach_check().unwrap();
+    assert_eq!(prefixes.len(), 1, "只有一个不同的密码");
+    let hash: String = keevo_crypto::sha1_for_breach_check(b"hunter2")
+        .iter()
+        .map(|x| format!("{x:02X}"))
+        .collect();
+    assert_eq!(prefixes[0], hash[..5]);
+    assert!(
+        f.vault
+            .record_breach_range(prefixes[0].clone(), format!("{}:17043\r\n", &hash[5..]))
+    );
+    let report = f.vault.run_security_check().unwrap();
+    assert!(report.breach_checked);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|x| x.item_id == a && x.check == "breached" && x.number == 17_043)
+    );
+    assert_eq!(
+        f.vault
+            .item_security(a.clone())
+            .unwrap()
+            .unwrap()
+            .breach_count,
+        Some(17_043)
+    );
+    f.vault.clear_breach_results();
+
+    let s = password_strength("violin-maple-orbit-cactus-ember".into());
+    assert_eq!((s.score, s.warning), (4, None));
+    assert_eq!(
+        password_strength("password".into()).warning.as_deref(),
+        Some("top10")
+    );
+    assert_eq!(security_checks().len(), 8);
+
+    f.vault.lock();
+    assert!(matches!(f.vault.security_report(), Ok(None)), "锁定时丢弃");
+}

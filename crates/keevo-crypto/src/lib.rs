@@ -76,6 +76,16 @@ pub use random::random_below;
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     hkdf::sha256(&[data])
 }
+
+/// SHA-1。只用于 Have I Been Pwned 的 k-匿名查询（`docs/product.md` §5.6）：那里的接口就是按 SHA-1 编排的，
+/// 不用于任何 Keevo 自己的格式或签名。结果在内存中，用后清零。
+#[must_use]
+pub fn sha1_for_breach_check(data: &[u8]) -> zeroize::Zeroizing<[u8; 20]> {
+    use sha1::Digest;
+    let mut out = zeroize::Zeroizing::new([0u8; 20]);
+    out.copy_from_slice(&sha1::Sha1::digest(data));
+    out
+}
 pub use secret_key::AccountSecretKey;
 pub use totp::{MAX_OTP_SECRET_LEN, OTP_DIGITS, OtpAlgorithm, OtpKey};
 pub use two_skd::{MAX_PASSWORD_LEN, derive_account_unlock_key};

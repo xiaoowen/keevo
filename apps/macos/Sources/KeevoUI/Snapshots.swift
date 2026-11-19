@@ -85,6 +85,9 @@ public enum Snapshots {
         await shooter.shoot("main-two-factor", size: main) { MainView(initialItem: ids.twoFactor) }
         await shooter.shoot("main-no-selection", size: main) { MainView() }
         await shooter.shoot("main-empty-trash", size: main) { MainView(initialSidebar: .trash) }
+        await model.runSecurityCheck()
+        await shooter.shoot("security-center", size: main) { MainView(initialSidebar: .security) }
+        await shooter.shoot("main-weak", size: main) { MainView(initialItem: ids.weak) }
 
         await shooter.shoot("editor-login", size: main) { MainView(initialItem: ids.login, initialEditing: true) }
         await shooter.shoot("editor-environment", size: main) { MainView(initialItem: ids.environment, initialEditing: true) }
@@ -245,6 +248,8 @@ struct SampleItems {
     var note = ""
     var email = ""
     var twoFactor = ""
+    /// 安全中心的示例：弱密码、与其他条目重复、http 网址。
+    var weak = ""
 }
 
 /// 截图用的示例数据：覆盖每种条目类型。值都是虚构的。
@@ -273,7 +278,8 @@ enum SampleData {
         ], tags: ["工作", "开源"], favorite: true)
         _ = try make("login", "Apple ID", values: ["用户名": "me@icloud.com", "密码": "correct-horse-staple-42", "网站": "https://appleid.apple.com"])
         _ = try make("login", "Figma", values: ["用户名": "design@studio.example", "密码": "Fg!8kd92-ab", "网站": "https://figma.com"], tags: ["工作"])
-        _ = try make("login", "阿里云", values: ["用户名": "admin", "密码": "aLiYun#2026x", "网站": "https://aliyun.com"])
+        _ = try make("login", "阿里云", values: ["用户名": "admin", "密码": "Fg!8kd92-ab", "网站": "https://aliyun.com"])
+        ids.weak = try make("login", "论坛", values: ["用户名": "me@example.com", "密码": "p@ssw0rd", "网站": "http://forum.example.com"])
         ids.email = try make("email_account", "Outlook 邮箱", values: [
             "邮箱地址": "me@outlook.com", "密码": "outlook-pass-77", "提供商": "Microsoft",
             "IMAP 服务器": "outlook.office365.com", "IMAP 端口": "993", "SMTP 服务器": "smtp.office365.com", "SMTP 端口": "587",

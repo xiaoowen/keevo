@@ -8,7 +8,7 @@
 //! - `tag:work`：带有该标签（不区分大小写，完整匹配）。
 //! - `vault:开发`：保险库名称包含该词。
 //! - `url:github.com`：某个网址包含该词。
-//! - `is:fav`（`is:收藏`）、`is:conflict`（`is:冲突`）。
+//! - `is:fav`（`is:收藏`）、`is:conflict`（`is:冲突`）、`is:weak`（`is:弱密码`，安全中心检查完成后可用）。
 //! - 在过滤前加 `-` 表示排除，例如 `-tag:archive`。
 //! - 不认识的 `键:值` 按普通词处理，因此搜索 `https://` 这样的内容不受影响。
 //!
@@ -31,6 +31,7 @@ enum Filter {
     Url(String),
     Favorite,
     Conflict,
+    Weak,
 }
 
 /// 解析后的查询。
@@ -105,6 +106,7 @@ fn filter(key: &str, value: &str) -> Option<Filter> {
         "is" => match v.as_str() {
             "fav" | "favorite" | "favourite" | "收藏" => Some(Filter::Favorite),
             "conflict" | "conflicts" | "冲突" => Some(Filter::Conflict),
+            "weak" | "弱密码" | "弱" => Some(Filter::Weak),
             _ => None,
         },
         _ => None,
@@ -137,6 +139,8 @@ struct Entry {
     item_type: ItemType,
     favorite: bool,
     conflicts: bool,
+    /// 安全中心判定为弱密码（`is:weak`）；检查完成前全部为 `false`。
+    weak: bool,
     title: String,
     others: Vec<String>,
     urls: Vec<String>,
@@ -171,6 +175,7 @@ impl SearchIndex {
                     item_type: o.item_type,
                     favorite: o.favorite,
                     conflicts: i.has_conflicts,
+                    weak: false,
                     title: o.title.to_lowercase(),
                     others,
                     urls,
@@ -183,6 +188,13 @@ impl SearchIndex {
             })
             .collect();
         Self { entries }
+    }
+
+    /// 记下安全中心判定为弱密码的条目（`is:weak`，`crate::security::Report::weak_items`）。
+    pub fn set_weak(&mut self, weak: &std::collections::HashSet<Id128>) {
+        for e in &mut self.entries {
+            e.weak = weak.contains(&e.id);
+        }
     }
 
     /// 条目数。
@@ -231,6 +243,7 @@ impl Entry {
             Filter::Url(u) => self.urls.iter().any(|x| x.contains(u.as_str())),
             Filter::Favorite => self.favorite,
             Filter::Conflict => self.conflicts,
+            Filter::Weak => self.weak,
         }
     }
 
@@ -408,6 +421,7 @@ mod tests {
         assert_eq!(ids(&ix, "vault:开发 -type:db"), [2, 3], "排除");
         assert_eq!(ids(&ix, "url:google"), [6]);
         assert_eq!(ids(&ix, "is:冲突"), [6]);
+        assert!(ids(&ix, "is:weak").is_empty(), "检查完成前没有弱密码");
         assert_eq!(ids(&ix, "type:db 生产"), [5]);
         assert_eq!(ids(&ix, "https://mail"), [6], "不认识的键按普通词处理");
         assert_eq!(

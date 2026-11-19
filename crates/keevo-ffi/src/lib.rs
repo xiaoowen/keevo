@@ -972,6 +972,8 @@ pub struct KeevoVault {
     secrets: SecretRegistry,
     /// 搜索索引（解密后的概要），锁定时丢弃。
     search_index: Mutex<Option<SearchIndex>>,
+    /// 安全中心的检查结果与泄露检查，锁定时丢弃。加锁顺序：保险库 → 安全中心 → 搜索索引。
+    security: Mutex<security::SecurityState>,
 }
 
 impl KeevoVault {
@@ -982,7 +984,14 @@ impl KeevoVault {
             developer: Mutex::new(None),
             secrets: SecretRegistry::default(),
             search_index: Mutex::new(None),
+            security: Mutex::default(),
         }
+    }
+
+    fn security_state(&self) -> MutexGuard<'_, security::SecurityState> {
+        self.security
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn index(&self) -> MutexGuard<'_, Option<SearchIndex>> {
@@ -1101,6 +1110,7 @@ impl KeevoVault {
     pub fn lock(&self) {
         self.vault().lock();
         self.secrets.wipe();
+        *self.security_state() = security::SecurityState::default();
         *self.index() = None;
     }
 
@@ -1125,6 +1135,7 @@ impl KeevoVault {
     /// # Errors
     /// 已锁定时返回 [`KeevoError::Locked`]。
     pub fn items(&self) -> Result<Vec<ItemEntry>, KeevoError> {
+        let weak = self.security_state().weak_items();
         let items = {
             let vault = self.vault();
             let items = vault.items()?;
@@ -1134,7 +1145,10 @@ impl KeevoVault {
                 .map(|v| (v.id, v.name))
                 .collect();
             // 顺便建立搜索索引：之后每次按键只做比较（docs/product.md §6.1"搜索每次按键 < 16 ms"）
-            *self.index() = Some(SearchIndex::new(&items, &names));
+            let mut index = SearchIndex::new(&items, &names);
+            // 安全中心检查过时，保留弱密码的标记（`is:weak`）
+            index.set_weak(&weak);
+            *self.index() = Some(index);
             items
         };
         Ok(items
@@ -2408,9 +2422,14 @@ fn purpose_from(name: &str) -> Option<Purpose> {
 }
 
 mod developer;
+mod security;
 pub use developer::{
     CliSessionInfo, DeveloperPrompt, RequestOrigin, SshAgentInfo, SshKeyInfo, SshSignRequest,
     ssh_agent_link_path,
+};
+pub use security::{
+    ItemSecurity, PasswordStrengthInfo, SecurityFinding, SecurityReport, password_strength,
+    security_checks,
 };
 
 #[cfg(test)]

@@ -859,6 +859,7 @@ dependencies = [
 name = "keevo-core"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "keevo-crypto",
  "keevo-format",
  "keevo-generator",

@@ -15,6 +15,8 @@ struct ItemDetailView: View {
     var editOnAppear = false
 
     @ViewState private var detail: ItemDetail?
+    /// 安全中心对这个条目的检查结果（"安全"区）。
+    @ViewState private var security: ItemSecurity?
     @ViewState private var revealed: Set<String> = []
     /// 每次显示时的标记：30 秒后只隐藏仍是那一次显示的字段，避免更早的计时提前隐藏。
     @ViewState private var revealTokens: [String: UUID] = [:]
@@ -48,6 +50,7 @@ struct ItemDetailView: View {
             if editOnAppear, detail != nil { editing = true }
         }
         .onChange(of: model.dataVersion) { load() }
+        .onChange(of: model.securityVersion) { security = model.itemSecurity(itemId) }
         // 切换条目、离开视图或窗口失去焦点时丢弃已解密的内容，隐藏显示中的秘密
         .onDisappear { detail = nil; revealed = []; largeType = nil }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
@@ -73,6 +76,7 @@ struct ItemDetailView: View {
 
     private func load() {
         detail = model.detail(of: itemId)
+        security = model.itemSecurity(itemId)
     }
 
     // MARK: - 顶部操作
@@ -143,6 +147,9 @@ struct ItemDetailView: View {
             }
             if d.itemType == "ssh_key", !d.trashed {
                 SshKeyAgentCard(itemId: d.id)
+            }
+            if !d.trashed {
+                ItemSecuritySection(itemId: d.id, info: security) { editing = true }
             }
             footer(d)
         }

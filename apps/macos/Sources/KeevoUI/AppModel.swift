@@ -30,6 +30,21 @@ final class AppModel {
     /// 每次条目数据变化时加 1。详情等视图据此重新读取。
     private(set) var dataVersion = 0
 
+    /// 安全中心最近一次的检查结果（docs/product.md §5.6），锁定时丢弃。
+    var securityReport: SecurityReport?
+    /// 正在检查。
+    var securityChecking = false
+    /// 泄露检查的状态：正在查询、上次失败的原因。
+    var breachChecking = false
+    var breachError: String?
+    /// 用户开启了泄露检查（Have I Been Pwned，默认关闭，docs/governance.md §5）。只记偏好，不记结果。
+    var breachCheckEnabled = UserDefaults.standard.bool(forKey: "security.breachCheck") {
+        didSet { UserDefaults.standard.set(breachCheckEnabled, forKey: "security.breachCheck") }
+    }
+    /// 每次检查结果更新时加 1。详情的"安全"区据此重新读取。
+    var securityVersion = 0
+    @ObservationIgnored var securityTask: Task<Void, Never>?
+
     /// 有浏览器正在请求配对（spec/ipc.md §4.2 第 8 步：每次尝试都对用户可见）。值为浏览器标识。
     var pairingNotice: String?
     /// 浏览器写入保险库的提示（spec/ipc.md §5.5：每次保存都对用户可见）。
@@ -379,6 +394,9 @@ final class AppModel {
         browserAuthorizations = [:]
         browserDialog = nil
         pausedPairing = nil
+        securityTask?.cancel()
+        securityReport = nil
+        breachChecking = false
         pendingSecretKey = nil
         pendingKdf = nil
         dataVersion &+= 1
@@ -602,6 +620,8 @@ final class AppModel {
         }
         sortKeys = keys
         dataVersion &+= 1
+        // 数据变化后稍等片刻再重新检查（连续编辑时只检查一次）
+        scheduleSecurityCheck(after: .seconds(1))
     }
 
     /// 标题 → 排序键（拼音，小写）。

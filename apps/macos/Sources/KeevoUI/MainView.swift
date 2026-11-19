@@ -14,9 +14,12 @@ enum SidebarItem: Hashable {
     case vault(String)
     case tag(String)
     case trash
+    /// 安全中心（docs/product.md §5.6）：不显示条目列表，内容区为检查结果。
+    case security
 
     var title: String {
         switch self {
+        case .security: "安全中心"
         case .all: "全部条目"
         case .favorites: "收藏"
         case .type(let t): ItemTypeInfo.name(t)
@@ -34,6 +37,8 @@ enum MainRequest: Equatable {
     case focusSearch
     /// 选中一个条目（浏览器扩展的"在 Keevo 中打开"，spec/ipc.md §5.6）。
     case showItem(String)
+    /// 选中一个条目并打开编辑器（安全中心的"修改密码"）。
+    case editItem(String)
 }
 
 struct MainView: View {
@@ -60,6 +65,7 @@ struct MainView: View {
     private func matches(_ item: ItemEntry, _ s: SidebarItem) -> Bool {
         switch s {
         case .trash: return item.trashed
+        case .security: return false
         case _ where item.trashed: return false
         case .all: return true
         case .favorites: return item.favorite
@@ -87,7 +93,8 @@ struct MainView: View {
     }
 
     private func count(_ s: SidebarItem) -> Int {
-        model.items.reduce(0) { $0 + (matches($1, s) ? 1 : 0) }
+        if s == .security { return Int(model.securityReport?.affectedItems ?? 0) }
+        return model.items.reduce(0) { $0 + (matches($1, s) ? 1 : 0) }
     }
 
     var body: some View {
@@ -96,12 +103,17 @@ struct MainView: View {
                 .frame(width: 220)
                 .overlay { EditingShield() }
             ColumnDivider()
-            itemColumn
-                .frame(width: 300)
-                .overlay { EditingShield() }
-            ColumnDivider()
-            detailColumn
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if sidebar == .security {
+                SecurityCenterView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                itemColumn
+                    .frame(width: 300)
+                    .overlay { EditingShield() }
+                ColumnDivider()
+                detailColumn
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         .background(KV.Colors.bgCanvas)
         .ignoresSafeArea(.container, edges: .top)
@@ -141,8 +153,9 @@ struct MainView: View {
         case .newItem(let choice): create(choice)
         case .generator: showingGenerator = true
         case .focusSearch: searchFocused = true
-        case .showItem(let id):
+        case .showItem(let id), .editItem(let id):
             search = ""
+            if case .editItem = request { editRequest = id }
             if sidebar == .all {
                 selectedItem = id
             } else {
@@ -167,7 +180,7 @@ struct MainView: View {
         VStack(spacing: 0) {
             HStack(spacing: KV.Space.s2) {
                 KVSearchField(text: $search, prompt: "搜索，或输入 type:ssh", focus: $searchFocused)
-                    .help("过滤：type: tag: vault: url: is:fav is:conflict，前加 - 表示排除")
+                    .help("过滤：type: tag: vault: url: is:fav is:conflict is:weak，前加 - 表示排除")
                     .onKeyPress(.downArrow) {
                         guard model.editingItem == nil else { return .ignored }
                         listFocused = true
@@ -292,6 +305,7 @@ private struct Sidebar: View {
                     VStack(spacing: 2) {
                         row(.all, "全部条目", symbol: "square.grid.2x2", prominent: true)
                         row(.favorites, "收藏", symbol: "star", prominent: true)
+                        row(.security, "安全中心", symbol: "checkmark.shield", prominent: true, attention: true)
                     }
                     section("分类", Self.personal)
                     section("开发者", Self.developer)
@@ -348,13 +362,14 @@ private struct Sidebar: View {
         }
     }
 
-    private func row(_ item: SidebarItem, _ title: String, symbol: String? = nil, prominent: Bool = false) -> some View {
+    private func row(_ item: SidebarItem, _ title: String, symbol: String? = nil, prominent: Bool = false, attention: Bool = false) -> some View {
         SidebarRow(
             title: title,
             symbol: symbol,
             count: count(item),
             selected: selection == item,
-            verticalPadding: prominent ? 6 : 5
+            verticalPadding: prominent ? 6 : 5,
+            attention: attention
         ) { selection = item }
     }
 }
@@ -365,6 +380,8 @@ struct SidebarRow: View {
     let count: Int
     let selected: Bool
     let verticalPadding: CGFloat
+    /// 计数以警示色显示（安全中心的待处理数量）。
+    var attention = false
     let action: () -> Void
     @ViewState private var hovering = false
 
@@ -383,7 +400,7 @@ struct SidebarRow: View {
                     .lineLimit(1)
                 Spacer(minLength: KV.Space.s1)
                 if count > 0 {
-                    CountBadge(count: count)
+                    CountBadge(count: count, attention: attention)
                 }
             }
             .padding(.horizontal, KV.Space.s2)

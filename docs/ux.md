@@ -32,7 +32,7 @@
 ```
 
 - **条目列表**：
-  - 顶部是搜索框，支持模糊搜索与过滤语法：`type:ssh`、`tag:work`、`vault:开发`、`url:github.com`、`is:fav`、`is:conflict`，前加 `-` 表示排除（如 `-tag:archive`），`"…"` 括起来的是一个词。`is:weak` 随安全中心（M1.5）提供。
+  - 顶部是搜索框，支持模糊搜索与过滤语法：`type:ssh`、`tag:work`、`vault:开发`、`url:github.com`、`is:fav`、`is:conflict`，前加 `-` 表示排除（如 `-tag:archive`），`"…"` 括起来的是一个词。`is:weak`（弱密码）在安全中心检查完成后可用。
   - 列表项显示图标、标题、副标题（用户名或 Key ID）。
 - **条目详情**：
   - 头部：图标、标题、收藏、编辑。
