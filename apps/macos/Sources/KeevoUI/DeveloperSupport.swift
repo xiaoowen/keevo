@@ -11,11 +11,14 @@ import UniformTypeIdentifiers
 /// 谁在等待解锁（锁屏上说明）。
 enum UnlockWaiter {
     case cli, ssh
+    /// 浏览器扩展（spec/ipc.md §5.6）：解锁后回到这个浏览器。
+    case browser(name: String, bundleID: String, since: Date)
 
     var text: String {
         switch self {
         case .cli: "命令行工具正在等待解锁。解锁后会继续执行。"
         case .ssh: "SSH 正在等待解锁。解锁后会继续连接。"
+        case .browser(let name, let bundleID, _): "「\(name)」正在等待解锁。解锁后会回到 \(browserName(bundleID))。"
         }
     }
 }

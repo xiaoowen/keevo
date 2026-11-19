@@ -35,6 +35,48 @@ fn frame_string(bytes: Vec<u8>) -> Result<String, JsError> {
     String::from_utf8(bytes).map_err(js_err)
 }
 
+/// 生成密码（弹窗的"生成密码"与"新建登录"）。与 Keevo.app 用同一份实现（`keevo-generator`），只在扩展内进行。
+///
+/// `recipe_json`：
+/// - `{"kind":"password","length":20,"digits":true,"symbols":true}`：随机字符，总是含大小写字母；
+/// - `{"kind":"passphrase","words":5,"capitalize":false,"number":true}`：口令短语，单词以 `-` 分隔。
+///
+/// 返回 `{"value":"…","entropy_bits":126.4}`。
+///
+/// # Errors
+/// 格式错误、参数超出范围或随机数不可用时返回错误。
+#[wasm_bindgen(js_name = generatePassword)]
+pub fn generate_password(recipe_json: &str) -> Result<String, JsError> {
+    use keevo_generator::{Recipe, generate};
+    let v: Value = serde_json::from_str(recipe_json).map_err(js_err)?;
+    let flag = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
+    let num = |k: &str| {
+        v.get(k)
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+            .ok_or_else(|| JsError::new("missing number"))
+    };
+    let recipe = match v.get("kind").and_then(Value::as_str) {
+        Some("password") => Recipe::Password {
+            length: num("length")?,
+            lowercase: true,
+            uppercase: true,
+            digits: flag("digits"),
+            symbols: flag("symbols"),
+            avoid_ambiguous: false,
+        },
+        Some("passphrase") => Recipe::Passphrase {
+            words: num("words")?,
+            separator: "-".into(),
+            capitalize: flag("capitalize"),
+            include_number: flag("number"),
+        },
+        _ => return Err(JsError::new("unknown recipe")),
+    };
+    let g = generate(&recipe).map_err(js_err)?;
+    Ok(json!({ "value": g.value.as_str(), "entropy_bits": g.entropy_bits }).to_string())
+}
+
 /// 扩展一侧的连接。
 #[wasm_bindgen]
 pub struct KeevoClient {
@@ -44,7 +86,7 @@ pub struct KeevoClient {
 #[wasm_bindgen]
 impl KeevoClient {
     /// 新客户端。`private_key_hex` 为空时生成新的静态密钥（首次配对）。`version` 为空时使用最新的协议版本；
-    /// 服务返回 `unsupported_version` 时，用 1 重新连接（`spec/ipc.md` §5.5）。
+    /// 服务返回 `unsupported_version` 时，用低一个的版本重新连接（`spec/ipc.md` §5.5）。
     ///
     /// # Errors
     /// 私钥格式错误、版本不支持或随机数不可用时返回错误。

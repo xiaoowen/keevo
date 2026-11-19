@@ -67,7 +67,7 @@ flowchart LR
 | `keevo-crypto` | **唯一允许直接调用密码学库的 crate**，实现 [spec/crypto.md](../spec/crypto.md)。提供 KDF、2SKD、AEAD、HKDF、随机数、加密信封与 AAD 构造、密钥包裹、账户密钥集，以及密钥类型（释放时清零，不实现 `Debug` / `Display` / `Clone` / 序列化）；包含 RFC 已知答案测试与跨实现测试向量。签名、HPKE 在需要时加入 |
 | `keevo-format` | 条目、保险库数据结构（[spec/revisions.md](../spec/revisions.md) 的记录映射）；类型模板；序列化；格式版本迁移 |
 | `keevo-store` | 本地持久化：SQLite schema、迁移、事务、备份 |
-| `keevo-core` | 账户、保险库与条目操作；解锁状态机；内存搜索索引；密码生成器；TOTP；网址匹配（Public Suffix List）；导入导出；安全中心检查；密钥引用解析 |
+| `keevo-core` | 账户、保险库与条目操作；解锁状态机；内存搜索索引；密码生成器（转发 `keevo-generator`）；TOTP；网址匹配（Public Suffix List）；导入导出；安全中心检查；密钥引用解析 |
 | `keevo-ssh` | SSH 密钥生成与解析；SSH agent 协议实现 |
 | `keevo-ipc` | 本地 IPC 协议（[spec/ipc.md](../spec/ipc.md)）：帧格式、消息定义、配对与会话状态机。不做 I/O，由 App、native host、CLI 共用。Noise 握手本身在 `keevo-crypto` 中，局域网配对（M2）也复用它 |
 | `keevo-sync`（M2） | 同步引擎：日志段、快照、修订图合并、签名与哈希链校验、高水位线。定义 `SyncStore` trait，包含列出文件、读取、原子创建、删除自己的文件、监听变化。文件夹实现写在 Rust 中；iCloud 的下载状态查询与请求下载由 Swift 侧通过 UniFFI 回调接口提供 |
@@ -76,7 +76,8 @@ flowchart LR
 | `keevo-cli` | 命令行工具（M1.4） |
 | `keevo-macos` | macOS 平台集成：进程代码签名校验（audit token / pid）。**整个 workspace 唯一允许 `unsafe` 的 crate**，仅限一次 `getsockopt` 调用 |
 | `keevo-service` | Vault Service 的 socket 服务：对端校验、连接线程、把 IPC 状态机接到 `keevo-core`；附开发服务 `keevo-dev-service` |
-| `keevo-wasm` | 把 `keevo-ipc` 的扩展侧客户端编译为 WASM，扩展与桌面应用共用同一份协议实现 |
+| `keevo-generator` | 密码生成器（随机字符、口令短语、PIN）。只依赖 `keevo-crypto` 的随机数，`keevo-core` 与 `keevo-wasm` 共用，扩展与桌面应用生成的密码出自同一份实现 |
+| `keevo-wasm` | 把 `keevo-ipc` 的扩展侧客户端与 `keevo-generator` 编译为 WASM，扩展与桌面应用共用同一份协议与生成器实现 |
 | `keevo-wasm`（后续） | 扩展独立模式，供没有桌面应用的平台使用 |
 
 **依赖方向**：`crypto ← format ← store ← core ← {ffi, cli, native-host, sync}`。由 CI 检查：除 `keevo-crypto` 外，任何 crate 都不得直接依赖密码学原语 crate。

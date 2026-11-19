@@ -6,10 +6,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::IpcError;
 
-/// 最新的协议版本：扩展默认按它发起，服务不支持时退回 v1（§5.5）。
-pub const PROTOCOL_VERSION: u32 = 2;
-/// 支持的协议版本。v2 = v1 的全部内容 + `save` 与 `update`（§5.5）。
-pub const SUPPORTED_VERSIONS: [u32; 2] = [1, 2];
+/// 最新的协议版本：扩展默认按它发起，服务不支持时逐级退回（§5.5）。
+pub const PROTOCOL_VERSION: u32 = 3;
+/// 支持的协议版本。v2 = v1 的全部内容 + `save` 与 `update`（§5.5）；v3 = v2 + `search`、`open`、`unlock`，
+/// `status` 的结果多一个 `touch_id`（§5.6）。
+pub const SUPPORTED_VERSIONS: [u32; 3] = [1, 2, 3];
 
 /// 是否支持这个协议版本。
 #[must_use]
@@ -220,6 +221,22 @@ pub enum Call {
         /// 新密码。
         password: SecretText,
     },
+    /// v3：按标题、用户名与网站搜索全部条目（§5.6）。每次解锁后，第一次搜索需要用户在 Keevo.app 中允许。
+    Search {
+        /// 搜索词（去掉首尾空白后 1–128 个字符）。
+        query: String,
+        /// 还没有得到允许时，是否请用户在 Keevo.app 中确认。为 `false` 时直接返回 `not_authorized`，
+        /// 扩展据此在用户输入时搜索，而不会每敲一个字就弹出确认。
+        ask: bool,
+    },
+    /// v3：请 Keevo.app 显示主窗口；给出条目时选中它（§5.6）。锁定时显示锁屏。
+    Open {
+        /// 条目 ID（十六进制）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item_id: Option<String>,
+    },
+    /// v3：请 Keevo.app 解锁（显示锁屏，可以用 Touch ID 时直接请求验证）（§5.6）。不等待解锁完成。
+    Unlock,
 }
 
 impl Call {
@@ -229,6 +246,7 @@ impl Call {
         match self {
             Self::Status | Self::Candidates { .. } | Self::Fill { .. } => 1,
             Self::Save { .. } | Self::Update { .. } => 2,
+            Self::Search { .. } | Self::Open { .. } | Self::Unlock => 3,
         }
     }
 }
@@ -279,12 +297,15 @@ impl Drop for FillData {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum CallResult {
-    /// `status` 的结果。
+    /// `status` 的结果；v3 中也是 `open` 与 `unlock` 的结果。
     Status {
         /// 是否已锁定。
         locked: bool,
+        /// v3：现在能否用 Touch ID 解锁（已启用，且这次不要求输入主密码）。v1、v2 的会话中没有这个字段。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        touch_id: Option<bool>,
     },
-    /// `candidates` 的结果。
+    /// `candidates` 与 v3 `search` 的结果。
     Candidates {
         /// 匹配的条目。
         items: Vec<Candidate>,

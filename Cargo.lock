@@ -807,6 +807,7 @@ version = "0.0.0"
 dependencies = [
  "keevo-crypto",
  "keevo-format",
+ "keevo-generator",
  "keevo-store",
  "rusqlite",
  "unicode-normalization",
@@ -856,6 +857,14 @@ dependencies = [
  "keevo-crypto",
  "serde",
  "serde_json",
+ "zeroize",
+]
+
+[[package]]
+name = "keevo-generator"
+version = "0.0.0"
+dependencies = [
+ "keevo-crypto",
  "zeroize",
 ]
 
@@ -928,6 +937,7 @@ name = "keevo-wasm"
 version = "0.0.0"
 dependencies = [
  "keevo-crypto",
+ "keevo-generator",
  "keevo-ipc",
  "serde_json",
  "wasm-bindgen",

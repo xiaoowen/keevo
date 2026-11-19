@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use keevo_core::Vault;
-use keevo_ipc::service::{FillGate, PairingRecord, PairingStore};
+use keevo_ipc::service::{Attention, FillGate, PairingRecord, PairingStore};
 use serde::{Deserialize, Serialize};
 
 /// 本机记录的种类（`spec/crypto.md` §8.8）。
@@ -66,6 +66,10 @@ pub struct PairingCache {
     paused: HashSet<[u8; 32]>,
     saves: HashMap<[u8; 32], VecDeque<Instant>>,
     queries: HashMap<[u8; 32], QueryWindow>,
+    /// v3 `search`：配对 → 用户允许搜索时的解锁代次（`spec/ipc.md` §5.6）。只在内存中，换一次解锁即失效。
+    search: HashMap<[u8; 32], u64>,
+    /// v3 `open` 与 `unlock`：上一次让 Keevo.app 来到前台的时间。
+    attention: HashMap<([u8; 32], Attention), Instant>,
 }
 
 /// 一个配对最近查询过的站点，以及本时间窗内是否已经提示过。
@@ -258,6 +262,18 @@ impl PairingCache {
         QueryGate::Allowed
     }
 
+    /// v3 `open` 与 `unlock` 的频率限制：同一配对两次之间至少间隔 [`Attention::interval`]。
+    fn attention_gate(&mut self, pk: &[u8; 32], kind: Attention, now: Instant) -> bool {
+        let due = self
+            .attention
+            .get(&(*pk, kind))
+            .is_none_or(|t| now.saturating_duration_since(*t) >= kind.interval());
+        if due {
+            self.attention.insert((*pk, kind), now);
+        }
+        due
+    }
+
     /// `save` 的频率限制：任意 10 分钟内最多 [`SAVE_LIMIT`] 次。允许时记下这次保存。计数只在内存中。
     fn save_gate(&mut self, pk: &[u8; 32], now: Instant) -> bool {
         let window = self.saves.entry(*pk).or_default();
@@ -310,6 +326,18 @@ impl PairingStore for Live<'_> {
         now: Instant,
     ) -> keevo_ipc::service::QueryGate {
         self.0.query_gate(pk, site, now)
+    }
+
+    fn search_allowed(&self, pk: &[u8; 32], epoch: u64) -> bool {
+        self.0.search.get(pk) == Some(&epoch)
+    }
+
+    fn allow_search(&mut self, pk: &[u8; 32], epoch: u64) {
+        self.0.search.insert(*pk, epoch);
+    }
+
+    fn attention_gate(&mut self, pk: &[u8; 32], kind: Attention, now: Instant) -> bool {
+        self.0.attention_gate(pk, kind, now)
     }
 }
 
@@ -467,6 +495,10 @@ impl PairingStore for Bound<'_> {
         self.cache.paused.remove(extension_public);
         self.cache.saves.remove(extension_public);
         self.cache.queries.remove(extension_public);
+        self.cache.search.remove(extension_public);
+        self.cache
+            .attention
+            .retain(|(pk, _), _| pk != extension_public);
         let _ = self
             .vault
             .delete_local_record(AUTHORIZATION_KIND, extension_public);
@@ -788,5 +820,59 @@ mod tests {
             QueryGate::Allowed,
             "时间窗过后恢复"
         );
+    }
+
+    /// v3：搜索的允许只在同一次解锁中有效，撤销配对时清除；open 与 unlock 按配对与种类分别限频。
+    #[test]
+    fn search_permission_and_attention_gates() {
+        use keevo_ipc::service::Attention;
+        let mut cache = PairingCache::default();
+        let pk = [7u8; 32];
+        assert!(!Live(&mut cache).search_allowed(&pk, 3));
+        Live(&mut cache).allow_search(&pk, 3);
+        assert!(Live(&mut cache).search_allowed(&pk, 3));
+        assert!(!Live(&mut cache).search_allowed(&pk, 4), "换一次解锁即失效");
+        assert!(
+            !Live(&mut cache).search_allowed(&[8; 32], 3),
+            "按配对分别记录"
+        );
+
+        let t0 = Instant::now();
+        assert!(Live(&mut cache).attention_gate(&pk, Attention::Unlock, t0));
+        assert!(!Live(&mut cache).attention_gate(
+            &pk,
+            Attention::Unlock,
+            t0 + Duration::from_secs(29)
+        ));
+        assert!(
+            Live(&mut cache).attention_gate(&pk, Attention::Open, t0),
+            "按种类分别计时"
+        );
+        assert!(
+            Live(&mut cache).attention_gate(&[8; 32], Attention::Unlock, t0),
+            "按配对分别计时"
+        );
+        assert!(Live(&mut cache).attention_gate(&pk, Attention::Open, t0 + Duration::from_secs(1)));
+        assert!(Live(&mut cache).attention_gate(
+            &pk,
+            Attention::Unlock,
+            t0 + Duration::from_secs(30)
+        ));
+
+        let params = KdfParams::new(KdfParams::MIN_M_KIB, KdfParams::MIN_T, 1, [5; 16]).unwrap();
+        let (mut vault, _) =
+            Vault::create_with_store(Store::open_in_memory().unwrap(), "pw", params).unwrap();
+        cache.load(&mut vault).unwrap();
+        let _ = Bound {
+            cache: &mut cache,
+            vault: &mut vault,
+        }
+        .revoke(&pk);
+        assert!(!Live(&mut cache).search_allowed(&pk, 3), "撤销配对时清除");
+        assert!(Live(&mut cache).attention_gate(
+            &pk,
+            Attention::Unlock,
+            t0 + Duration::from_secs(1)
+        ));
     }
 }

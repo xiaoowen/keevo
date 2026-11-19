@@ -692,6 +692,26 @@ fn browser_service_pairs_lists_and_revokes() {
         fn queries_limited(&self, _: String, name: String, _: String) {
             self.0.lock().unwrap().push(format!("limited {name}"));
         }
+        fn authorize_search(&self, r: BrowserSearchRequest, timeout_ms: u64) -> bool {
+            assert!(timeout_ms > 0 && timeout_ms <= 60_000);
+            self.0.lock().unwrap().push(format!(
+                "search {} {} {}",
+                r.pairing_name, r.browser, r.query
+            ));
+            self.1.lock().unwrap().pop_front().unwrap_or(false)
+        }
+        fn open_requested(&self, name: String, _: String, item_id: Option<String>) {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("open {name} {}", item_id.unwrap_or_default()));
+        }
+        fn browser_unlock_requested(&self, name: String, browser: String) {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("unlock {name} {browser}"));
+        }
     }
 
     let f = Fixture::new();
@@ -918,6 +938,124 @@ fn browser_service_pairs_lists_and_revokes() {
     assert!(
         matches!(&after, keevo_ipc::message::ServerMessage::Ok { result: keevo_ipc::message::CallResult::Fill(d), .. } if d.password == "rotated"),
         "{after:?}"
+    );
+
+    // 协议 v3（§5.6）：搜索全部条目第一次需要允许，之后直接返回；open 转给 Keevo.app，条目已核对存在
+    let titles = |m: &keevo_ipc::message::ServerMessage| match m {
+        keevo_ipc::message::ServerMessage::Ok {
+            result: keevo_ipc::message::CallResult::Candidates { items },
+            ..
+        } => items.iter().map(|c| c.title.clone()).collect::<Vec<_>>(),
+        other => panic!("{other:?}"),
+    };
+    let search = |ask| keevo_ipc::message::Call::Search {
+        query: "news".into(),
+        ask,
+    };
+    assert!(
+        is_denied(&call(&mut client, &mut stream, search(false))),
+        "没有允许时不询问"
+    );
+    prompt.1.lock().unwrap().push_back(true);
+    assert_eq!(
+        titles(&call(&mut client, &mut stream, search(true))),
+        ["news.example"]
+    );
+    assert_eq!(
+        titles(&call(&mut client, &mut stream, search(false))),
+        ["news.example"]
+    );
+    let searched = |p: &Accept| {
+        p.0.lock()
+            .unwrap()
+            .iter()
+            .filter(|l| l.starts_with("search"))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        searched(&prompt),
+        ["search 测试扩展 com.google.Chrome news"]
+    );
+    let opened = call(
+        &mut client,
+        &mut stream,
+        keevo_ipc::message::Call::Open {
+            item_id: Some(new_id.clone()),
+        },
+    );
+    assert!(
+        matches!(
+            &opened,
+            keevo_ipc::message::ServerMessage::Ok {
+                result: keevo_ipc::message::CallResult::Status {
+                    locked: false,
+                    touch_id: Some(false)
+                },
+                ..
+            }
+        ),
+        "{opened:?}"
+    );
+    // 输出在回复之后发出：等它出现在日志里
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !prompt
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|l| l == &format!("open 测试扩展 {new_id}"))
+    {
+        assert!(std::time::Instant::now() < deadline, "没有收到 open");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    // 锁定时：unlock 请 Keevo.app 解锁（30 秒内只请求一次），open 只显示锁屏；解锁后搜索需要重新允许
+    f.vault.lock();
+    let wait_for = |line: String| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !prompt.0.lock().unwrap().contains(&line) {
+            assert!(std::time::Instant::now() < deadline, "没有收到 {line}");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    };
+    let locked_status = |m: &keevo_ipc::message::ServerMessage| {
+        matches!(
+            m,
+            keevo_ipc::message::ServerMessage::Ok {
+                result: keevo_ipc::message::CallResult::Status { locked: true, .. },
+                ..
+            }
+        )
+    };
+    for _ in 0..2 {
+        let m = call(&mut client, &mut stream, keevo_ipc::message::Call::Unlock);
+        assert!(locked_status(&m), "{m:?}");
+    }
+    wait_for("unlock 测试扩展 com.google.Chrome".into());
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let unlocks = prompt
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.starts_with("unlock"))
+        .count();
+    assert_eq!(unlocks, 1, "30 秒内只请求一次解锁");
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    let m = call(
+        &mut client,
+        &mut stream,
+        keevo_ipc::message::Call::Open {
+            item_id: Some(new_id.clone()),
+        },
+    );
+    assert!(locked_status(&m), "{m:?}");
+    wait_for("open 测试扩展 ".into());
+    f.vault.unlock("pw".into(), f.secret_key.clone()).unwrap();
+    assert!(
+        is_denied(&call(&mut client, &mut stream, search(false))),
+        "再次解锁后需要重新允许搜索"
     );
 
     assert!(

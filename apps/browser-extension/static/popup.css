@@ -196,3 +196,150 @@ button.secondary {
 button.fill { font: var(--kv-type-footnote); font-weight: 600; padding: 4px 12px; border-radius: 6px; }
 button.secondary:hover { background: var(--kv-bg-hover); }
 button:focus-visible { outline: 2px solid var(--kv-focus-ring); outline-offset: 2px; }
+
+/* ---- 搜索全部条目、生成密码、新建登录、解锁（设计稿"扩展 · 弹窗：搜索、生成密码、新建登录与解锁"） */
+
+/* 只有图标的按钮：返回、重新生成、显示密码 */
+button.icon-button {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--kv-accent-fg);
+  background: transparent;
+  border-radius: var(--kv-radius-sm);
+}
+button.icon-button:hover { background: var(--kv-bg-hover); }
+header button.icon-button { color: var(--kv-fg-primary); background: var(--kv-bg-sunken); width: 22px; height: 22px; }
+
+/* 文字链接样式的按钮（底部入口） */
+button.link {
+  font: var(--kv-type-footnote);
+  color: var(--kv-accent-fg);
+  background: transparent;
+  padding: 0;
+  border-radius: var(--kv-radius-xs);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+button.link:hover { background: transparent; color: var(--kv-accent-fill-hover); }
+.links { display: flex; gap: var(--kv-space-3); margin-top: var(--kv-space-3); padding-top: var(--kv-space-2); border-top: 1px solid var(--kv-border-subtle); }
+.links .end { margin-left: auto; }
+
+.section-label { font: var(--kv-type-caption); font-weight: 600; color: var(--kv-fg-secondary); padding: var(--kv-space-2) 0 var(--kv-space-1); }
+.list:has(> .section-label:first-child) { border-top: 0; }
+.others { margin-top: var(--kv-space-1); }
+.others > .muted { margin: var(--kv-space-1) 0; }
+.item-main.other { padding-left: 0; padding-right: 0; }
+button.open { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+/* 边框按钮："在全部条目中搜索" */
+button.bordered {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--kv-space-1-5);
+  font: var(--kv-type-footnote);
+  font-weight: 600;
+  color: var(--kv-fg-primary);
+  background: var(--kv-bg-raised);
+  border: 1px solid var(--kv-border-control);
+  margin-top: var(--kv-space-2);
+}
+button.bordered:hover { background: var(--kv-bg-hover); }
+button.wide { width: 100%; padding: 6px var(--kv-space-3); }
+.locked button.wide { width: auto; display: inline-flex; align-items: center; gap: var(--kv-space-2); margin-top: var(--kv-space-3); padding: 7px var(--kv-space-4); }
+.locked .note { margin-top: var(--kv-space-2); }
+.locked .note button.link { margin-left: var(--kv-space-1); }
+.spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-top-color: currentColor;
+  box-sizing: border-box;
+  animation: kv-spin 0.9s linear infinite;
+}
+@keyframes kv-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+/* 生成密码 */
+.segmented { display: flex; gap: 2px; padding: 2px; border-radius: var(--kv-radius-md); background: var(--kv-bg-sunken); }
+.segmented button {
+  flex: 1;
+  font: var(--kv-type-body);
+  color: var(--kv-fg-secondary);
+  background: transparent;
+  padding: 4px 0;
+  border-radius: 6px;
+}
+.segmented button:hover { background: transparent; color: var(--kv-fg-primary); }
+.segmented button.on { color: var(--kv-fg-primary); font-weight: 600; background: var(--kv-bg-raised); box-shadow: 0 1px 2px var(--kv-shadow-color); }
+.gen-value {
+  display: flex;
+  align-items: center;
+  gap: var(--kv-space-1-5);
+  margin-top: var(--kv-space-3);
+  padding: var(--kv-space-2) var(--kv-space-1-5) var(--kv-space-2) var(--kv-space-3);
+  border-radius: var(--kv-radius-lg);
+  background: var(--kv-bg-sunken);
+}
+.gen-value output { flex: 1; min-width: 0; font: var(--kv-type-mono-large); word-break: break-all; }
+mark { color: inherit; background: var(--kv-status-warning-bg); border-radius: 2px; }
+.classified .digit { color: var(--kv-secret-digit); }
+.classified .symbol { color: var(--kv-secret-symbol); }
+.meter { display: flex; align-items: center; gap: 6px; margin-top: var(--kv-space-2); font: var(--kv-type-footnote); }
+.meter .bar { width: 18px; height: 4px; border-radius: 2px; background: var(--kv-bg-sunken); }
+.meter.danger .bar.on, .meter.danger .level { background-color: var(--kv-status-danger-fg); color: var(--kv-status-danger-fg); }
+.meter.warning .bar.on, .meter.warning .level { background-color: var(--kv-status-warning-fg); color: var(--kv-status-warning-fg); }
+.meter.success .bar.on, .meter.success .level { background-color: var(--kv-status-success-fg); color: var(--kv-status-success-fg); }
+.meter .level { background: none !important; font-weight: 600; margin-left: 2px; }
+.meter .bits { color: var(--kv-fg-secondary); }
+.gen-card { margin-top: var(--kv-space-3); border: 1px solid var(--kv-border-subtle); border-radius: var(--kv-radius-lg); }
+.gen-row { display: flex; align-items: center; gap: var(--kv-space-2); padding: var(--kv-space-2) var(--kv-space-3); font: var(--kv-type-body); }
+.gen-row + .gen-row { border-top: 1px solid var(--kv-border-subtle); }
+.gen-row > span:first-child { flex: none; }
+.gen-row input[role="switch"] { flex: none; margin: 0 0 0 auto; }
+.gen-row input[type="range"] { flex: 1; margin: 0; padding: 0; border: 0; background: transparent; accent-color: var(--kv-accent-fill); }
+.badge-value { font: var(--kv-type-mono); font-weight: 600; padding: 1px 6px; border-radius: 5px; background: var(--kv-bg-sunken); min-width: 2ch; text-align: center; }
+/* 开关：复选框外观换成拨动开关 */
+input[role="switch"] {
+  appearance: none;
+  position: relative;
+  width: 32px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--kv-radius-full);
+  background: var(--kv-border-control);
+  cursor: pointer;
+  transition: background var(--kv-duration-fast) var(--kv-easing-standard);
+}
+input[role="switch"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px var(--kv-shadow-color);
+  transition: left var(--kv-duration-fast) var(--kv-easing-standard);
+}
+input[role="switch"]:checked { background: var(--kv-accent-fill); }
+input[role="switch"]:checked::after { left: 14px; }
+.pair-buttons, .form-buttons { display: flex; gap: var(--kv-space-2); margin-top: var(--kv-space-3); }
+.pair-buttons button { flex: 1; }
+.form-buttons { justify-content: flex-end; }
+button.big { padding: 6px var(--kv-space-3); }
+button.secondary.big { font: var(--kv-type-body-strong); }
+
+/* 新建登录 */
+.field-label:first-child, .field .field-label { margin-top: 0; }
+.readonly { margin: var(--kv-space-1) 0 0; padding: var(--kv-space-1-5) var(--kv-space-2); border-radius: var(--kv-radius-md); background: var(--kv-bg-surface); color: var(--kv-fg-primary); }
+.password-row { display: flex; align-items: center; gap: 2px; border: 1px solid var(--kv-border-control); border-radius: var(--kv-radius-sm); padding-right: 4px; margin: var(--kv-space-1) 0; background: var(--kv-bg-surface); }
+.password-row input { flex: 1; min-width: 0; margin: 0; border: 0; background: transparent; font: var(--kv-type-mono); }
+.password-row:focus-within { outline: 2px solid var(--kv-focus-ring); }
+.password-row input:focus-visible { outline: none; }

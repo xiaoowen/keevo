@@ -149,7 +149,7 @@ assert.equal(m.result.items.length, 1);
 ok("本地开发服务按端口匹配");
 
 // ---- 协议 v2：保存与更新（spec/ipc.md §5.5；开发服务自动确认更新）
-assert.equal(client.version(), 2);
+assert.equal(client.version(), 3, "默认按最新的协议 v3");
 m = await call(host, client, "save", { url: "https://news.example/login?x=1", username: "reader", password: "saved-pass" });
 const savedId = m.result.item_id;
 assert.match(savedId, /^[0-9a-f]{32}$/);
@@ -165,6 +165,21 @@ assert.equal(m.result.password, "rotated");
 m = await call(host, client, "update", { item_id: itemId, url: "https://github.com.evil.example/", password: "x" });
 assert.equal(m.error.code, "url_mismatch");
 ok("v2 更新密码（经 Keevo 确认）；网址不匹配时拒绝");
+
+// ---- 协议 v3：搜索、打开、解锁（spec/ipc.md §5.6；开发服务自动允许搜索）
+m = await call(host, client, "status");
+assert.deepEqual(m.result, { locked: false, touch_id: false });
+m = await call(host, client, "search", { query: "news", ask: false });
+assert.equal(m.error.code, "not_authorized", "没有允许时不询问");
+m = await call(host, client, "search", { query: "news", ask: true });
+assert.deepEqual(m.result.items.map((i) => i.title), ["news.example"]);
+m = await call(host, client, "search", { query: "演示", ask: false });
+assert.ok(m.result.items.length >= 2, "允许后这次解锁中直接搜索");
+m = await call(host, client, "open", {});
+assert.deepEqual(m.result, { locked: false, touch_id: false });
+m = await call(host, client, "unlock");
+assert.equal(m.result.locked, false);
+ok("v3：搜索全部条目第一次需要允许；open 与 unlock 返回状态（含 touch_id）");
 await host.close();
 client.free();
 
@@ -187,7 +202,7 @@ events = await exchange(host, v1, v1.startSession(servicePublic));
 assert.equal(events[0].type, "established");
 assert.throws(() => v1.request(JSON.stringify({ method: "save", params: { url: "https://a.example/", username: "", password: "p" } })));
 m = await call(host, v1, "status");
-assert.equal(m.result.locked, false);
+assert.deepEqual(m.result, { locked: false }, "v1 会话的状态没有 touch_id");
 ok("v1 会话照常可用（配对与版本无关），但不能发送 v2 的 save");
 await host.close();
 

@@ -77,3 +77,28 @@ export function siteIcon(title: string, origin: string, size = 28): HTMLElement 
   icon.setAttribute("aria-hidden", "true");
   return icon;
 }
+
+/** 线条图标（24×24 视图框），与设计稿一致。 */
+const GLYPHS = {
+  back: ["M15 5l-7 7 7 7"],
+  refresh: ["M20 11a8 8 0 1 0-2.3 5.7", "M20 4v7h-7"],
+  eye: ["M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z", "M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"],
+  eyeOff: [
+    "M3 3l18 18",
+    "M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3 3.9M6.1 6.1C3.6 7.8 2 12 2 12s3.5 7 10 7a9.6 9.6 0 0 0 4.2-.9",
+  ],
+  external: ["M14 4h6v6M20 4l-9 9", "M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"],
+  search: ["M18 11a7 7 0 1 1-14 0 7 7 0 0 1 14 0z", "M20 20l-3.5-3.5"],
+  touchid: [
+    "M12 4a8 8 0 0 1 8 8v1M4 13v-1a8 8 0 0 1 4-6.9",
+    "M8 20c1-2 1.5-4 1.5-8a2.5 2.5 0 0 1 5 0c0 3-.5 6-1.5 8",
+    "M12 12c0 4-.5 6-2 9",
+    "M17 17c-.3 1.2-.7 2.3-1.2 3.2",
+  ],
+} as const;
+
+export function glyph(name: keyof typeof GLYPHS, size = 14, width = 2): SVGSVGElement {
+  const s = svg(size, "0 0 24 24");
+  for (const d of GLYPHS[name]) s.append(stroke(d, width));
+  return s;
+}

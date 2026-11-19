@@ -29,8 +29,15 @@
     anchored: boolean;
     kind: Kind;
   }
+  /** 弹窗"生成密码 → 填入网页"：只填密码框，不填用户名。 */
+  interface FillNewPasswordMessage {
+    type: "fill_new_password";
+    origin: string;
+    password: string;
+  }
   type Incoming =
     | FillMessage
+    | FillNewPasswordMessage
     | { type: "close_menu" }
     | { type: "menu_size"; height: number }
     | { type: "open_menu" }
@@ -314,6 +321,20 @@
     return "filled";
   }
 
+  /**
+   * 填入生成的密码：注册或修改密码的表单。优先填标为 new-password 的框；没有标注时，两个密码框是"密码 + 确认"，
+   * 三个以上是"当前 + 新 + 确认"（跳过第一个）。不标记为"刚由 Keevo 填入"，提交后照常询问是否保存。
+   */
+  function fillNewPassword(m: FillNewPasswordMessage): FillOutcome {
+    if (location.origin !== m.origin) return "origin_changed";
+    const all = deepQuery<HTMLInputElement>(document, 'input[type="password"]').filter(editable);
+    const fresh = all.filter((el) => autocomplete(el).includes("new-password"));
+    const targets = fresh.length > 0 ? fresh : all.length >= 3 ? all.slice(1) : all;
+    if (targets.length === 0) return "no_password_field";
+    for (const el of targets) setValue(el, m.password);
+    return "filled";
+  }
+
   // ---- 保存：检测登录表单的提交（只在标准模式下有内容脚本时工作）
 
   /** 提交时表单中的凭据。修改密码的表单取新密码。 */
@@ -532,6 +553,9 @@
         sendResponse(outcome);
         return false;
       }
+      case "fill_new_password":
+        sendResponse(fillNewPassword(m));
+        return false;
       case "close_menu":
         closeMenu(true);
         return false;

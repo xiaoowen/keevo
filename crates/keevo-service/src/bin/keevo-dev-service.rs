@@ -27,7 +27,7 @@ use keevo_core::{
     AccountSecretKey, FieldData, FieldKind, ItemType, KdfParams, NewField, Purpose, Vault,
 };
 use keevo_crypto::StaticKeypair;
-use keevo_ipc::service::{FillRequest, WriteOp, WriteRequest};
+use keevo_ipc::service::{FillRequest, SearchRequest, WriteOp, WriteRequest};
 use keevo_service::{PairingPrompt, PeerPolicy, VaultService, bind};
 use zeroize::Zeroizing;
 
@@ -135,6 +135,36 @@ impl PairingPrompt for TerminalPrompt {
     fn queries_limited(&self, _: &[u8; 32], name: &str, _: &str) {
         eprintln!("\n「{name}」短时间内查询了太多网站，已暂时停止回答它的查询。");
     }
+
+    fn authorize_search(&self, r: &SearchRequest, deadline: std::time::Instant) -> bool {
+        eprintln!(
+            "\n「{}」（{}）请求在全部条目中搜索「{}」。允许后到下次锁定前不再询问。",
+            r.pairing_name, r.browser, r.query
+        );
+        eprint!("允许吗？[y/N] ");
+        let _ = std::io::stderr().flush();
+        let ok = ask(deadline);
+        eprintln!(
+            "{}",
+            if ok {
+                "已允许。"
+            } else {
+                "已拒绝（或超时）。"
+            }
+        );
+        ok
+    }
+
+    fn open(&self, name: &str, _: &str, item_id: Option<&str>) {
+        eprintln!(
+            "\n「{name}」请求打开 Keevo{}。",
+            item_id.map_or(String::new(), |i| format!("中的条目 {i}"))
+        );
+    }
+
+    fn unlock_requested(&self, name: &str, _: &str) {
+        eprintln!("\n「{name}」请求解锁 Keevo。");
+    }
 }
 
 /// 在另一个线程读终端，到截止时间仍未回答即按拒绝处理。
@@ -173,6 +203,22 @@ impl PairingPrompt for AutoConfirm {
 
     fn saved(&self, name: &str, _: &str, title: &str) {
         eprintln!("[auto-confirm] 「{name}」保存了新的登录「{title}」");
+    }
+
+    fn authorize_search(&self, r: &SearchRequest, _: std::time::Instant) -> bool {
+        eprintln!("[auto-confirm] 已自动允许搜索「{}」", r.query);
+        true
+    }
+
+    fn open(&self, name: &str, _: &str, item_id: Option<&str>) {
+        eprintln!(
+            "[auto-confirm] 「{name}」请求打开条目 {}",
+            item_id.unwrap_or("-")
+        );
+    }
+
+    fn unlock_requested(&self, name: &str, _: &str) {
+        eprintln!("[auto-confirm] 「{name}」请求解锁");
     }
 }
 

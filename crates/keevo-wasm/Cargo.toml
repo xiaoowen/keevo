@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 keevo-crypto = { path = "../keevo-crypto" }
+keevo-generator = { path = "../keevo-generator" }
 keevo-ipc = { path = "../keevo-ipc" }
 serde_json = "1"
 wasm-bindgen = "=0.2.130"

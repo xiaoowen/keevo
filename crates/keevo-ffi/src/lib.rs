@@ -1763,6 +1763,27 @@ pub trait BrowserPrompt: Send + Sync {
     fn login_saved(&self, pairing_name: String, browser: String, title: String);
     /// 这个配对短时间内查询了太多不同的网站（§5.2）：提示用户，可能有人在冒用它枚举账户。
     fn queries_limited(&self, pairing_id: String, name: String, browser: String);
+    /// 协议 v3：这次解锁中第一次搜索全部条目（§5.6）。显示配对与搜索词，请用户允许；允许后到下次锁定前不再询问。
+    /// 必须在 `timeout_ms` 毫秒内返回，超时按拒绝处理。
+    fn authorize_search(&self, request: BrowserSearchRequest, timeout_ms: u64) -> bool;
+    /// 协议 v3：扩展请求显示 Keevo 的主窗口（§5.6）。`item_id` 已核对存在，应选中它；锁定时为 `None`，显示锁屏。
+    fn open_requested(&self, pairing_name: String, browser: String, item_id: Option<String>);
+    /// 协议 v3：扩展请求解锁（§5.6）。显示锁屏并说明是谁在等待；可以用 Touch ID 时直接请求验证。
+    /// 解锁后回到发起请求的浏览器（`browser` 是它的 bundle ID）。
+    fn browser_unlock_requested(&self, pairing_name: String, browser: String);
+}
+
+/// 一次等待用户允许的搜索（`spec/ipc.md` §5.6）。
+#[derive(uniffi::Record)]
+pub struct BrowserSearchRequest {
+    /// 发起请求的配对。
+    pub pairing_id: String,
+    /// 配对的显示名。
+    pub pairing_name: String,
+    /// 浏览器标识（bundle ID）。
+    pub browser: String,
+    /// 搜索词。
+    pub query: String,
 }
 
 /// 一次等待确认的密码更新（`spec/ipc.md` §5.5）。不含密码本身。
@@ -1926,6 +1947,38 @@ impl keevo_service::PairingPrompt for PromptAdapter {
     fn queries_limited(&self, extension_public: &[u8; 32], name: &str, browser: &str) {
         self.0
             .queries_limited(hex(extension_public), name.to_owned(), browser.to_owned());
+    }
+
+    fn authorize_search(
+        &self,
+        r: &keevo_ipc::service::SearchRequest,
+        deadline: std::time::Instant,
+    ) -> bool {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        let ms = u64::try_from(left.as_millis()).unwrap_or(u64::MAX);
+        let request = BrowserSearchRequest {
+            pairing_id: hex(&r.extension_public),
+            pairing_name: r.pairing_name.clone(),
+            browser: r.browser.clone(),
+            query: r.query.clone(),
+        };
+        self.0.authorize_search(request, ms) && std::time::Instant::now() <= deadline
+    }
+
+    fn open(&self, pairing_name: &str, browser: &str, item_id: Option<&str>) {
+        self.0.open_requested(
+            pairing_name.to_owned(),
+            browser.to_owned(),
+            item_id.map(str::to_owned),
+        );
+    }
+
+    fn unlock_requested(&self, pairing_name: &str, browser: &str) {
+        self.0
+            .browser_unlock_requested(pairing_name.to_owned(), browser.to_owned());
     }
 }
 

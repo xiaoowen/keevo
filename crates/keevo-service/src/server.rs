@@ -14,7 +14,8 @@ use keevo_crypto::StaticKeypair;
 use keevo_ipc::frame::{read_socket_frame, write_socket_frame};
 use keevo_ipc::service::{
     FILL_AUTHORIZATION_TIMEOUT, FillRequest, Output, PairingGate, PairingRecord, PairingStore,
-    ServiceConnection, UPDATE_CONFIRMATION_TIMEOUT, VaultBackend, WriteOp, WriteRequest,
+    SEARCH_AUTHORIZATION_TIMEOUT, SearchRequest, ServiceConnection, UPDATE_CONFIRMATION_TIMEOUT,
+    VaultBackend, WriteOp, WriteRequest,
 };
 
 use crate::backend::CoreBackend;
@@ -74,6 +75,20 @@ pub trait PairingPrompt: Send + Sync {
     /// 协议 v2：扩展保存了新的登录。在 Keevo.app 中提示，让每次写入都对用户可见（`spec/ipc.md` §5.5）。
     fn saved(&self, pairing_name: &str, browser: &str, title: &str) {
         let _ = (pairing_name, browser, title);
+    }
+    /// 协议 v3：这次解锁中第一次搜索全部条目（`spec/ipc.md` §5.6）。在原生界面显示配对与搜索词，请用户允许；
+    /// 必须在 `deadline` 到达时关闭界面并返回 `false`。默认拒绝。
+    fn authorize_search(&self, request: &SearchRequest, deadline: std::time::Instant) -> bool {
+        let _ = (request, deadline);
+        false
+    }
+    /// 协议 v3：扩展请求显示 Keevo 的主窗口；`item_id` 已核对存在（`spec/ipc.md` §5.6）。锁定时显示锁屏。
+    fn open(&self, pairing_name: &str, browser: &str, item_id: Option<&str>) {
+        let _ = (pairing_name, browser, item_id);
+    }
+    /// 协议 v3：扩展请求解锁（`spec/ipc.md` §5.6）。显示锁屏并说明是谁在等待；可以用 Touch ID 时直接请求验证。
+    fn unlock_requested(&self, pairing_name: &str, browser: &str) {
+        let _ = (pairing_name, browser);
     }
 }
 
@@ -396,6 +411,36 @@ impl VaultService {
                         return false;
                     }
                 }
+                Output::AuthorizeSearch(request) => {
+                    // 等待用户允许期间不持有任何锁（§5.6）
+                    let now = std::time::Instant::now();
+                    let deadline = now.checked_add(SEARCH_AUTHORIZATION_TIMEOUT).unwrap_or(now);
+                    let allowed = self.prompt.authorize_search(&request, deadline)
+                        && std::time::Instant::now() <= deadline;
+                    let more = {
+                        let vault = lock(&self.vault);
+                        let mut cache = lock(&self.pairings);
+                        conn.resolve_search(
+                            allowed,
+                            &mut Live(&mut cache),
+                            &CoreBackend::new(&vault),
+                        )
+                    };
+                    if !self.emit(id, stream, conn, more) {
+                        return false;
+                    }
+                }
+                Output::Open {
+                    pairing_name,
+                    browser,
+                    item_id,
+                } => self
+                    .prompt
+                    .open(&pairing_name, &browser, item_id.as_deref()),
+                Output::UnlockRequested {
+                    pairing_name,
+                    browser,
+                } => self.prompt.unlock_requested(&pairing_name, &browser),
                 Output::Close => return false,
             }
         }

@@ -6,7 +6,7 @@
 //
 // - 在临时目录新建账户，添加一个网址为 <网址> 的登录；
 // - 经 FFI 启动浏览器服务（socket 位于 $HOME 下，测试把 HOME 指向临时目录）；
-// - 配对、填充授权、密码更新一律自动同意，并把每个事件打印为一行 "EVENT …"，供测试核对；
+// - 配对、填充授权、密码更新、搜索一律自动同意，并把每个事件打印为一行 "EVENT …"，供测试核对；
 // - 打印 READY，读到标准输入结束时退出。
 
 import CryptoKit
@@ -49,6 +49,19 @@ final class AutoBrowserPrompt: BrowserPrompt, @unchecked Sendable {
 
     func queriesLimited(pairingId: String, name: String, browser: String) {
         emit("queries_limited \(name)")
+    }
+
+    func authorizeSearch(request: BrowserSearchRequest, timeoutMs: UInt64) -> Bool {
+        emit("authorize_search \(request.query)")
+        return true
+    }
+
+    func openRequested(pairingName: String, browser: String, itemId: String?) {
+        emit("open_requested \(itemId ?? "-")")
+    }
+
+    func browserUnlockRequested(pairingName: String, browser: String) {
+        emit("unlock_requested \(browser)")
     }
 }
 

@@ -394,6 +394,10 @@ final class AppModel {
         refreshLocalState()
         try reload()
         phase = .unlocked
+        // 扩展弹窗里点了"解锁"：2 分钟内解锁就回到那个浏览器，扩展会重新打开弹窗（spec/ipc.md §5.6）
+        if case .browser(_, let bundleID, let since) = unlockWaiter, Date().timeIntervalSince(since) < 120 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { returnToBrowser(bundleID) }
+        }
         unlockWaiter = nil
         refreshDeveloper()
     }

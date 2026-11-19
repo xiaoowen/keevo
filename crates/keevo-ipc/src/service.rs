@@ -23,6 +23,12 @@ pub const PAIRING_TIMEOUT: Duration = Duration::from_secs(60);
 pub const FILL_AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(60);
 /// v2 `update` 的确认等待时间：到期按拒绝处理（§5.5）。
 pub const UPDATE_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(60);
+/// v3 `search` 首次允许的等待时间：到期按拒绝处理（§5.6）。
+pub const SEARCH_AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(60);
+/// v3 `search` 搜索词的最大字符数（§5.6）。
+pub const MAX_SEARCH_QUERY_CHARS: usize = 128;
+/// v3 `search` 最多返回的条目数（§5.6）。
+pub const MAX_SEARCH_RESULTS: usize = 30;
 /// 每小时最多开始的配对次数（§4.2）。
 pub const MAX_PAIRING_STARTS_PER_HOUR: usize = 10;
 
@@ -153,12 +159,54 @@ pub trait PairingStore {
         let _ = (extension_public, now);
         false
     }
+    /// v3 `search`：用户是否已允许这个配对在这次解锁（`epoch`）中搜索全部条目（§5.6）。默认不允许。
+    fn search_allowed(&self, extension_public: &[u8; 32], epoch: u64) -> bool {
+        let _ = (extension_public, epoch);
+        false
+    }
+    /// v3 `search`：记下用户的允许，到这次解锁结束（`epoch` 改变）为止有效。只保存在内存中。
+    fn allow_search(&mut self, extension_public: &[u8; 32], epoch: u64) {
+        let _ = (extension_public, epoch);
+    }
+    /// v3 `open` 与 `unlock` 的频率限制（§5.6）：只限制 Keevo.app 抢占焦点、弹出 Touch ID 的次数，
+    /// 不影响返回给扩展的结果。允许时记下这次。默认允许；正式实现见 `keevo-service`。
+    fn attention_gate(
+        &mut self,
+        extension_public: &[u8; 32],
+        kind: Attention,
+        now: Instant,
+    ) -> bool {
+        let _ = (extension_public, kind, now);
+        true
+    }
+}
+
+/// v3 中会让 Keevo.app 来到前台的请求（§5.6）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Attention {
+    /// `open`：显示主窗口。
+    Open,
+    /// `unlock`：显示锁屏并请求 Touch ID。
+    Unlock,
+}
+
+impl Attention {
+    /// 同一配对两次之间的最短间隔：`open` 1 秒，`unlock` 30 秒（与命令行工具、SSH 的解锁请求一致）。
+    #[must_use]
+    pub const fn interval(self) -> Duration {
+        match self {
+            Self::Open => Duration::from_secs(1),
+            Self::Unlock => Duration::from_secs(30),
+        }
+    }
 }
 
 /// 内存中的配对存储，用于测试与开发服务。
 #[derive(Debug, Default)]
 pub struct MemoryPairingStore {
     records: Vec<PairingRecord>,
+    /// 已允许搜索的 `(配对, 解锁代次)`。
+    search: Vec<([u8; 32], u64)>,
 }
 
 impl MemoryPairingStore {
@@ -205,6 +253,14 @@ impl PairingStore for MemoryPairingStore {
     fn save_gate(&mut self, _: &[u8; 32], _: Instant) -> bool {
         true
     }
+
+    fn search_allowed(&self, extension_public: &[u8; 32], epoch: u64) -> bool {
+        self.search.contains(&(*extension_public, epoch))
+    }
+
+    fn allow_search(&mut self, extension_public: &[u8; 32], epoch: u64) {
+        self.search.push((*extension_public, epoch));
+    }
 }
 
 /// 保险库后端。协议层只通过这个接口取数据，最小披露规则由本状态机强制执行。
@@ -229,6 +285,15 @@ pub trait VaultBackend {
     /// 规范化后的站点 `scheme://host[:port]`（§5.2 第 1 条）。
     fn site(&self, url: &str) -> Option<String> {
         site_of(url)
+    }
+    /// v3：按标题、用户名与网站搜索全部条目，只返回概要（§5.6）。`query` 已去掉首尾空白，非空。
+    fn search(&self, query: &str) -> Vec<crate::message::Candidate> {
+        let _ = query;
+        Vec::new()
+    }
+    /// v3：现在能否用 Touch ID 解锁（`status` 的 `touch_id`）。
+    fn touch_id(&self) -> bool {
+        false
     }
 }
 
@@ -266,6 +331,19 @@ pub struct FillRequest {
     pub username: String,
     /// 规范化后的站点。
     pub site: String,
+}
+
+/// v3：一次等待用户允许的 `search`（§5.6）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchRequest {
+    /// 发起请求的配对（扩展静态公钥）。
+    pub extension_public: [u8; 32],
+    /// 配对的显示名。
+    pub pairing_name: String,
+    /// 浏览器标识。
+    pub browser: String,
+    /// 搜索词，显示在确认界面中，让用户核对是不是自己刚输入的。
+    pub query: String,
 }
 
 /// v2 的写操作（§5.5），由调用方在持有保险库锁的情况下执行。
@@ -326,6 +404,8 @@ enum Pending {
     },
     /// 等待执行（以及可能的确认）的写操作。
     Write { id: u32 },
+    /// v3：等待用户允许的 `search`。
+    Search { id: u32, query: String, epoch: u64 },
 }
 
 /// 状态机的输出。
@@ -369,6 +449,25 @@ pub enum Output {
     FillPaused {
         /// 配对（扩展静态公钥）。
         extension_public: [u8; 32],
+        /// 配对的显示名。
+        pairing_name: String,
+        /// 浏览器标识。
+        browser: String,
+    },
+    /// v3 `search` 第一次需要用户允许（§5.6）：请用户在原生界面确认，60 秒内未确认按拒绝处理，然后调用
+    /// [`ServiceConnection::resolve_search`]。等待期间不得持有任何锁。
+    AuthorizeSearch(SearchRequest),
+    /// v3 `open`（§5.6）：显示 Keevo.app 的主窗口，给出条目时选中它（条目已核对存在）。锁定时显示锁屏。
+    Open {
+        /// 配对的显示名。
+        pairing_name: String,
+        /// 浏览器标识。
+        browser: String,
+        /// 条目 ID。
+        item_id: Option<String>,
+    },
+    /// v3 `unlock`（§5.6）：保险库已锁定，请 Keevo.app 显示锁屏，说明是谁在等待；可以用 Touch ID 时直接请求验证。
+    UnlockRequested {
         /// 配对的显示名。
         pairing_name: String,
         /// 浏览器标识。
@@ -796,8 +895,92 @@ impl ServiceConnection {
                                     },
                                 }
                             }
-                            _ => handle(&request, backend),
+                            _ => handle(&request, version, backend),
                         }
+                    }
+                    Call::Search { query, ask } if !backend.is_locked() => {
+                        let query = query.trim();
+                        let epoch = backend.unlock_epoch();
+                        if query.is_empty() || query.chars().count() > MAX_SEARCH_QUERY_CHARS {
+                            ServerMessage::Err {
+                                id: request.id,
+                                error: ErrorBody {
+                                    code: ErrorCode::BadRequest,
+                                },
+                            }
+                        } else if epoch
+                            .is_some_and(|e| store.search_allowed(&record.extension_public, e))
+                        {
+                            search_reply(request.id, query, backend)
+                        } else if let (true, None, Some(epoch)) = (*ask, &pending, epoch) {
+                            let req = SearchRequest {
+                                extension_public: record.extension_public,
+                                pairing_name: record.name.clone(),
+                                browser: record.browser.clone(),
+                                query: query.to_owned(),
+                            };
+                            self.state = State::Established {
+                                transport,
+                                origin,
+                                version,
+                                pending: Some(Pending::Search {
+                                    id: request.id,
+                                    query: query.to_owned(),
+                                    epoch,
+                                }),
+                            };
+                            return Ok(vec![Output::AuthorizeSearch(req)]);
+                        } else {
+                            // 没有要求确认，或同一连接上已有请求在等待
+                            ServerMessage::Err {
+                                id: request.id,
+                                error: ErrorBody {
+                                    code: ErrorCode::NotAuthorized,
+                                },
+                            }
+                        }
+                    }
+                    Call::Open { item_id } => {
+                        let missing = item_id.as_ref().is_some_and(|id| {
+                            !backend.is_locked() && backend.describe(id).is_none()
+                        });
+                        if missing {
+                            ServerMessage::Err {
+                                id: request.id,
+                                error: ErrorBody {
+                                    code: ErrorCode::NotFound,
+                                },
+                            }
+                        } else {
+                            if store.attention_gate(
+                                &record.extension_public,
+                                Attention::Open,
+                                Instant::now(),
+                            ) {
+                                extra.push(Output::Open {
+                                    pairing_name: record.name.clone(),
+                                    browser: record.browser.clone(),
+                                    // 锁定时无法核对条目，只显示锁屏
+                                    item_id: item_id.clone().filter(|_| !backend.is_locked()),
+                                });
+                            }
+                            status_reply(request.id, version, backend)
+                        }
+                    }
+                    Call::Unlock => {
+                        if backend.is_locked()
+                            && store.attention_gate(
+                                &record.extension_public,
+                                Attention::Unlock,
+                                Instant::now(),
+                            )
+                        {
+                            extra.push(Output::UnlockRequested {
+                                pairing_name: record.name.clone(),
+                                browser: record.browser.clone(),
+                            });
+                        }
+                        status_reply(request.id, version, backend)
                     }
                     Call::Save { .. } | Call::Update { .. } if !backend.is_locked() => {
                         match prepare_write(&request.call, &record, store, backend) {
@@ -823,7 +1006,7 @@ impl ServiceConnection {
                             }
                         }
                     }
-                    _ => handle(&request, backend),
+                    _ => handle(&request, version, backend),
                 };
                 // 放不进一条 Noise 消息的响应改为 `response_too_large`（§2，第四轮评审 J4）
                 let frame = match encrypt(&mut transport, &reply) {
@@ -971,6 +1154,99 @@ impl ServiceConnection {
     }
 }
 
+impl ServiceConnection {
+    /// 用户对 [`Output::AuthorizeSearch`] 的决定（§5.6）。允许时记下"这个配对在这次解锁中可以搜索"，再返回结果；
+    /// 等待期间锁定或换了一次解锁，按 `locked` 处理。
+    pub fn resolve_search(
+        &mut self,
+        allowed: bool,
+        store: &mut dyn PairingStore,
+        backend: &dyn VaultBackend,
+    ) -> Vec<Output> {
+        let State::Established {
+            mut transport,
+            origin,
+            version,
+            pending,
+        } = std::mem::replace(&mut self.state, State::Closed)
+        else {
+            return Vec::new();
+        };
+        let Some(Pending::Search { id, query, epoch }) = pending else {
+            self.state = State::Established {
+                transport,
+                origin,
+                version,
+                pending,
+            };
+            return Vec::new();
+        };
+        let record = match store.find(&transport.remote_static()) {
+            Some(r) if r.extension_origin == origin => r,
+            _ => return self.fail(ErrorCode::NotPaired),
+        };
+        let err = |code| ServerMessage::Err {
+            id,
+            error: ErrorBody { code },
+        };
+        let reply = if !allowed {
+            err(ErrorCode::NotAuthorized)
+        } else if backend.is_locked() || backend.unlock_epoch() != Some(epoch) {
+            err(ErrorCode::Locked)
+        } else {
+            store.allow_search(&record.extension_public, epoch);
+            search_reply(id, &query, backend)
+        };
+        let frame = match encrypt(&mut transport, &reply) {
+            Err(IpcError::TooLarge) => encrypt(&mut transport, &err(ErrorCode::ResponseTooLarge)),
+            other => other,
+        };
+        let Ok(frame) = frame else {
+            return self.fail(ErrorCode::BadRequest);
+        };
+        self.state = State::Established {
+            transport,
+            origin,
+            version,
+            pending: None,
+        };
+        vec![Output::Send(frame)]
+    }
+}
+
+/// 截短的条目概要（`candidates` 与 `search` 共用）：标题与副标题只用于显示。
+fn bounded(items: Vec<crate::message::Candidate>, max: usize) -> Vec<crate::message::Candidate> {
+    items
+        .into_iter()
+        .take(max)
+        .map(|c| crate::message::Candidate {
+            title: c.title.chars().take(MAX_CANDIDATE_TEXT).collect(),
+            subtitle: c.subtitle.chars().take(MAX_CANDIDATE_TEXT).collect(),
+            ..c
+        })
+        .collect()
+}
+
+fn search_reply(id: u32, query: &str, backend: &dyn VaultBackend) -> ServerMessage {
+    ServerMessage::Ok {
+        id,
+        result: CallResult::Candidates {
+            items: bounded(backend.search(query), MAX_SEARCH_RESULTS),
+        },
+    }
+}
+
+/// `status` 的结果；v3 起多一个 `touch_id`（§5.6）。
+fn status_reply(id: u32, version: u32, backend: &dyn VaultBackend) -> ServerMessage {
+    ServerMessage::Ok {
+        id,
+        result: CallResult::Status {
+            locked: backend.is_locked(),
+            touch_id: (version >= 3).then(|| backend.touch_id()),
+        },
+    }
+}
+
 /// 保存时的条目标题：站点的主机名（含端口），去掉开头的 `www.`。
 fn title_for(site: &str) -> String {
     let host = site.split_once("://").map_or(site, |(_, h)| h);
@@ -1041,7 +1317,12 @@ fn prepare_write(
                 },
             ))
         }
-        Call::Status | Call::Candidates { .. } | Call::Fill { .. } => Err(ErrorCode::BadRequest),
+        Call::Status
+        | Call::Candidates { .. }
+        | Call::Fill { .. }
+        | Call::Search { .. }
+        | Call::Open { .. }
+        | Call::Unlock => Err(ErrorCode::BadRequest),
     }
 }
 
@@ -1105,7 +1386,7 @@ fn gated_fill(
 }
 
 /// 处理一个请求，并执行最小披露规则（§5.2）。
-fn handle(request: &Request, backend: &dyn VaultBackend) -> ServerMessage {
+fn handle(request: &Request, version: u32, backend: &dyn VaultBackend) -> ServerMessage {
     let id = request.id;
     let err = |code| ServerMessage::Err {
         id,
@@ -1115,33 +1396,22 @@ fn handle(request: &Request, backend: &dyn VaultBackend) -> ServerMessage {
         return err(ErrorCode::Locked);
     }
     match &request.call {
-        Call::Status => ServerMessage::Ok {
-            id,
-            result: CallResult::Status {
-                locked: backend.is_locked(),
-            },
-        },
+        Call::Status => status_reply(id, version, backend),
+        // 有界返回：最多 20 个，标题与副标题截短，只用于显示（§5.2）
         Call::Candidates { url } => ServerMessage::Ok {
             id,
             result: CallResult::Candidates {
-                // 有界返回：最多 20 个，标题与副标题截短，只用于显示（§5.2）
-                items: backend
-                    .candidates(url)
-                    .into_iter()
-                    .take(MAX_CANDIDATES)
-                    .map(|c| crate::message::Candidate {
-                        title: c.title.chars().take(MAX_CANDIDATE_TEXT).collect(),
-                        subtitle: c.subtitle.chars().take(MAX_CANDIDATE_TEXT).collect(),
-                        ..c
-                    })
-                    .collect(),
+                items: bounded(backend.candidates(url), MAX_CANDIDATES),
             },
         },
-        // fill 一律经由 gated_fill（按站点授权与频率限制），写操作一律经由 prepare_write；
+        // fill 一律经由 gated_fill（按站点授权与频率限制），写操作一律经由 prepare_write，v3 的三个方法在会话分派中处理；
         // 走到这里说明调用方绕过了它们，拒绝
-        Call::Fill { .. } | Call::Save { .. } | Call::Update { .. } => {
-            err(ErrorCode::NotAuthorized)
-        }
+        Call::Fill { .. }
+        | Call::Save { .. }
+        | Call::Update { .. }
+        | Call::Search { .. }
+        | Call::Open { .. }
+        | Call::Unlock => err(ErrorCode::NotAuthorized),
     }
 }
 

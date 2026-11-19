@@ -1,0 +1,16 @@
+[package]
+name = "keevo-generator"
+description = "Keevo 的密码生成器：随机字符、口令短语、PIN。Keevo.app 与浏览器扩展（WASM）共用。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+keevo-crypto = { path = "../keevo-crypto" }
+zeroize = "1"
+
+[lints]
+workspace = true

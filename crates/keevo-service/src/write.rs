@@ -120,6 +120,47 @@ mod tests {
             .unwrap()
     }
 
+    /// v3 search：标题开头匹配的排在前面，也按用户名与网站主机名匹配；只返回概要。
+    #[test]
+    fn search_ranks_title_prefix_first() {
+        let mut v = vault();
+        let save = |v: &mut Vault, site: &str, title: &str, user: &str| {
+            apply(
+                v,
+                &WriteRequest {
+                    site: site.into(),
+                    ..request(WriteOp::Save {
+                        title: title.into(),
+                        username: user.into(),
+                        password: SecretText::new("pw"),
+                    })
+                },
+            )
+            .unwrap()
+        };
+        save(&mut v, "https://github.com", "github.com", "octocat");
+        save(&mut v, "https://gitlab.com", "GitLab", "me@example.com");
+        save(&mut v, "https://code.example", "My Git server", "dev");
+        save(&mut v, "https://news.example", "news.example", "reader");
+        let backend = CoreBackend::new(&v);
+        let titles = |q: &str| {
+            backend
+                .search(q)
+                .into_iter()
+                .map(|c| c.title)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(titles("git"), ["github.com", "GitLab", "My Git server"]);
+        assert_eq!(titles("READER"), ["news.example"]);
+        assert_eq!(
+            titles("code.example"),
+            ["My Git server"],
+            "按网站主机名匹配"
+        );
+        assert!(titles("nothing").is_empty());
+        assert!(!backend.touch_id(), "新保险库没有启用 Touch ID");
+    }
+
     #[test]
     fn save_then_update_keeps_history() {
         let mut v = vault();

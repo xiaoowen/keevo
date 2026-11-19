@@ -82,6 +82,7 @@ const BENIGN = {
 };
 // 会提交的表单（POST 到 /done），用于保存与更新
 const POST_LOGIN = `<form method="post" action="/done"><p><input id="u" name="username" autocomplete="username" style="width:280px;height:32px"></p><p><input id="p" name="password" type="password" autocomplete="current-password" style="width:280px;height:32px"></p><button id="go" type="submit">登录</button></form>`;
+const SIGNUP = `<form method="post" action="/done"><p><input id="u" name="username" autocomplete="username" style="width:280px;height:32px"></p><p><input id="p" type="password" autocomplete="new-password" style="width:280px;height:32px"></p><p><input id="p2" type="password" autocomplete="new-password" style="width:280px;height:32px"></p><button id="go" type="submit">注册</button></form>`;
 const CHANGE = `<form method="post" action="/done"><input id="u" name="username" autocomplete="username" value="admin" hidden><p><input id="cur" type="password" autocomplete="current-password" style="width:280px;height:32px"></p><p><input id="p" type="password" autocomplete="new-password" style="width:280px;height:32px"></p><p><input id="p2" type="password" autocomplete="new-password" style="width:280px;height:32px"></p><button id="go" type="submit">修改密码</button></form>`;
 const html = (body) => `<!doctype html><meta charset="utf-8"><title>测试</title><body style="margin:40px;font:16px sans-serif">${body}</body>`;
 
@@ -97,6 +98,7 @@ const server = createServer((req, res) => {
     "/fixed": html(FORM + BENIGN.fixed),
     "/post": html(POST_LOGIN),
     "/change": html(CHANGE),
+    "/signup": html(SIGNUP),
     "/done": html("<p>已提交。</p>"),
     "/frame": html(
       `<p>嵌入的登录框：</p><iframe id="fr" src="http://localhost:${port}/login" style="width:600px;height:460px;border:0"></iframe>`,
@@ -445,6 +447,101 @@ async function lookup(username) {
   // 前面的更新测试已把演示条目的密码改为 rotated-pass
   assert.deepEqual(await values(page), ["admin", "rotated-pass"]);
   ok("弹窗填充经内容脚本填入当前标签页的登录表单（得到更新后的密码）");
+}
+
+// 7. 弹窗的补充功能（设计稿"扩展 · 弹窗：搜索、生成密码、新建登录与解锁"）
+const send = (msg) => popup.eval(`chrome.runtime.sendMessage(${JSON.stringify(msg)})`);
+{
+  const page = await open(`${LOCAL}/login`);
+  await waitFor(() => page.eval(`document.readyState === "complete"`), "登录页加载");
+  assert.equal((await send({ type: "state" })).version, 3, "与开发服务协商出协议 v3");
+
+  // 搜索全部条目：输入时不打扰用户；点了"在全部条目中搜索"才请 Keevo 允许（开发服务自动允许），之后直接返回
+  assert.equal((await send({ type: "search", query: "github", ask: false })).error, "not_authorized");
+  assert.equal(serviceLog.includes("已自动允许搜索"), false);
+  const allowed = await send({ type: "search", query: "github", ask: true });
+  assert.deepEqual(allowed.results.map((c) => c.title), ["GitHub（演示）"]);
+  assert.match(serviceLog, /已自动允许搜索「github」/);
+  const again = await send({ type: "search", query: "演示", ask: false });
+  assert.deepEqual(again.results.map((c) => c.title).sort(), ["Example（演示）", "GitHub（演示）", "本地开发（演示）"].sort());
+  ok("搜索全部条目：没有允许时输入不弹确认；允许一次后，这次解锁中直接返回标题与用户名");
+
+  // 在 Keevo 中打开：条目核对存在后转给 Keevo；不存在的条目被拒
+  const gh = allowed.results[0].item_id;
+  assert.equal((await send({ type: "open", itemId: gh })).error, undefined);
+  await waitFor(async () => serviceLog.includes(`请求打开条目 ${gh}`), "Keevo 收到打开请求");
+  assert.equal((await send({ type: "open", itemId: "00".repeat(16) })).error, "not_found");
+  assert.equal((await send({ type: "unlock" })).error, undefined);
+  assert.equal(serviceLog.includes("请求解锁"), false, "已解锁时不打扰 Keevo");
+  ok("在 Keevo 中打开：转给 Keevo 选中条目，不存在的条目被拒；已解锁时请求解锁不打扰 Keevo");
+
+  // 生成密码：与 Keevo.app 同一份实现（WASM），按设置生成
+  const pw = await send({ type: "generate", recipe: { kind: "password", length: 24, digits: true, symbols: false } });
+  assert.equal([...pw.generated.value].length, 24);
+  assert.match(pw.generated.value, /^[A-Za-z0-9]+$/);
+  assert.ok(pw.generated.entropy > 120, `熵 ${pw.generated.entropy}`);
+  const phrase = await send({ type: "generate", recipe: { kind: "passphrase", words: 4, capitalize: false, number: false } });
+  assert.equal(phrase.generated.value.split("-").length, 4);
+  ok("生成密码：随机字符与口令短语都按设置生成，并给出熵");
+}
+
+{
+  // 填入网页：填到注册表单的新密码框（密码与确认），提交后照常询问保存
+  const page = await open(`${LOCAL}/signup`);
+  await waitFor(() => page.eval(`document.readyState === "complete"`), "注册页加载");
+  const { generated } = await send({ type: "generate", recipe: { kind: "password", length: 20, digits: true, symbols: true } });
+  assert.equal((await send({ type: "fill_generated", password: generated.value })).fill, "filled");
+  assert.deepEqual(await page.eval(`[document.getElementById("p").value, document.getElementById("p2").value]`), [generated.value, generated.value]);
+  await submit(page, { u: "signup-user" });
+  const { bar } = await saveBar(page);
+  assert.match(await bar.eval(`document.body.innerText`), /保存这个登录到 Keevo？[\s\S]*signup-user/);
+  ok("生成的密码填入注册表单的新密码框（含确认框）；提交后出现保存栏");
+}
+
+{
+  // 新建登录：保存到 Keevo（v2 save），只保存网站地址，之后作为当前网站的候选
+  const page = await open(`${LOCAL}/post`);
+  await waitFor(() => page.eval(`document.readyState === "complete"`), "登录页加载");
+  const r = await send({ type: "save_login", username: "popup-user", password: "popup-pass" });
+  assert.ok(r.saved, JSON.stringify(r));
+  assert.deepEqual(await lookup("popup-user"), { title: `localhost:${PORT}`, password: "popup-pass" });
+  ok("新建登录：保存到 Keevo，标题为主机名，之后可以直接填充");
+
+  // 弹窗界面：搜索框搜索全部条目，其他网站的条目只能在 Keevo 中打开；底部入口与生成密码页
+  // 先在旧文档上做标记：reload 是异步的，否则可能在旧文档里看到搜索框
+  await popup.eval(`window.__beforeReload = true; location.reload()`);
+  await waitFor(() => popup.eval(`!window.__beforeReload && !!document.getElementById("search")`), "弹窗列表");
+  await popup.eval(`(() => { const s = document.getElementById("search"); s.value = "演示"; s.dispatchEvent(new Event("input")); })()`);
+  await waitFor(
+    () => popup.eval(`[...document.querySelectorAll(".others .title")].map((e) => e.textContent).includes("GitHub（演示）")`),
+    "其他网站的搜索结果",
+  );
+  const ui = await popup.eval(`({
+    others: [...document.querySelectorAll(".others button.open")].map((b) => b.getAttribute("aria-label")),
+    links: [...document.querySelectorAll(".links button")].map((b) => b.textContent),
+    placeholder: document.getElementById("search").placeholder,
+  })`);
+  assert.ok(ui.others.includes("在 Keevo 中打开 GitHub（演示）"), JSON.stringify(ui));
+  assert.deepEqual(ui.links, ["生成密码", "新建登录", "在 Keevo 中打开"]);
+  assert.equal(ui.placeholder, "搜索全部条目");
+  // 截图需要弹窗页在前台（之后的操作不再依赖"当前标签页"）
+  if (process.env.KEEVO_SHOTS) {
+    const { targetInfos } = await browser.send("Target.getTargets");
+    const t = targetInfos.find((x) => x.url.endsWith("/popup.html"));
+    await browser.send("Target.activateTarget", { targetId: t.targetId });
+  }
+  await shot(popup, "popup-search");
+  await popup.eval(`[...document.querySelectorAll(".links button")].find((b) => b.textContent === "生成密码").click()`);
+  await waitFor(() => popup.eval(`!!document.querySelector(".gen-value output .classified")`), "生成密码页");
+  const gen = await popup.eval(`({ title: document.querySelector("header h1").textContent, meter: document.querySelector(".meter").getAttribute("aria-label") })`);
+  assert.equal(gen.title, "生成密码");
+  assert.match(gen.meter, /^强度：.+，约 \d+ 比特熵$/);
+  await shot(popup, "popup-generator");
+  await popup.eval(`document.querySelector("header button").click()`);
+  await popup.eval(`[...document.querySelectorAll(".links button")].find((b) => b.textContent === "新建登录").click()`);
+  await waitFor(() => popup.eval(`document.getElementById("nl-password")?.value.length === 20`), "新建登录页（已生成密码）");
+  await shot(popup, "popup-new-login");
+  ok("弹窗界面：搜索结果分为当前网站与其他网站，底部入口、生成密码页与新建登录页按设计稿显示");
 }
 
 console.log(`全部通过（${checks} 项）`);

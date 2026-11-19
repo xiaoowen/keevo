@@ -15,7 +15,8 @@ export interface Secret {
   totp?: string;
 }
 
-export type CallResult = { locked: boolean } | { items: Candidate[] } | Secret;
+/** `status` 的结果；v3 中也是 `open` 与 `unlock` 的结果，多一个 `touch_id`（spec/ipc.md §5.6）。 */
+export type CallResult = { locked: boolean; touch_id?: boolean } | { items: Candidate[] } | Secret | { item_id: string };
 
 export type ServerMessage =
   | { id: number; result: CallResult }
@@ -34,7 +35,8 @@ export type ViewState =
   | { status: "connecting" }
   | { status: "pairing" }
   | { status: "awaiting_confirm"; words: SasWord[] }
-  | { status: "connected"; locked: boolean }
+  /** `touchId`：v3 中现在能否用 Touch ID 解锁（锁定时决定按钮文字）。 */
+  | { status: "connected"; locked: boolean; touchId?: boolean | undefined }
   | { status: "error"; error: string };
 
 export type PopupRequest =
@@ -44,7 +46,24 @@ export type PopupRequest =
   | { type: "candidates" }
   | { type: "fill"; itemId: string }
   | { type: "secret"; itemId: string }
-  | { type: "copied"; hash: string };
+  | { type: "copied"; hash: string }
+  /** v3：搜索全部条目。`ask` 为 false 时不会请用户在 Keevo 中允许（用户输入时）。 */
+  | { type: "search"; query: string; ask: boolean }
+  /** v3：显示 Keevo 的主窗口，给出条目时选中它。 */
+  | { type: "open"; itemId?: string }
+  /** v3：请 Keevo 解锁（可以用 Touch ID 时直接请求验证）。 */
+  | { type: "unlock" }
+  /** 生成密码（在扩展内的 WASM 中进行）。 */
+  | { type: "generate"; recipe: Recipe }
+  /** 把生成的密码填入当前网页的新密码框。 */
+  | { type: "fill_generated"; password: string }
+  /** v2：把弹窗中填写的登录保存到 Keevo（当前网站）。 */
+  | { type: "save_login"; username: string; password: string };
+
+/** 生成方式，与 Keevo.app 的生成器一致（crates/keevo-generator）。 */
+export type Recipe =
+  | { kind: "password"; length: number; digits: boolean; symbols: boolean }
+  | { kind: "passphrase"; words: number; capitalize: boolean; number: boolean };
 
 export interface PopupResponse {
   state: ViewState;
@@ -59,6 +78,16 @@ export interface PopupResponse {
   fill?: string;
   secret?: Secret;
   error?: string;
+  /** 会话协商出的协议版本：v2 起可以保存，v3 起可以搜索全部条目、打开 Keevo、请求解锁。 */
+  version?: number | undefined;
+  /** `search` 的结果。 */
+  results?: Candidate[];
+  /** `generate` 的结果。 */
+  generated?: { value: string; entropy: number };
+  /** `save_login` 成功时的条目 ID。 */
+  saved?: string;
+  /** 弹窗关闭期间在 Keevo 中完成的搜索允许：重新打开时恢复这个搜索词。 */
+  resume?: { query: string };
 }
 
 /** 页内菜单的初始内容。 */

@@ -130,6 +130,7 @@ struct RootView: View {
             case .pairing(let request): PairingConfirmSheet(request: request).interactiveDismissDisabled()
             case .fill(let request): FillAuthorizationSheet(request: request).interactiveDismissDisabled()
             case .update(let request): UpdateConfirmationSheet(request: request).interactiveDismissDisabled()
+            case .search(let request): SearchAuthorizationSheet(request: request).interactiveDismissDisabled()
             case .cli(let request): CliAuthorizationSheet(request: request).interactiveDismissDisabled()
             case .ssh(let request): SshSignSheet(request: request).interactiveDismissDisabled()
             }

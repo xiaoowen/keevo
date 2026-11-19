@@ -9,9 +9,11 @@
 // - 复制的秘密在 90 秒后清除，且只在剪贴板仍是 Keevo 写入的值时才清除（docs/ux.md §5）；
 // - 页内菜单（menu.html）只拿到条目概要；
 // - 协议 v2（spec/ipc.md §5.5）：用户提交登录表单后，在保存栏（bar.html）中询问保存或更新。
-//   提交的密码只留在这里的内存中（不写入 chrome.storage），3 分钟后丢弃；Keevo 不支持 v2 时退回 v1。
+//   提交的密码只留在这里的内存中（不写入 chrome.storage），3 分钟后丢弃；
+// - 协议 v3（spec/ipc.md §5.6）：弹窗搜索全部条目、在 Keevo 中打开、请求解锁。Keevo 中允许搜索或解锁后会回到浏览器，
+//   这里随之重新打开弹窗；Keevo 不支持某个版本时逐级退回。
 
-import init, { KeevoClient } from "./wasm/keevo_wasm.js";
+import init, { KeevoClient, generatePassword } from "./wasm/keevo_wasm.js";
 import type {
   BarRequest,
   BarResponse,
@@ -23,6 +25,7 @@ import type {
   OffscreenRequest,
   PopupRequest,
   PopupResponse,
+  Recipe,
   SasWord,
   Secret,
   ServerMessage,
@@ -51,8 +54,10 @@ interface Stored {
 let state: ViewState = { status: "idle" };
 let port: chrome.runtime.Port | null = null;
 let client: KeevoClient | null = null;
-/** 协商用的协议版本：默认最新；Keevo 回答 unsupported_version 时退回 1（Service Worker 重启后重新尝试）。 */
+/** 协商用的协议版本：默认最新；Keevo 回答 unsupported_version 时逐级退回（Service Worker 重启后重新尝试）。 */
 let protocolVersion: number | undefined;
+/** 弹窗关闭后，在 Keevo 中完成解锁或搜索允许时重新打开弹窗的时限。 */
+const REOPEN_WINDOW_MS = 2 * 60_000;
 const pending = new Map<number, (m: ServerMessage | null) => void>();
 const ready = init({ module_or_path: chrome.runtime.getURL("wasm/keevo_wasm_bg.wasm") });
 
@@ -144,7 +149,13 @@ async function onEvent(e: ClientEventJson): Promise<void> {
     case "message": {
       const m = e.message;
       if ("event" in m) {
-        if (m.event === "locked" || m.event === "unlocked") state = { status: "connected", locked: m.event === "locked" };
+        if (m.event === "locked" || m.event === "unlocked") {
+          const touchId = state.status === "connected" ? state.touchId : undefined;
+          state = { status: "connected", locked: m.event === "locked", touchId };
+          // 锁定后能否用 Touch ID 可能变化（例如需要定期输入主密码）
+          void refreshStatus();
+          if (m.event === "unlocked") void reopenPopup("unlockRequestedAt");
+        }
       } else {
         pending.get(m.id)?.(m);
         pending.delete(m.id);
@@ -152,10 +163,10 @@ async function onEvent(e: ClientEventJson): Promise<void> {
       break;
     }
     case "error": {
-      // 旧版 Keevo 不支持 v2：退回 v1 重新连接（spec/ipc.md §5.5）。v1 中没有保存与更新
+      // 旧版 Keevo 不支持这个版本：退回低一个的版本重新连接（spec/ipc.md §5.5）。v1 中没有保存与更新，v2 中没有搜索、打开与解锁
       const mode = state.status === "pairing" ? "pair" : "session";
-      if (e.code === "unsupported_version" && protocolVersion === undefined && client && client.version() > 1) {
-        protocolVersion = 1;
+      if (e.code === "unsupported_version" && client && client.version() > 1) {
+        protocolVersion = client.version() - 1;
         teardown({ status: "connecting" });
         // 配对需要用户重新发起（扩展不得自动重试配对，§4.2 第 8 步）
         if (mode === "session") await connect("session");
@@ -184,7 +195,53 @@ function request(call: object, timeoutMs = REQUEST_TIMEOUT_MS): Promise<ServerMe
 
 async function refreshStatus(): Promise<void> {
   const m = await request({ method: "status" });
-  if (m && "result" in m && "locked" in m.result) state = { status: "connected", locked: m.result.locked };
+  if (m && "result" in m && "locked" in m.result) applyStatus(m.result);
+}
+
+function applyStatus(r: { locked: boolean; touch_id?: boolean }): void {
+  state = { status: "connected", locked: r.locked, touchId: r.touch_id };
+}
+
+/**
+ * 请 Keevo 解锁之后，等它解锁：Vault Service 目前不推送 `locked` / `unlocked` 事件，这里每秒查询一次状态，
+ * 最多 2 分钟。解锁后重新打开弹窗。
+ */
+let unlockWatch: ReturnType<typeof setInterval> | undefined;
+function watchUnlock(): void {
+  clearInterval(unlockWatch);
+  const started = Date.now();
+  unlockWatch = setInterval(() => {
+    if (Date.now() - started > REOPEN_WINDOW_MS || state.status !== "connected") {
+      clearInterval(unlockWatch);
+      return;
+    }
+    void refreshStatus().then(() => {
+      if (state.status === "connected" && !state.locked) {
+        clearInterval(unlockWatch);
+        void reopenPopup("unlockRequestedAt");
+      }
+    });
+  }, 1000);
+}
+
+/**
+ * 用户在弹窗里点了"解锁"或"在全部条目中搜索"，Keevo 来到前台、弹窗随之关闭；Keevo 中完成后回到浏览器，
+ * 这里重新打开弹窗（spec/ipc.md §5.6）。只在 2 分钟内、且确实由弹窗发起时打开，失败时（例如浏览器还没回到前台）稍后再试一次。
+ */
+async function reopenPopup(key: "unlockRequestedAt" | "searchAllowedAt"): Promise<boolean> {
+  const at = (await chrome.storage.session.get(key))[key] as number | undefined;
+  if (at === undefined || Date.now() - at > REOPEN_WINDOW_MS) return false;
+  await chrome.storage.session.remove(key);
+  for (const delay of [300, 1200]) {
+    await new Promise((r) => setTimeout(r, delay));
+    try {
+      await chrome.action.openPopup();
+      return true;
+    } catch {
+      // 浏览器窗口还没有成为前台，或弹窗已经打开
+    }
+  }
+  return false;
 }
 
 /** 当前活动标签页。网址由浏览器提供（activeTab 在用户点开弹窗时授予），不采信页面自述。 */
@@ -260,18 +317,99 @@ async function displayName(raw: string): Promise<string> {
   return KeevoClient.displayName(raw);
 }
 
+/** 把生成的密码交给当前标签页顶层帧的内容脚本，填入新密码框；最小权限模式下先注入。 */
+async function deliverGenerated(tabId: number, origin: string, password: string): Promise<string> {
+  const payload = { type: "fill_new_password", origin, password };
+  try {
+    return (await chrome.tabs.sendMessage(tabId, payload, { frameId: 0 })) as string;
+  } catch {
+    await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ["content.js"] });
+    return (await chrome.tabs.sendMessage(tabId, payload, { frameId: 0 })) as string;
+  }
+}
+
+function errorOf(m: ServerMessage | null): string {
+  return m && "error" in m ? m.error.code : "failed";
+}
+
 async function handle(req: PopupRequest): Promise<PopupResponse> {
   switch (req.type) {
     case "state": {
       await ensureConnected();
+      // 锁定时每次都向 Keevo 核对：用户可能已经在 Keevo 中解锁（服务不推送解锁事件）
+      if (state.status === "connected" && state.locked) await refreshStatus();
       const tab = await activeTab();
       const blocked = tab ? (await chrome.storage.session.get(`blocked:${tab.id}`))[`blocked:${tab.id}`] === true : false;
+      const { searchResume } = (await chrome.storage.session.get("searchResume")) as { searchResume?: { query: string; at: number } };
+      const resume = searchResume && Date.now() - searchResume.at < REOPEN_WINDOW_MS ? { query: searchResume.query } : undefined;
+      if (searchResume) await chrome.storage.session.remove("searchResume");
       return {
         state,
         name: await displayName((await stored()).name ?? DEFAULT_NAME),
         inline: await chrome.permissions.contains({ origins: SITE_ORIGINS }),
         blocked,
+        version: client?.version(),
+        ...(resume ? { resume } : {}),
       };
+    }
+    case "search": {
+      const query = req.query.trim().slice(0, 128);
+      if (!query || !client || client.version() < 3) return { state, error: "unsupported" };
+      // 第一次需要用户在 Keevo 中允许（最长 60 秒）。Keevo 来到前台时弹窗会关闭：记下搜索词，允许后重新打开弹窗时恢复
+      if (req.ask) await chrome.storage.session.set({ searchAllowedAt: Date.now(), searchResume: { query, at: Date.now() } });
+      const m = await request({ method: "search", params: { query, ask: req.ask } }, req.ask ? FILL_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
+      if (m && "result" in m && "items" in m.result) {
+        // 弹窗已关闭时重新打开，由它取走恢复记录；弹窗还开着时结果直接交给它（打开会失败），恢复记录随之作废
+        if (req.ask) {
+          void reopenPopup("searchAllowedAt").then((opened) => {
+            if (!opened) void chrome.storage.session.remove("searchResume");
+          });
+        }
+        return { state, results: m.result.items };
+      }
+      if (req.ask) await chrome.storage.session.remove(["searchAllowedAt", "searchResume"]);
+      if (errorOf(m) === "locked") state = { status: "connected", locked: true };
+      return { state, error: errorOf(m) };
+    }
+    case "open": {
+      if (!client || client.version() < 3) return { state, error: "unsupported" };
+      const m = await request({ method: "open", params: req.itemId ? { item_id: req.itemId } : {} });
+      if (m && "result" in m && "locked" in m.result) applyStatus(m.result);
+      return m && "result" in m ? { state } : { state, error: errorOf(m) };
+    }
+    case "unlock": {
+      if (!client || client.version() < 3) return { state, error: "unsupported" };
+      await chrome.storage.session.set({ unlockRequestedAt: Date.now() });
+      const m = await request({ method: "unlock" });
+      if (m && "result" in m && "locked" in m.result) applyStatus(m.result);
+      if (state.status === "connected" && state.locked) watchUnlock();
+      return m && "result" in m ? { state } : { state, error: errorOf(m) };
+    }
+    case "generate": {
+      await ready;
+      try {
+        const g = JSON.parse(generatePassword(JSON.stringify(req.recipe satisfies Recipe))) as { value: string; entropy_bits: number };
+        return { state, generated: { value: g.value, entropy: g.entropy_bits } };
+      } catch {
+        return { state, error: "failed" };
+      }
+    }
+    case "fill_generated": {
+      const tab = await activeTab();
+      if (!tab || !/^https?:/.test(tab.url)) return { state, fill: "no_tab" };
+      return { state, fill: await deliverGenerated(tab.id, new URL(tab.url).origin, req.password) };
+    }
+    case "save_login": {
+      const tab = await activeTab();
+      if (!tab || !/^https?:/.test(tab.url)) return { state, error: "no_tab" };
+      if (!client || client.version() < 2) return { state, error: "unsupported" };
+      const m = await request({
+        method: "save",
+        params: { url: tab.url, username: req.username.slice(0, 1024), password: req.password.slice(0, 4096) },
+      });
+      if (m && "result" in m && "item_id" in m.result) return { state, saved: m.result.item_id };
+      if (errorOf(m) === "locked") state = { status: "connected", locked: true };
+      return { state, error: errorOf(m) };
     }
     case "display_name":
       return { state, name: await displayName(req.name) };
@@ -630,7 +768,21 @@ chrome.commands.onCommand.addListener((command, tab) => {
 
 // ---- 消息分流：按发送方区分弹窗、页内菜单与内容脚本，各自只接受自己的消息类型
 
-const POPUP_TYPES = new Set(["state", "display_name", "pair", "candidates", "fill", "secret", "copied"]);
+const POPUP_TYPES = new Set([
+  "state",
+  "display_name",
+  "pair",
+  "candidates",
+  "fill",
+  "secret",
+  "copied",
+  "search",
+  "open",
+  "unlock",
+  "generate",
+  "fill_generated",
+  "save_login",
+]);
 const MENU_TYPES = new Set(["menu_init", "menu_fill", "menu_close", "menu_size", "menu_blocked"]);
 const CONTENT_TYPES = new Set(["inline_open", "inline_close", "submitted", "username_step", "offer_query"]);
 const BAR_TYPES = new Set(["bar_init", "bar_save", "bar_dismiss", "bar_never", "bar_close"]);

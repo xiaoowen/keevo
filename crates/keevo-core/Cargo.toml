@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 keevo-crypto = { path = "../keevo-crypto" }
 keevo-format = { path = "../keevo-format" }
+keevo-generator = { path = "../keevo-generator" }
 keevo-store = { path = "../keevo-store" }
 unicode-normalization = "0.1"
 url = "2"

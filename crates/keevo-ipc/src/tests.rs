@@ -15,6 +15,9 @@ const ORIGIN: &str = "chrome-extension://keevoextensionidkeevoextensioni/";
 
 struct Backend {
     locked: Cell<bool>,
+    /// 解锁代次：每次解锁加一（v3 `search` 的允许只在同一次解锁中有效）。
+    epoch: Cell<u64>,
+    touch_id: Cell<bool>,
 }
 
 impl Backend {
@@ -53,6 +56,45 @@ impl VaultBackend for Backend {
             totp: None,
         })
     }
+    fn unlock_epoch(&self) -> Option<u64> {
+        (!self.locked.get()).then(|| self.epoch.get())
+    }
+    fn describe(&self, item_id: &str) -> Option<(String, String)> {
+        Self::items()
+            .into_iter()
+            .find(|c| c.item_id == item_id)
+            .map(|c| (c.title, c.subtitle))
+    }
+    fn search(&self, query: &str) -> Vec<Candidate> {
+        let q = query.to_lowercase();
+        Self::items()
+            .into_iter()
+            .filter(|c| c.title.to_lowercase().contains(&q) || c.subtitle.contains(&q))
+            .collect()
+    }
+    fn touch_id(&self) -> bool {
+        self.touch_id.get()
+    }
+}
+
+impl Backend {
+    fn items() -> Vec<Candidate> {
+        let c = |id: &str, title: &str, sub: &str| Candidate {
+            item_id: id.into(),
+            title: title.into(),
+            subtitle: sub.into(),
+        };
+        vec![
+            c("gh", "GitHub", "octocat"),
+            c("gl", "GitLab", "me@example.com"),
+            c("bank", "招商银行", "6225"),
+        ]
+    }
+
+    /// 锁定后再解锁：解锁代次加一。
+    fn relock(&self) {
+        self.epoch.set(self.epoch.get().wrapping_add(1));
+    }
 }
 
 /// Vault Service 一侧的世界：服务密钥、配对存储、后端。
@@ -69,6 +111,8 @@ impl Service {
             store: std::cell::RefCell::default(),
             backend: Backend {
                 locked: Cell::new(false),
+                epoch: Cell::new(1),
+                touch_id: Cell::new(false),
             },
         }
     }
@@ -106,6 +150,9 @@ struct Delivered {
     write: Option<crate::service::WriteRequest>,
     paused: bool,
     limited: bool,
+    search: Option<crate::service::SearchRequest>,
+    open: Option<Option<String>>,
+    unlock: bool,
 }
 
 fn deliver(svc: &Service, conn: &mut ServiceConnection, frame: &[u8]) -> Delivered {
@@ -123,6 +170,9 @@ fn collect(outputs: Vec<Output>) -> Delivered {
             Output::Write(req) => d.write = Some(req),
             Output::QueriesLimited { .. } => d.limited = true,
             Output::FillPaused { .. } => d.paused = true,
+            Output::AuthorizeSearch(req) => d.search = Some(req),
+            Output::Open { item_id, .. } => d.open = Some(item_id),
+            Output::UnlockRequested { .. } => d.unlock = true,
             Output::Close => d.closed = true,
         }
     }
@@ -204,7 +254,10 @@ fn pairing_then_requests_with_minimal_disclosure() {
         status,
         ServerMessage::Ok {
             id: 1,
-            result: CallResult::Status { locked: false }
+            result: CallResult::Status {
+                locked: false,
+                touch_id: Some(false)
+            }
         }
     );
 
@@ -278,7 +331,10 @@ fn pairing_then_requests_with_minimal_disclosure() {
     assert!(matches!(
         status,
         ServerMessage::Ok {
-            result: CallResult::Status { locked: true },
+            result: CallResult::Status {
+                locked: true,
+                touch_id: Some(false)
+            },
             ..
         }
     ));
@@ -1054,7 +1110,7 @@ fn fill_requires_site_authorization() {
             req.site.as_str(),
             req.pairing_name.as_str()
         ),
-        ("", "https://github.com", "Chrome · 个人")
+        ("GitHub", "https://github.com", "Chrome · 个人")
     );
     // 挂起期间的第二个 fill 直接拒绝；其他请求照常
     decisions.push_back(FillGate::NeedsAuthorization);
@@ -1191,7 +1247,7 @@ fn v2_negotiation_and_downgrade_protection() {
 
     // 不支持的版本
     let mut conn = ServiceConnection::new(svc.key.clone());
-    let hello = br#"{"v":3,"client":"native-host","extension_origin":"chrome-extension://abcdefghijklmnopabcdefghijklmnop/","browser":"x"}"#;
+    let hello = br#"{"v":4,"client":"native-host","extension_origin":"chrome-extension://abcdefghijklmnopabcdefghijklmnop/","browser":"x"}"#;
     let d = collect(conn.on_frame(hello, &mut *svc.store.borrow_mut(), &svc.backend));
     assert!(d.closed);
     assert_eq!(
@@ -1199,9 +1255,9 @@ fn v2_negotiation_and_downgrade_protection() {
         Some(ErrorCode::UnsupportedVersion)
     );
 
-    // 降级：扩展按 v2，服务看到 v1
-    let mut v2 = ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "v2");
-    assert_eq!(v2.version(), 2);
+    // 降级：扩展按最新版本，服务看到 v1
+    let mut v2 = ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "v3");
+    assert_eq!(v2.version(), 3);
     let mut conn = svc.connect_v(ORIGIN, 1);
     let d = deliver(&svc, &mut conn, &v2.start_pairing().unwrap());
     assert!(
@@ -1210,7 +1266,7 @@ fn v2_negotiation_and_downgrade_protection() {
     );
     assert!(
         ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "x")
-            .with_version(3)
+            .with_version(4)
             .is_err()
     );
 }
@@ -1477,4 +1533,188 @@ fn candidate_queries_can_be_limited() {
         "非 http(s) 网址不计数"
     );
     assert_eq!(seen.len(), 3);
+}
+
+/// v3 search（§5.6）：没有允许时，`ask: false` 直接拒绝、不打扰用户；`ask: true` 请用户在 Keevo.app 中允许。
+/// 允许只在这次解锁中有效；等待期间同一连接上的其他搜索被拒；参数越界按 bad_request，连接保持可用。
+#[test]
+fn v3_search_requires_permission_per_unlock() {
+    let mut svc = Service::new();
+    let (mut client, _, mut conn) = pair(&mut svc, true);
+    let search = |q: &str, ask: bool| Call::Search {
+        query: q.into(),
+        ask,
+    };
+    let titles = |m: &ServerMessage| match m {
+        ServerMessage::Ok {
+            result: CallResult::Candidates { items },
+            ..
+        } => items.iter().map(|c| c.title.clone()).collect::<Vec<_>>(),
+        other => panic!("{other:?}"),
+    };
+
+    // 输入时搜索：没有允许，不弹出确认
+    let (_, frame) = client.request(search("git", false)).unwrap();
+    let d = deliver(&svc, &mut conn, &frame);
+    assert!(d.search.is_none());
+    assert_eq!(
+        error_code(&reply_of(&mut client, &d)),
+        Some(ErrorCode::NotAuthorized)
+    );
+
+    // 用户点了"在全部条目中搜索"：请 Keevo.app 确认，搜索词去掉首尾空白后显示给用户核对
+    let (_, frame) = client.request(search("  git ", true)).unwrap();
+    let d = deliver(&svc, &mut conn, &frame);
+    let req = d.search.expect("请用户允许");
+    assert!(d.to_client.is_empty());
+    assert_eq!(req.query, "git");
+    assert_eq!(req.pairing_name, "Chrome · 个人");
+    // 等待期间，同一连接上的其他搜索直接拒绝
+    let (_, frame) = client.request(search("bank", true)).unwrap();
+    let d = deliver(&svc, &mut conn, &frame);
+    assert!(d.search.is_none());
+    assert_eq!(
+        error_code(&reply_of(&mut client, &d)),
+        Some(ErrorCode::NotAuthorized)
+    );
+    let d = collect(conn.resolve_search(true, &mut *svc.store.borrow_mut(), &svc.backend));
+    assert_eq!(titles(&reply_of(&mut client, &d)), ["GitHub", "GitLab"]);
+
+    // 允许之后：这次解锁中直接返回，不再询问
+    assert_eq!(
+        titles(&call(&svc, &mut conn, &mut client, search("银行", false))),
+        ["招商银行"]
+    );
+
+    // 锁定时返回 locked；再次解锁后需要重新允许
+    svc.backend.locked.set(true);
+    assert_eq!(
+        error_code(&call(&svc, &mut conn, &mut client, search("git", false))),
+        Some(ErrorCode::Locked)
+    );
+    svc.backend.locked.set(false);
+    svc.backend.relock();
+    assert_eq!(
+        error_code(&call(&svc, &mut conn, &mut client, search("git", false))),
+        Some(ErrorCode::NotAuthorized)
+    );
+
+    // 拒绝
+    let (_, frame) = client.request(search("git", true)).unwrap();
+    assert!(deliver(&svc, &mut conn, &frame).search.is_some());
+    let d = collect(conn.resolve_search(false, &mut *svc.store.borrow_mut(), &svc.backend));
+    assert_eq!(
+        error_code(&reply_of(&mut client, &d)),
+        Some(ErrorCode::NotAuthorized)
+    );
+
+    // 等待期间换了一次解锁：按 locked 处理，也不记下允许
+    let (_, frame) = client.request(search("git", true)).unwrap();
+    assert!(deliver(&svc, &mut conn, &frame).search.is_some());
+    svc.backend.relock();
+    let d = collect(conn.resolve_search(true, &mut *svc.store.borrow_mut(), &svc.backend));
+    assert_eq!(
+        error_code(&reply_of(&mut client, &d)),
+        Some(ErrorCode::Locked)
+    );
+    assert_eq!(
+        error_code(&call(&svc, &mut conn, &mut client, search("git", false))),
+        Some(ErrorCode::NotAuthorized)
+    );
+
+    // 参数越界：bad_request，连接保持可用
+    for q in ["   ", &"字".repeat(129)] {
+        assert_eq!(
+            error_code(&call(&svc, &mut conn, &mut client, search(q, true))),
+            Some(ErrorCode::BadRequest)
+        );
+    }
+    assert!(conn.is_established());
+}
+
+/// v3 open 与 unlock（§5.6）：只请 Keevo.app 来到前台，返回状态（含 touch_id），不泄露任何条目内容。
+/// 锁定时也可用；open 的条目在解锁时核对存在，锁定时不转给 Keevo.app。
+#[test]
+fn v3_open_and_unlock() {
+    let mut svc = Service::new();
+    let (mut client, service_public, mut conn) = pair(&mut svc, true);
+    svc.backend.touch_id.set(true);
+    let status = |locked: bool| ServerMessage::Ok {
+        id: 0,
+        result: CallResult::Status {
+            locked,
+            touch_id: Some(true),
+        },
+    };
+    let without_id = |m: ServerMessage| match m {
+        ServerMessage::Ok { result, .. } => ServerMessage::Ok { id: 0, result },
+        other => other,
+    };
+
+    let open = |id: Option<&str>| Call::Open {
+        item_id: id.map(Into::into),
+    };
+    let (_, frame) = client.request(open(Some("gh"))).unwrap();
+    let d = deliver(&svc, &mut conn, &frame);
+    assert_eq!(d.open, Some(Some("gh".into())));
+    assert_eq!(without_id(reply_of(&mut client, &d)), status(false));
+
+    let (_, frame) = client.request(open(Some("missing"))).unwrap();
+    let d = deliver(&svc, &mut conn, &frame);
+    assert!(d.open.is_none());
+    assert_eq!(
+        error_code(&reply_of(&mut client, &d)),
+        Some(ErrorCode::NotFound)
+    );
+
+    // 已解锁时 unlock 什么也不做
+    let (_, frame) = client.request(Call::Unlock).unwrap();
+    let d = deliver(&svc, &mut conn, &frame);
+    assert!(!d.unlock);
+    assert_eq!(without_id(reply_of(&mut client, &d)), status(false));
+
+    svc.backend.locked.set(true);
+    let (_, frame) = client.request(Call::Unlock).unwrap();
+    let d = deliver(&svc, &mut conn, &frame);
+    assert!(d.unlock);
+    assert_eq!(without_id(reply_of(&mut client, &d)), status(true));
+    // 锁定时无法核对条目：只显示锁屏
+    let (_, frame) = client.request(open(Some("gh"))).unwrap();
+    let d = deliver(&svc, &mut conn, &frame);
+    assert_eq!(d.open, Some(None));
+    assert_eq!(without_id(reply_of(&mut client, &d)), status(true));
+
+    // v2 会话：status 没有 touch_id，客户端不发送 v3 的方法
+    svc.backend.locked.set(false);
+    let key = StaticKeypair::from_private(client.export_private_key());
+    let mut v2 = ExtensionClient::new(key, ORIGIN, "x")
+        .with_version(2)
+        .unwrap();
+    let mut conn = svc.connect_v(ORIGIN, 2);
+    let d = deliver(
+        &svc,
+        &mut conn,
+        &v2.start_session(&service_public.unwrap()).unwrap(),
+    );
+    v2.on_frame(&d.to_client[0]).unwrap();
+    assert_eq!(
+        without_id(call(&svc, &mut conn, &mut v2, Call::Status)),
+        ServerMessage::Ok {
+            id: 0,
+            result: CallResult::Status {
+                locked: false,
+                touch_id: None
+            }
+        }
+    );
+    for c in [
+        Call::Unlock,
+        open(None),
+        Call::Search {
+            query: "git".into(),
+            ask: false,
+        },
+    ] {
+        assert!(v2.request(c).is_err());
+    }
 }

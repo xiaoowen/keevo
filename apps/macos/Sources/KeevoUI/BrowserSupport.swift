@@ -34,11 +34,20 @@ struct UpdateConfirmationRequest: Identifiable {
     let answer: (Bool) -> Void
 }
 
-/// 当前显示的确认界面。浏览器的配对、填充授权、密码更新，以及命令行工具与 SSH 的授权共用一个 sheet，逐个显示。
+/// 一次等待允许的搜索：这次解锁中第一次搜索全部条目（spec/ipc.md §5.6）。
+struct SearchAuthorizationRequest: Identifiable {
+    let id = UUID()
+    let request: BrowserSearchRequest
+    let deadline: Date
+    let answer: (Bool) -> Void
+}
+
+/// 当前显示的确认界面。浏览器的配对、填充授权、密码更新、搜索，以及命令行工具与 SSH 的授权共用一个 sheet，逐个显示。
 enum BrowserPromptItem: Identifiable {
     case pairing(PairingRequest)
     case fill(FillAuthorizationRequest)
     case update(UpdateConfirmationRequest)
+    case search(SearchAuthorizationRequest)
     case cli(CliAuthorizationRequest)
     case ssh(SshAuthorizationRequest)
 
@@ -47,10 +56,24 @@ enum BrowserPromptItem: Identifiable {
         case .pairing(let r): r.id
         case .fill(let r): r.id
         case .update(let r): r.id
+        case .search(let r): r.id
         case .cli(let r): r.id
         case .ssh(let r): r.id
         }
     }
+}
+
+/// 回到发起请求的浏览器（扩展弹窗随之重新打开，spec/ipc.md §5.6）。只激活与配对记录中相同的浏览器。
+@MainActor
+func returnToBrowser(_ bundleID: String) {
+    NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.activate()
+}
+
+/// 把主窗口带到前台。
+@MainActor
+func showMainWindow() {
+    NSApp.activate()
+    NSApp.windows.first { $0.isVisible || $0.isMiniaturized }?.makeKeyAndOrderFront(nil)
 }
 
 /// 显示一个确认界面并等待回答（在服务的工作线程中调用）。同一时间只显示一个：后到的请求排队，到截止时间仍未
@@ -156,6 +179,35 @@ final class BrowserPromptBridge: BrowserPrompt, @unchecked Sendable {
         DispatchQueue.main.async { [weak self] in
             self?.model?.browserNotice = "「\(pairingName)」（\(browserName(browser))）保存了新的登录「\(title)」。"
             self?.model?.reloadAfterBrowserWrite()
+        }
+    }
+
+    func authorizeSearch(request: BrowserSearchRequest, timeoutMs: UInt64) -> Bool {
+        let accepted = ask(timeoutMs: timeoutMs) { deadline, answer in
+            .search(SearchAuthorizationRequest(request: request, deadline: deadline, answer: answer))
+        }
+        if accepted {
+            // 用户是在浏览器里点的搜索：允许后回到浏览器，扩展会重新打开弹窗显示结果
+            DispatchQueue.main.async { returnToBrowser(request.browser) }
+        }
+        return accepted
+    }
+
+    func openRequested(pairingName: String, browser: String, itemId: String?) {
+        DispatchQueue.main.async { [weak self] in
+            guard let model = self?.model else { return }
+            showMainWindow()
+            if let itemId, model.phase == .unlocked { model.mainRequest = .showItem(itemId) }
+        }
+    }
+
+    func browserUnlockRequested(pairingName: String, browser: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let model = self?.model, model.phase == .locked else { return }
+            model.unlockWaiter = .browser(name: pairingName, bundleID: browser, since: Date())
+            // 用户刚在扩展弹窗里点了"解锁"：来到前台；可以用 Touch ID 时直接请求验证
+            showMainWindow()
+            if model.touchIDUsable { Task { await model.unlockWithTouchID() } }
         }
     }
 
@@ -289,6 +341,56 @@ struct FillAuthorizationSheet: View {
                         PromptItemRow(title: r.title, username: r.username, url: r.site)
                     }
                     Text("这是这个扩展第一次在这个网站上使用这个条目。允许后不再询问，可在「设置 → 浏览器」中撤销。如果你没有在浏览器中点击填充，或者网站不是你正在访问的那个，请选择「拒绝」。")
+                        .font(KV.Typography.footnote)
+                        .foregroundStyle(KV.Colors.fgSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } footer: {
+                Button("拒绝") { answer(false) }
+                    .buttonStyle(.kvSecondary)
+                    .keyboardShortcut(.cancelAction)
+                Button("允许") { answer(true) }
+                    .buttonStyle(.kvSecondary)
+            }
+            .onChange(of: left) { if left == 0, model.browserDialog?.id == request.id { model.browserDialog = nil } }
+        }
+    }
+
+    private func answer(_ accepted: Bool) {
+        request.answer(accepted && Date() < request.deadline)
+        model.browserDialog = nil
+    }
+}
+
+/// 搜索全部条目：这次解锁中第一次（spec/ipc.md §5.6）。显示搜索词，让用户核对是不是自己刚输入的；
+/// 允许后到下次锁定前不再询问。与其他浏览器确认一样没有默认按钮。
+struct SearchAuthorizationSheet: View {
+    @Environment(AppModel.self) private var model
+    let request: SearchAuthorizationRequest
+
+    private var r: BrowserSearchRequest { request.request }
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let left = max(0, Int(request.deadline.timeIntervalSince(context.date).rounded(.up)))
+            SheetScaffold(
+                title: "允许扩展搜索全部条目？",
+                subtitle: "「\(r.pairingName)」（\(browserName(r.browser))）请求在保险库的全部条目中搜索。",
+                systemImage: "magnifyingglass",
+                width: 500,
+                note: "\(left) 秒后自动拒绝"
+            ) {
+                VStack(alignment: .leading, spacing: KV.Space.s3) {
+                    KVCard {
+                        CardRow(label: "搜索内容") {
+                            Text(r.query).font(KV.Typography.mono).textSelection(.enabled)
+                        } actions: {}
+                        CardRowDivider()
+                        CardRow(label: "返回") { Text("匹配条目的标题与用户名，不含密码").font(KV.Typography.body) } actions: {}
+                        CardRowDivider()
+                        CardRow(label: "有效期") { Text("到 Keevo 下次锁定").font(KV.Typography.body) } actions: {}
+                    }
+                    Text("其他网站的条目只能在 Keevo 中打开，不能在扩展里填充。如果你没有在扩展中搜索，请选择「拒绝」。")
                         .font(KV.Typography.footnote)
                         .foregroundStyle(KV.Colors.fgSecondary)
                         .fixedSize(horizontal: false, vertical: true)

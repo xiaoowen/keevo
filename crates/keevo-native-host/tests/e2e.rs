@@ -336,7 +336,10 @@ fn pair_then_fill_through_real_native_host_and_socket() {
         status,
         ServerMessage::Ok {
             id: 1,
-            result: CallResult::Status { locked: true }
+            result: CallResult::Status {
+                locked: true,
+                touch_id: Some(false)
+            }
         }
     );
     browser.close();

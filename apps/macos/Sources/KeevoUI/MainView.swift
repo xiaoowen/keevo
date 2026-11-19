@@ -32,12 +32,16 @@ enum MainRequest: Equatable {
     case newItem(NewItemChoice)
     case generator
     case focusSearch
+    /// 选中一个条目（浏览器扩展的"在 Keevo 中打开"，spec/ipc.md §5.6）。
+    case showItem(String)
 }
 
 struct MainView: View {
     @Environment(AppModel.self) private var model
     @ViewState private var sidebar: SidebarItem
     @ViewState private var selectedItem: String?
+    /// 切换侧边栏后要选中的条目（"在 Keevo 中打开"）：切换会清空选中，由切换的处理代为选中。
+    @ViewState private var selectAfterSidebarChange: String?
     @ViewState private var search = ""
     @FocusState private var searchFocused: Bool
     @FocusState private var listFocused: Bool
@@ -119,7 +123,10 @@ struct MainView: View {
         )) { key in
             SecretKeySheet(secretKey: key.value).interactiveDismissDisabled()
         }
-        .onChange(of: sidebar) { selectedItem = nil }
+        .onChange(of: sidebar) {
+            selectedItem = selectAfterSidebarChange
+            selectAfterSidebarChange = nil
+        }
         .onChange(of: model.mainRequest) { handle(model.mainRequest) }
     }
 
@@ -134,6 +141,14 @@ struct MainView: View {
         case .newItem(let choice): create(choice)
         case .generator: showingGenerator = true
         case .focusSearch: searchFocused = true
+        case .showItem(let id):
+            search = ""
+            if sidebar == .all {
+                selectedItem = id
+            } else {
+                selectAfterSidebarChange = id
+                sidebar = .all
+            }
         }
     }
 

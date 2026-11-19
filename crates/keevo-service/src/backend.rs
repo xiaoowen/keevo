@@ -73,6 +73,52 @@ impl VaultBackend for CoreBackend<'_> {
         )
     }
 
+    fn search(&self, query: &str) -> Vec<Candidate> {
+        let Ok(items) = self.vault.items() else {
+            return Vec::new();
+        };
+        let q = query.to_lowercase();
+        let host = |u: &str| {
+            let rest = u.split_once("://").map_or(u, |(_, r)| r);
+            rest.split(['/', '?', '#'])
+                .next()
+                .unwrap_or("")
+                .to_lowercase()
+        };
+        // 标题以搜索词开头的排在前面，其次是标题、用户名或网站中含有搜索词的；同一级按标题排序
+        let mut hits: Vec<(u8, Candidate)> = items
+            .into_iter()
+            .filter(|i| i.overview.trashed_at.is_none())
+            .filter_map(|i| {
+                let title = i.overview.title.to_lowercase();
+                let rank = if title.starts_with(&q) {
+                    0
+                } else if title.contains(&q)
+                    || i.overview.subtitle.to_lowercase().contains(&q)
+                    || i.overview.urls.iter().any(|u| host(u).contains(&q))
+                {
+                    1
+                } else {
+                    return None;
+                };
+                Some((
+                    rank,
+                    Candidate {
+                        item_id: i.id.to_hex(),
+                        title: i.overview.title,
+                        subtitle: i.overview.subtitle,
+                    },
+                ))
+            })
+            .collect();
+        hits.sort_by_cached_key(|(rank, c)| (*rank, c.title.to_lowercase()));
+        hits.into_iter().map(|(_, c)| c).collect()
+    }
+
+    fn touch_id(&self) -> bool {
+        self.vault.touch_id_enabled() && matches!(self.vault.password_reason(), Ok(None))
+    }
+
     fn describe(&self, item_id: &str) -> Option<(String, String)> {
         let id = parse_id(item_id)?;
         let item = self.vault.items().ok()?.into_iter().find(|i| i.id == id)?;
