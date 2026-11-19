@@ -5,7 +5,8 @@
   "description": "Keevo 浏览器扩展 M0 原型，只用于开发，请勿存放真实数据。",
   "minimum_chrome_version": "120",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmryaIS/F3BlpWhx1yHc9KepcZi6WhQZsajRIWt/0IE8Mie4ybe4EinGxCm0/N/bYgQ/NIiLiKHIfXz+0T5J/S8H4q0Ta1nedc4SLS5CCSTOz4nCvXf3JAgdbAd0HaNxUYhC+aPTQn2L7Yqmydbg6ke2rDo8jd0MeAD+K422YBTH64DDNfj+OsapqM2TaHfquHL4IwiKGWrMlbbEo1ESBwXRJdt/lOy4bOAJs42UHJUg7QbZnuqHkxkOEVVmbbnRB9W/X/Do1s3TjWbYlrNGaYcsnXq9YvLcAtfLYU/2shwE7LJI5yujJ+touEBHSjj466QnxHt5bKEd62v3Aa14OIwIDAQAB",
-  "permissions": ["nativeMessaging", "storage", "activeTab", "scripting"],
+  "permissions": ["nativeMessaging", "storage", "activeTab", "scripting", "alarms", "offscreen"],
+  "optional_permissions": ["clipboardRead", "clipboardWrite"],
   "background": { "service_worker": "background.js", "type": "module" },
   "action": { "default_popup": "popup.html", "default_title": "Keevo" },
   "content_security_policy": {

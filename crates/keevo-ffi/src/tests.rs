@@ -651,9 +651,20 @@ fn browser_service_pairs_lists_and_revokes() {
         fn pairing_started(&self, browser: String) {
             self.0.lock().unwrap().push(format!("started {browser}"));
         }
-        fn confirm_pairing(&self, sas: String, name: String, _: String, timeout_ms: u64) -> bool {
+        fn confirm_pairing(
+            &self,
+            words: Vec<SasWord>,
+            name: String,
+            _: String,
+            timeout_ms: u64,
+        ) -> bool {
             assert!(timeout_ms > 0 && timeout_ms <= 60_000);
-            self.0.lock().unwrap().push(format!("confirm {name} {sas}"));
+            assert_eq!(words.len(), 6);
+            let zh: Vec<String> = words.into_iter().map(|w| w.zh).collect();
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("confirm {name} {}", zh.join(" ")));
             true
         }
         fn authorize_fill(&self, r: BrowserFillRequest, timeout_ms: u64) -> bool {
@@ -708,6 +719,7 @@ fn browser_service_pairs_lists_and_revokes() {
     let mut stream = connect();
     write_socket_frame(&mut stream, &client.start_pairing().unwrap()).unwrap();
     let mut service_public = None;
+    let mut shown = None;
     while service_public.is_none() {
         let frame = read_socket_frame(&mut stream).unwrap();
         let (out, events) = client.on_frame(&frame).unwrap();
@@ -715,14 +727,21 @@ fn browser_service_pairs_lists_and_revokes() {
             write_socket_frame(&mut stream, &o).unwrap();
         }
         for e in events {
-            if let ClientEvent::Paired { service_public: pk } = e {
-                service_public = Some(pk);
+            match e {
+                ClientEvent::Paired { service_public: pk } => service_public = Some(pk),
+                ClientEvent::ShowSas(sas) => shown = Some(sas),
+                _ => {}
             }
         }
     }
     let log = prompt.0.lock().unwrap().clone();
     assert_eq!(log[0], "started com.google.Chrome");
-    assert!(log[1].starts_with("confirm 测试扩展 "), "{log:?}");
+    // 两端显示同一组词：扩展一侧的 SAS 字节经同一份词表映射，与应用确认界面收到的一致
+    let zh: Vec<&str> = keevo_ipc::sas::sas_words(&shown.unwrap())
+        .iter()
+        .map(|w| w.zh)
+        .collect();
+    assert_eq!(log[1], format!("confirm 测试扩展 {}", zh.join(" ")));
     let pairings = f.vault.browser_pairings();
     assert_eq!(pairings.len(), 1);
     assert_eq!(

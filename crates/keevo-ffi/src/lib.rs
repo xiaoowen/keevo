@@ -1708,14 +1708,30 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 pub trait BrowserPrompt: Send + Sync {
     /// 收到配对请求的第 1 条消息：立即告诉用户"有浏览器正在请求配对"，每次尝试都可见。
     fn pairing_started(&self, browser: String);
-    /// 请用户确认两边的短认证串一致。必须在 `timeout_ms` 毫秒内返回，超时按拒绝处理。
-    fn confirm_pairing(&self, sas: String, name: String, browser: String, timeout_ms: u64) -> bool;
+    /// 请用户确认两边的短认证串（6 个词，`spec/sas-wordlist-v1.tsv`）一致。必须在 `timeout_ms` 毫秒内返回，
+    /// 超时按拒绝处理。
+    fn confirm_pairing(
+        &self,
+        words: Vec<SasWord>,
+        name: String,
+        browser: String,
+        timeout_ms: u64,
+    ) -> bool;
     /// 某个配对第一次为某个条目在某个站点取用凭据（`spec/ipc.md` §5.2）：显示站点、条目与配对，请用户确认。
     /// 必须在 `timeout_ms` 毫秒内返回，超时按拒绝处理。
     fn authorize_fill(&self, request: BrowserFillRequest, timeout_ms: u64) -> bool;
     /// 这个配对因频率限制被暂停（§5.2 第 3 条）：提示用户，用户确认后调用
     /// [`KeevoVault::resume_browser_pairing`]。
     fn fill_paused(&self, pairing_id: String, name: String, browser: String);
+}
+
+/// 短认证串的一个词：同一个字节的中文词与英文词互为翻译，两端都同时显示（`spec/ipc.md` §4.2）。
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
+pub struct SasWord {
+    /// 中文词。
+    pub zh: String,
+    /// 英文词。
+    pub en: String,
 }
 
 /// 一次等待授权的 `fill`（`spec/ipc.md` §5.2）。
@@ -1769,14 +1785,15 @@ impl keevo_service::PairingPrompt for PromptAdapter {
             return false;
         }
         let ms = u64::try_from(left.as_millis()).unwrap_or(u64::MAX);
-        // M1.3 换成 SAS 词表 v1；在此之前与扩展一样显示 6 组两位十六进制
-        let code = sas
+        let words = keevo_ipc::sas::sas_words(&sas)
             .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<Vec<_>>()
-            .join(" ");
+            .map(|w| SasWord {
+                zh: w.zh.to_owned(),
+                en: w.en.to_owned(),
+            })
+            .collect();
         self.0
-            .confirm_pairing(code, name.to_owned(), browser.to_owned(), ms)
+            .confirm_pairing(words, name.to_owned(), browser.to_owned(), ms)
             && std::time::Instant::now() <= deadline
     }
 

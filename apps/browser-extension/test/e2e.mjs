@@ -99,6 +99,11 @@ const ok = (msg) => {
 
 console.log("扩展侧端到端测试（WASM → native host → socket → 开发服务）");
 
+// ---- 显示名清洗：与 Keevo.app 同一规则（spec/ipc.md §4.2）
+assert.equal(KeevoClient.displayName("Chrome\u202e · \u200b工作\u0007"), "Chrome · 工作");
+assert.equal([...KeevoClient.displayName("名".repeat(100))].length, 64);
+ok("显示名去掉双向控制符、零宽字符与控制字符，最多 64 个字符");
+
 // ---- 首次配对
 let host = launchHost();
 let client = new KeevoClient(undefined, ORIGIN, "Node 测试");
@@ -107,7 +112,16 @@ host.send(KeevoClient.hello());
 let events = await exchange(host, client, client.startPairing());
 assert.equal(events[0].type, "show_sas");
 assert.match(events[0].sas, /^[0-9a-f]{12}$/);
-ok(`握手完成，显示验证码 ${events[0].sas.match(/../g).join(" ")}`);
+// 配对码的 6 个词：按发布的词表独立查一遍，与 WASM 给出的一致（Keevo.app 用同一份 Rust 词表）
+const wordlist = readFileSync(join(root, "spec/sas-wordlist-v1.tsv"), "utf8").trimEnd().split("\n").map((l) => l.split("\t"));
+assert.equal(wordlist.length, 256);
+const expected = events[0].sas.match(/../g).map((h) => {
+  const [index, en, zh] = wordlist[parseInt(h, 16)];
+  assert.equal(parseInt(index, 16), parseInt(h, 16));
+  return { zh, en };
+});
+assert.deepEqual(events[0].words, expected);
+ok(`握手完成，显示配对码 ${expected.map((w) => w.zh).join(" ")}`);
 events = JSON.parse(client.onFrame(await host.recv())).events;
 assert.equal(events[0].type, "paired");
 const servicePublic = events[0].service_public;

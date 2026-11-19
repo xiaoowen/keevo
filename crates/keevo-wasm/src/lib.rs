@@ -5,7 +5,8 @@
 
 use keevo_crypto::StaticKeypair;
 use keevo_ipc::client::{ClientEvent, ExtensionClient};
-use keevo_ipc::message::Call;
+use keevo_ipc::message::{Call, sanitize_display_name};
+use keevo_ipc::sas::sas_words;
 use serde_json::{Value, json};
 use wasm_bindgen::prelude::*;
 use zeroize::Zeroizing;
@@ -64,6 +65,13 @@ impl KeevoClient {
         hex(self.inner.export_private_key().as_ref())
     }
 
+    /// 清洗后的显示名，与 Keevo.app 中显示的一致（`spec/ipc.md` §4.2）。
+    #[must_use]
+    #[wasm_bindgen(js_name = displayName)]
+    pub fn display_name(raw: &str) -> String {
+        sanitize_display_name(raw)
+    }
+
     /// 发给 native host 的第一帧。
     ///
     /// # Errors
@@ -116,7 +124,12 @@ impl KeevoClient {
         let events: Vec<Value> = events
             .into_iter()
             .map(|e| match e {
-                ClientEvent::ShowSas(sas) => json!({ "type": "show_sas", "sas": hex(&sas) }),
+                // 词与 Keevo.app 中显示的出自同一份词表（spec/sas-wordlist-v1.tsv）
+                ClientEvent::ShowSas(sas) => json!({
+                    "type": "show_sas",
+                    "sas": hex(&sas),
+                    "words": sas_words(&sas).map(|w| json!({ "zh": w.zh, "en": w.en })),
+                }),
                 ClientEvent::Paired { service_public } => {
                     json!({ "type": "paired", "service_public": hex(&service_public) })
                 }

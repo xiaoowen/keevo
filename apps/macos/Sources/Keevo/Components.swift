@@ -200,24 +200,29 @@ struct Banner: View {
 
 // MARK: - 配对码
 
-/// 配对验证码：6 组两位字符，与浏览器扩展中显示的完全一致（spec/ipc.md §4.2）。
+/// 配对码：6 个词，与浏览器扩展中显示的完全一致（spec/ipc.md §4.2，词表 spec/sas-wordlist-v1.tsv）。
+/// 每个词同时显示中文与英文（互为翻译），按从左到右、从上到下的顺序比对。
 struct PairingCode: View {
-    let code: String
+    let words: [SasWord]
 
     var body: some View {
-        let groups = stride(from: 0, to: code.count, by: 2).map { i -> String in
-            let start = code.index(code.startIndex, offsetBy: i)
-            return String(code[start ..< code.index(start, offsetBy: min(2, code.count - i))])
-        }
-        HStack(spacing: KV.Space.s2) {
-            ForEach(Array(groups.enumerated()), id: \.offset) { _, g in
-                Text(g)
-                    .font(KV.Typography.largeType)
-                    .foregroundStyle(KV.Colors.fgPrimary)
-                    .padding(.horizontal, KV.Space.s2)
-                    .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: KV.Radius.sm))
+        Grid(horizontalSpacing: KV.Space.s2, verticalSpacing: KV.Space.s2) {
+            ForEach(0 ..< (words.count + 2) / 3, id: \.self) { row in
+                GridRow {
+                    ForEach(Array(words.enumerated()).filter { $0.offset / 3 == row }, id: \.offset) { index, w in
+                        VStack(spacing: 2) {
+                            Text("\(index + 1)").font(KV.Typography.caption).foregroundStyle(KV.Colors.fgTertiary)
+                            Text(w.zh).font(KV.Typography.title).foregroundStyle(KV.Colors.fgPrimary)
+                            Text(w.en).font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, KV.Space.s2)
+                        .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: KV.Radius.md))
+                    }
+                }
             }
         }
-        .accessibilityLabel("验证码 \(groups.joined(separator: " "))")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("配对码：\(words.map(\.zh).joined(separator: "、"))")
     }
 }

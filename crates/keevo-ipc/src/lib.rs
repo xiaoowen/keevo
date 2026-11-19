@@ -13,6 +13,7 @@ mod error;
 pub mod frame;
 pub mod message;
 pub mod paths;
+pub mod sas;
 pub mod service;
 
 pub use error::IpcError;

@@ -9,7 +9,7 @@
 | [crypto.md](crypto.md)：账户密钥、KDF、2SKD、密钥集、加密信封 | 1.2 | **已冻结**（§8.7 本机密钥包裹、§8.8 本机记录是本机格式，不在冻结范围内） | [test-vectors/crypto-v1.json](test-vectors/crypto-v1.json) |
 | [revisions.md](revisions.md)：修订图、记录、HLC、合并 | 1.1 | **已冻结** | [test-vectors/revisions-v1.json](test-vectors/revisions-v1.json)（24 个合并场景） |
 | [vault-format.md](vault-format.md)：条目与保险库的明文结构 | 1.2 | **已冻结** | [test-vectors/vault-format-v1.json](test-vectors/vault-format-v1.json)（规范编码、正向与负向解码） |
-| [ipc.md](ipc.md)：浏览器扩展与桌面应用的本地通信 | 1.2 | **已冻结**（浏览器 IPC 协议 v1） | 计划中（M1.3） |
+| [ipc.md](ipc.md)：浏览器扩展与桌面应用的本地通信 | 1.3 | **已冻结**（浏览器 IPC 协议 v1） | 计划中（M1.3）；SAS 词表 v1：[sas-wordlist-v1.tsv](sas-wordlist-v1.tsv) |
 
 2026-11-18 冻结，此前经过四轮模型评审，报告与处理记录在 [docs/reviews/](../docs/reviews/)。
 
@@ -30,7 +30,7 @@
 | 修订图、记录版本、HLC、合并与删除语义 | 随条目详情 v1 | revisions §2–§7 |
 | 浏览器 IPC：分帧、配对（XX + 承诺 + SAS）、会话（IK）、消息与错误码 | `hello` 中的 `v = 1`；prologue 与 HKDF 标签 `keevo/v1/ipc…` | ipc §2–§5 |
 
-**不属于格式、可以随实现变化的**：KDF 的本机自动执行预算（crypto §5.3）、排序键的生成算法（vault-format §2.4）、条目类型的默认字段模板、历史保留的数值（revisions §7.2）、SAS 词表（ipc §4.2 的显示映射）。
+**不属于格式、可以随实现变化的**：KDF 的本机自动执行预算（crypto §5.3）、排序键的生成算法（vault-format §2.4）、条目类型的默认字段模板、历史保留的数值（revisions §7.2）、SAS 词表（ipc §4.2 的显示映射，单独版本化，当前为 v1）。
 
 **不在 1.0 范围内的格式**：下列格式尚未定义。将来定义时各自使用新的版本标识，不改变上表中已冻结的内容。
 

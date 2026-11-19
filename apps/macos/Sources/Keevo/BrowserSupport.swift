@@ -9,7 +9,7 @@ import SwiftUI
 /// 一次待确认的配对（spec/ipc.md §4.2 第 5 步）。
 struct PairingRequest: Identifiable {
     let id = UUID()
-    let sas: String
+    let words: [SasWord]
     let name: String
     let browser: String
     let deadline: Date
@@ -62,9 +62,9 @@ final class BrowserPromptBridge: BrowserPrompt, @unchecked Sendable {
         }
     }
 
-    func confirmPairing(sas: String, name: String, browser: String, timeoutMs: UInt64) -> Bool {
+    func confirmPairing(words: [SasWord], name: String, browser: String, timeoutMs: UInt64) -> Bool {
         ask(timeoutMs: timeoutMs) { deadline, answer in
-            .pairing(PairingRequest(sas: sas, name: name, browser: browser, deadline: deadline, answer: answer))
+            .pairing(PairingRequest(words: words, name: name, browser: browser, deadline: deadline, answer: answer))
         }
     }
 
@@ -128,13 +128,9 @@ struct PairingConfirmSheet: View {
             VStack(alignment: .leading, spacing: 16) {
                 Label("浏览器请求配对", systemImage: "puzzlepiece.extension")
                     .font(.title3.weight(.semibold))
-                Text("「\(request.name)」（\(browserName(request.browser))）请求连接 Keevo。请确认扩展弹窗中显示的验证码与下面完全一致。")
+                Text("「\(request.name)」（\(browserName(request.browser))）请求连接 Keevo。请逐个确认扩展弹窗中的 6 个词与下面完全一致，顺序也要相同。")
                     .fixedSize(horizontal: false, vertical: true)
-                classifiedText(request.sas.uppercased(), font: KV.Typography.largeType)
-                    .frame(maxWidth: .infinity)
-                    .padding(KV.Space.s4)
-                    .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: KV.Radius.md))
-                    .accessibilityLabel("验证码 \(request.sas)")
+                PairingCode(words: request.words)
                 Text("如果不一致，或者你没有在扩展中发起配对，请选择「不一致」。配对后，这个扩展可以在你授权的网站上取用密码。")
                     .font(KV.Typography.footnote)
                     .foregroundStyle(KV.Colors.fgSecondary)

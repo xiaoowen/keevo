@@ -47,9 +47,13 @@ impl PairingPrompt for TerminalPrompt {
         browser: &str,
         deadline: std::time::Instant,
     ) -> bool {
-        let code: Vec<String> = sas.iter().map(|b| format!("{b:02x}")).collect();
+        let words = keevo_ipc::sas::sas_words(&sas);
+        let zh: Vec<&str> = words.iter().map(|w| w.zh).collect();
+        let en: Vec<&str> = words.iter().map(|w| w.en).collect();
         eprintln!("\n浏览器「{name}」（{browser}）请求配对。");
-        eprintln!("请确认扩展弹窗中显示的验证码与此一致：  {}", code.join(" "));
+        eprintln!("请确认扩展弹窗中显示的配对码与此一致：");
+        eprintln!("  {}", zh.join("  "));
+        eprintln!("  {}", en.join(" "));
         eprint!("一致吗？[y/N] ");
         let _ = std::io::stderr().flush();
         let ok = ask(deadline);
