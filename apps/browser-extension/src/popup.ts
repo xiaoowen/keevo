@@ -5,6 +5,7 @@
 //
 // 键盘：搜索框中 ↑↓ 选择条目，回车填充，Esc 关闭弹窗。
 
+import { lockGlyph, logoMark, siteIcon } from "./brand.js";
 import type { Candidate, PopupRequest, PopupResponse, SasWord, ViewState } from "./types.js";
 
 const root = document.getElementById("app") as HTMLElement;
@@ -25,33 +26,6 @@ function button(text: string, onClick: () => void, cls?: string): HTMLButtonElem
   b.type = "button";
   b.onclick = onClick;
   return b;
-}
-
-const SITE_COLORS = 8;
-
-/**
- * 网站图标：首字母 + 按域名选取的颜色，与 macOS 应用共用同一算法（design/README.md「网站图标」）：
- * key = 去掉 www. 的小写主机名，index = FNV-1a-32(UTF-8(key)) mod 8。
- */
-function siteIcon(title: string, origin: string): HTMLElement {
-  let key = title;
-  try {
-    const host = new URL(origin).hostname.toLowerCase();
-    key = host.startsWith("www.") ? host.slice(4) : host;
-  } catch {
-    // 没有网址时按标题取色
-  }
-  let hash = 0x811c9dc5;
-  for (const byte of new TextEncoder().encode(key)) {
-    hash ^= byte;
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  const source = title.trim() || key;
-  const [first] = new Intl.Segmenter().segment(source);
-  const icon = el("div", (first?.segment ?? "?").toUpperCase(), "site-icon");
-  icon.style.background = `var(--kv-site-${(hash % SITE_COLORS) + 1})`;
-  icon.setAttribute("aria-hidden", "true");
-  return icon;
 }
 
 const ERRORS: Record<string, string> = {
@@ -136,11 +110,15 @@ function setNote(kind: NoteKind, text: string): void {
 function render(): void {
   const searchFocused = document.activeElement?.id === "search";
   root.replaceChildren();
+  const s = view.state;
   const header = el("header");
-  header.append(el("h1", "Keevo"), el("span", "开发版", "badge"));
+  header.append(logoMark(20), el("h1", "Keevo"), el("span", "开发版", "badge"));
+  if (s.status === "connected" && !view.repairing) {
+    const status = el("span", s.locked ? "已锁定" : "已连接", s.locked ? "status" : "status ok");
+    header.append(status);
+  }
   root.append(header);
 
-  const s = view.state;
   if (view.repairing || s.status === "unpaired") renderPairForm();
   else {
     switch (s.status) {
@@ -162,7 +140,7 @@ function render(): void {
         );
         break;
       case "connected":
-        if (s.locked) root.append(el("p", "Keevo 已锁定，请在 Keevo 中解锁。", "muted"));
+        if (s.locked) renderLocked();
         else renderItems(searchFocused);
         break;
     }
@@ -172,6 +150,19 @@ function render(): void {
     note.setAttribute("role", "status");
     root.append(note);
   }
+}
+
+/** 锁定（设计稿"Keevo 已锁定"）：解锁只在 Keevo 中进行，扩展不接触主密码。 */
+function renderLocked(): void {
+  const box = el("div", undefined, "locked");
+  const icon = el("div", undefined, "locked-icon");
+  icon.append(lockGlyph(22));
+  box.append(
+    icon,
+    el("h2", "Keevo 已锁定"),
+    el("p", "请在 Keevo 应用中解锁。解锁只在 Keevo 中进行，扩展从不接触你的主密码。", "muted"),
+  );
+  root.append(box);
 }
 
 function renderPairForm(): void {
@@ -220,9 +211,9 @@ function renderSas(words: SasWord[]): void {
   if (view.name) root.append(el("p", `这个浏览器在 Keevo 中显示为「${view.name}」。`, "note"));
   root.append(
     el(
-      "p",
+      "div",
       "Keevo 中会弹出确认窗口。如果没有出现，说明有程序在冒充 Keevo，请关闭这个弹窗，不要继续；如果词不一致，请在 Keevo 中选择「不一致」。",
-      "note",
+      "banner info",
     ),
   );
 }
@@ -255,13 +246,15 @@ function renderItems(refocus: boolean): void {
       if (c && !view.busy) void fill(c);
     }
   };
-  root.append(search);
+  const searchBox = el("div", undefined, "search");
+  searchBox.append(search);
+  root.append(searchBox);
   if (view.blocked) {
     root.append(
       el("div", "这个页面上的 Keevo 菜单被遮挡或变得透明，为了安全已经关闭。请在这里选择要填充的登录。", "banner warning"),
     );
   }
-  if (view.origin) root.append(el("p", view.origin, "origin"));
+  if (view.origin) root.append(el("p", view.origin, view.origin.startsWith("https:") ? "origin secure" : "origin"));
   root.append(list);
   renderList(list);
   root.append(inlineSetting());
@@ -282,7 +275,7 @@ function renderList(list: HTMLElement): void {
     const main = el("div", undefined, "item-main");
     const text = el("div", undefined, "text");
     text.append(el("div", c.title, "title"), el("div", c.subtitle, "subtitle"));
-    const fillButton = button("填充", () => void fill(c));
+    const fillButton = button("填充", () => void fill(c), "fill");
     fillButton.disabled = view.busy;
     main.append(siteIcon(c.title, view.origin), text, fillButton);
     main.onclick = (e) => {

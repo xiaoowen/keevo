@@ -1,18 +1,37 @@
 /* 页内菜单样式。颜色、间距、圆角、字体一律取自 tokens.css。 */
 html, body { margin: 0; background: var(--kv-bg-raised); color: var(--kv-fg-primary); font: var(--kv-type-body); }
 main { padding: var(--kv-space-2); }
-.head { display: flex; align-items: baseline; gap: var(--kv-space-1-5); padding: var(--kv-space-1) var(--kv-space-1-5) var(--kv-space-2); }
-.label { font: var(--kv-type-caption); color: var(--kv-fg-secondary); }
+.head { display: flex; align-items: center; gap: var(--kv-space-1-5); padding: var(--kv-space-1) var(--kv-space-1-5) var(--kv-space-2); }
+.label { font: var(--kv-type-footnote); color: var(--kv-fg-secondary); white-space: nowrap; }
+.logo { flex: none; display: grid; place-items: center; color: var(--kv-fg-on-accent); background: var(--kv-accent-fill); border-radius: 4px; }
 .site { font: var(--kv-type-body-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 p { margin: var(--kv-space-1) var(--kv-space-1-5); }
 .muted { color: var(--kv-fg-secondary); }
 .hint { font: var(--kv-type-footnote); color: var(--kv-fg-tertiary); }
-.banner { padding: var(--kv-space-1-5) var(--kv-space-2); border-radius: var(--kv-radius-md); font: var(--kv-type-footnote); }
+.banner { padding: var(--kv-space-1-5) var(--kv-space-2); border-radius: var(--kv-radius-md); font: var(--kv-type-footnote); margin: var(--kv-space-1) 0; }
+.banner strong { display: block; font-weight: 600; margin-bottom: 2px; }
 .banner.warning { color: var(--kv-status-warning-fg); background: var(--kv-status-warning-bg); }
 .banner.danger { color: var(--kv-status-danger-fg); background: var(--kv-status-danger-bg); }
 .banner.info { color: var(--kv-status-info-fg); background: var(--kv-status-info-bg); }
 
-.list { display: flex; flex-direction: column; }
+.list { display: flex; flex-direction: column; gap: 2px; }
+.site-icon {
+  flex: none;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font: 600 13px/1 var(--kv-font-sans);
+}
+.enter { font: var(--kv-type-footnote); color: var(--kv-fg-tertiary); visibility: hidden; }
+body.armed button.item:hover .enter, button.item:focus-visible .enter { visibility: visible; }
+.keys {
+  font: var(--kv-type-caption);
+  color: var(--kv-fg-tertiary);
+  margin: var(--kv-space-1) 0 0;
+  padding: var(--kv-space-2) var(--kv-space-1-5) var(--kv-space-1);
+  border-top: 1px solid var(--kv-border-subtle);
+}
 button.item {
   all: unset;
   box-sizing: border-box;
@@ -24,6 +43,7 @@ button.item {
   border-radius: var(--kv-radius-md);
   cursor: default;
 }
+button.item:focus-visible { background: var(--kv-bg-selected); }
 .text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .title { font: var(--kv-type-body-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .subtitle { font: var(--kv-type-footnote); color: var(--kv-fg-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

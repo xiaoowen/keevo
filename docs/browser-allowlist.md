@@ -28,7 +28,7 @@ Chrome 的 Beta、Dev、Canary 版签名标识不同（`com.google.Chrome.beta` 
 4. **修改代码**：
    - 在 `KNOWN_BROWSERS` 中加入脚本给出的条目，在其上方的表格中写明核实日期；
    - 在本文档的"当前白名单"中加一行；
-   - 如果要在"设置 → 浏览器"中一键安装 host 清单，在 `apps/macos/Sources/Keevo/BrowserSupport.swift` 中加入该浏览器的 `NativeMessagingHosts` 目录（例如 Microsoft Edge 为 `~/Library/Application Support/Microsoft Edge/NativeMessagingHosts`，Brave 为 `~/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts`），并在 `browserName` 中加上显示名。
+   - 如果要在"设置 → 浏览器"中一键安装 host 清单，在 `apps/macos/Sources/KeevoUI/BrowserSupport.swift` 中加入该浏览器的 `NativeMessagingHosts` 目录（例如 Microsoft Edge 为 `~/Library/Application Support/Microsoft Edge/NativeMessagingHosts`，Brave 为 `~/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts`），并在 `browserName` 中加上显示名。
 5. **验证**：在该浏览器中加载扩展，完成一次配对与填充，确认 host 通过父进程校验；把核实脚本的输出贴在合并请求中。
 6. **评审**：至少一名评审者在自己的机器上重新运行第 2、3 步，结果一致才能合并。
 

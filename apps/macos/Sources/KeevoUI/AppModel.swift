@@ -34,6 +34,22 @@ final class AppModel {
     var pairingNotice: String?
     /// 浏览器写入保险库的提示（spec/ipc.md §5.5：每次保存都对用户可见）。
     var browserNotice: String?
+    /// 菜单栏命令对主窗口的请求（新建、生成密码、搜索）。
+    var mainRequest: MainRequest?
+    /// 正在编辑的条目（编辑器打开期间）。主窗口据此锁住侧边栏与列表。
+    var editingItem: String?
+    /// 窗口底部的短暂提示（例如"已复制"）。
+    private(set) var toast: String?
+    @ObservationIgnored private var toastTask: Task<Void, Never>?
+
+    func showToast(_ message: String) {
+        toast = message
+        toastTask?.cancel()
+        toastTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            if !Task.isCancelled { self.toast = nil }
+        }
+    }
     /// 浏览器的异常行为（spec/ipc.md §5.2：查询过于频繁）。用户关闭前一直显示。
     var browserWarning: String?
     /// 当前显示的浏览器确认界面（配对或填充授权）。
@@ -77,24 +93,32 @@ final class AppModel {
     }
     private static let hideFromCaptureKey = "hideFromScreenCapture"
 
-    private var vault: KeevoVault?
+    private(set) var vault: KeevoVault?
     private let dbPath: String
     private let localDir: String
-    private let enclave = SecureEnclaveBridge(touchIDReason: "解锁 Keevo")
+    private let enclave: SecureEnclaveProvider
     private var observers: [NSObjectProtocol] = []
     private var idleTimer: Timer?
     /// 本次锁定期间是否已经自动弹出过 Touch ID。系统的 Touch ID 提示关闭时，应用会再次变为活跃；
     /// 不加限制的话，用户点了取消就会再弹一次，没完没了。
     private var autoPrompted = false
 
-    init() {
+    /// 正式应用：数据目录在 `~/Library/Application Support/Keevo`（ADR-0003）。
+    convenience init() {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Keevo", isDirectory: true)
+        self.init(dataDirectory: support, enclave: SecureEnclaveBridge(touchIDReason: "解锁 Keevo"), background: true)
+    }
+
+    /// `dataDirectory`：数据库与本机密钥目录（spec/crypto.md §8.7）。`background` 为 `false` 时不监听系统锁定、
+    /// 不启动闲置计时与浏览器服务（截图程序用）。
+    init(dataDirectory support: URL, enclave: SecureEnclaveProvider, background: Bool) {
+        self.enclave = enclave
+        self.background = background
         let stored = UserDefaults.standard.integer(forKey: Self.autoLockKey)
         autoLockMinutes = Self.autoLockChoices.contains(stored) ? stored : 10
         hideFromScreenCapture = UserDefaults.standard.bool(forKey: Self.hideFromCaptureKey)
 
-        // 数据目录（ADR-0003）：数据库与本机密钥目录（spec/crypto.md §8.7）
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Keevo", isDirectory: true)
         try? FileManager.default.createDirectory(
             at: support, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]
         )
@@ -103,9 +127,13 @@ final class AppModel {
         if FileManager.default.fileExists(atPath: dbPath) {
             open(reenrolling: false)
         }
-        observeSystemLockEvents()
-        startIdleTimer()
+        if background {
+            observeSystemLockEvents()
+            startIdleTimer()
+        }
     }
+
+    private let background: Bool
 
     /// Touch ID 在这台 Mac 上是否可用（登记了指纹）。
     var touchIDAvailable: Bool { SecureEnclaveBridge.touchIDAvailable }
@@ -253,7 +281,7 @@ final class AppModel {
     /// 启动浏览器扩展的本地服务（spec/ipc.md）。没有从打包的应用运行时（未编译进 host 的 cdhash）启动失败，
     /// 应用其余功能不受影响。
     private func startBrowserService() {
-        guard let vault else { return }
+        guard background, let vault else { return }
         do {
             _ = try vault.startBrowserService(prompt: browserPrompt)
             browserServiceError = nil
@@ -530,7 +558,21 @@ final class AppModel {
         guard let vault else { return }
         vaults = try vault.vaults()
         items = try vault.items()
+        // 排序键：汉字转为拼音后与拉丁字母混排（"阿里云"排在"Apple ID"旁边）。转换较慢，只在数据变化时算一次
+        var keys = sortKeys
+        for item in items where keys[item.title] == nil {
+            keys[item.title] = Self.sortKey(item.title)
+        }
+        sortKeys = keys
         dataVersion &+= 1
+    }
+
+    /// 标题 → 排序键（拼音，小写）。
+    private(set) var sortKeys: [String: String] = [:]
+
+    static func sortKey(_ title: String) -> String {
+        let latin = title.applyingTransform(.mandarinToLatin, reverse: false) ?? title
+        return (latin.applyingTransform(.stripDiacritics, reverse: false) ?? latin).lowercased()
     }
 
     private func run(_ body: @escaping () async throws -> Void) async {

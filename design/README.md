@@ -19,7 +19,7 @@ design/
 | 产物 | 使用方 |
 |---|---|
 | `apps/browser-extension/static/tokens.css` | 浏览器扩展：CSS 自定义属性 `--kv-*`，按 `prefers-color-scheme`、`prefers-contrast`、`prefers-reduced-motion` 切换 |
-| `apps/macos/Sources/Keevo/DesignTokens.swift` | macOS 应用：`KV.Colors.*` 等，随系统外观（含「增强对比度」）自动切换 |
+| `apps/macos/Sources/KeevoUI/DesignTokens.swift` | macOS 应用：`KV.Colors.*` 等，随系统外观（含「增强对比度」）自动切换 |
 
 格式遵循 W3C 设计令牌社区组（DTCG）的 `$type` / `$value` 约定，值可以用 `{color.teal.600}` 引用原始色板。
 
@@ -89,14 +89,35 @@ python3 design/build_tokens.py --check  # CI：对比度达标且产物已更新
 
 | 组件 | macOS（`Components.swift`） | 扩展 | 规则 |
 |---|---|---|---|
-| 网站图标 | `SiteIcon` | `.site-icon` | 见下文算法 |
+| 网站图标 | `SiteIcon` | `.site-icon`（`brand.ts`） | 见下文算法 |
+| 标志 | `HeroIcon`（锁屏、引导） | `.logo`（`brand.ts`） | 品牌色圆角方块中的白色盾形；输入框旁的图标用同一盾形 |
 | 秘密值 | `SecretText` | — | 默认圆点；显示需用户主动操作 |
 | 字符分色 | `classifiedText`、`CharClass` | — | 字母：`fg.primary`；数字：`secret.digit`；符号：`secret.symbol` |
-| 大字显示 | `LargeTypeView` | — | 每字符一格，带序号与图例 |
+| 大字显示 | `LargeTypeView`、`LargeTypeButton` | — | 每字符一格，带序号与图例；入口按钮显示 "Aa" |
 | 提示横幅 | `Banner` | `.banner` | 信息 / 成功 / 注意 / 危险，每级图标不同，不只靠颜色区分 |
-| 配对码 | `PairingCode` | `.sas` | 6 组两位，两端排版一致 |
+| 配对码 | `PairingCode` | `.sas` | 6 个词，3 列 2 行，两端排版一致 |
+| 按钮 | `KVButtonStyle`（`.kvPrimary` 等） | `button`、`.secondary`、`.fill` | 主操作品牌色填充；"编辑""锁定"描边；次要操作浅底；行内操作为品牌色文字。顶部栏用紧凑尺寸（高 28） |
+| 字段卡片 | `KVCard`、`CardRow`、`CardRowDivider` | — | 细边框、圆角 10；标签列宽 92、12pt 次要色；行间细分隔线 |
+| 分组标题 | `GroupTitle` | — | 13pt 半粗、次要色 |
+| 输入框 | `LabeledInput`（标签在上）、`.kvInput()`（编辑器） | `input`、`#search` | 聚焦时 2pt `focus.ring`；占位文字用 `fg.tertiary` |
+| 面板 | `SheetScaffold` | — | 图标 + 标题 + 说明，内容，底部按钮靠右；左下可放倒计时等说明 |
+| 设置行 | `SettingsSection`、`SettingsRow`、`.kvSwitch()` | `.setting` | 标题与说明在左、控件在右；说明放在卡片下方 |
+| 分段控件 | `KVSegmented` | — | 浅灰底，选中段白色浮起 |
+| 标签 | `Pill`、`FlowLayout` | — | 品牌色浅底胶囊，放不下时换行 |
+| 倒计时环 | `CountdownRing` | — | 18pt，与剩余秒数文字同时显示 |
+| 强度 | `StrengthMeter` | — | 四段条 + 文字 + 比特熵，不只靠颜色 |
+| 空状态 | `EmptyState` | `.muted` | 图标、标题、一句说明（告诉用户下一步做什么） |
+| 轻提示 | `ToastView` | — | 底部居中，2 秒后消失（"已复制 · 90 秒后清除"） |
 
-待做：字段行、TOTP 倒计时环（M1.2）、密码强度条、空状态、授权弹窗。
+### 交互约定（参考 1Password）
+
+- **编辑在详情栏中进行**：点"编辑"（⌘E）后详情栏变为编辑器，顶部为"取消"（esc）与"保存"（⌘S）；编辑期间侧边栏与列表变暗、不可点，避免切换条目时丢失修改。
+- **安全确认不引导**：浏览器的配对、填充授权、密码更新对话框没有默认按钮，两个选项同等样式；"解锁参数异常"以"取消"为默认按钮。回车不会放行有风险的操作。
+- **列表排序**：汉字按拼音与拉丁字母混排（"阿里云"排在"Apple ID"之前）。
+
+### 界面截图
+
+`scripts/snapshots.sh [输出目录] [名称过滤…]` 用示例数据（软件实现的 Secure Enclave，不触碰钥匙串）在离屏窗口中渲染各个页面，每个页面浅色、深色各一张，默认输出到 `target/snapshots`。改界面后用它与设计稿逐一对照；只截部分页面时传名称片段，例如 `scripts/snapshots.sh target/snapshots editor dialog`。
 
 ### 网站图标
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later（附加 App Store 许可，见仓库根目录 LICENSE）
 //
-// 条目编辑器。保存时把改动算成一组编辑，一次写入（spec/revisions.md §5.4 写时收敛）。
+// 条目编辑器：在详情栏中直接编辑（参考 1Password 的编辑模式），顶部为取消与保存。
+// 保存时把改动算成一组编辑，一次写入（spec/revisions.md §5.4 写时收敛）。
 // 存在冲突、撤销删除或来源不一致的内容时，编辑界面顶部展示冲突面板（同上，"界面要求"）。
 //
 // 移动字段时只改写真正移动了的字段：保持相对顺序不变的字段（最长递增子序列）不动，
@@ -146,10 +147,11 @@ struct DraftField: Identifiable {
     }
 }
 
-struct ItemEditorSheet: View {
+struct ItemEditor: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
     @Binding var selectedItem: String?
+    /// 结束编辑（保存或取消之后）。
+    let close: () -> Void
 
     /// 编辑开始时（或最近一次处理冲突后）的详情，用来计算改动。
     @ViewState private var base: ItemDetail
@@ -163,9 +165,11 @@ struct ItemEditorSheet: View {
     @ViewState private var newTag = ""
     @ViewState private var error: String?
     @ViewState private var needsRebuild = false
+    @FocusState private var titleFocused: Bool
 
-    init(detail: ItemDetail, selectedItem: Binding<String?>) {
+    init(detail: ItemDetail, selectedItem: Binding<String?>, close: @escaping () -> Void) {
         _selectedItem = selectedItem
+        self.close = close
         _base = .init(initialValue: detail)
         _title = .init(initialValue: detail.title)
         _favorite = .init(initialValue: detail.favorite)
@@ -205,103 +209,160 @@ struct ItemEditorSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("编辑条目")
-                .font(.title3.weight(.semibold))
-                .padding([.horizontal, .top], 24)
-            Form {
-                if needsAttention {
-                    Section("需要你处理") {
-                        ConflictPanel(detail: base) { rebase() }
-                    }
-                }
-                Section {
-                    TextField("标题", text: $title)
-                    Toggle("收藏", isOn: $favorite)
-                }
-                ForEach(groups) { group in
-                    Section {
-                        ForEach(group.fields) { field in
-                            DraftFieldRow(
-                                field: binding(field),
-                                sections: sections.filter { !removedSections.contains($0.id) },
-                                canMoveUp: canMove(field.id, by: -1),
-                                canMoveDown: canMove(field.id, by: 1),
-                                move: { move(field.id, by: $0) },
-                                moveTo: { moveTo(field.id, section: $0) },
-                                remove: { remove(field.id) }
-                            )
-                        }
-                        Menu("添加字段") {
-                            ForEach(FieldKindInfo.addable, id: \.self) { kind in
-                                Button(FieldKindInfo.name(kind)) {
-                                    fields.append(DraftField(newKind: kind, section: group.section?.id))
-                                }
-                            }
-                        }
-                        .fixedSize()
-                    } header: {
-                        if let section = group.section {
-                            SectionHeaderEditor(
-                                label: Binding(
-                                    get: { sections.first { $0.id == section.id }?.label ?? "" },
-                                    set: { v in
-                                        if let i = sections.firstIndex(where: { $0.id == section.id }) { sections[i].label = v }
-                                    }
-                                ),
-                                remove: { removeSection(section.id) }
-                            )
+        VStack(spacing: 0) {
+            DetailTopBar {
+                Text("正在编辑")
+                    .font(KV.Typography.footnote)
+                    .foregroundStyle(KV.Colors.fgSecondary)
+                    .padding(.trailing, KV.Space.s1)
+                Button("取消") { close() }
+                    .buttonStyle(.kvBordered)
+                    .keyboardShortcut(.cancelAction)
+                    .help("放弃修改（esc）")
+                Button("保存") { save() }
+                    .buttonStyle(KVButtonStyle(kind: .primary, compact: true))
+                    .keyboardShortcut("s")
+                    .disabled(needsRebuild)
+                    .help("保存（⌘S）")
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    header
+                    if needsAttention {
+                        VStack(alignment: .leading, spacing: KV.Space.s2) {
+                            GroupTitle(text: "需要你处理")
+                            ConflictPanel(detail: base) { rebase() }
                         }
                     }
-                }
-                Section {
-                    Button { addSection() } label: { Label("添加分区", systemImage: "rectangle.stack.badge.plus") }
-                        .buttonStyle(.borderless)
-                }
-                Section("标签") {
-                    if !tags.isEmpty {
-                        HStack(spacing: KV.Space.s1_5) {
-                            ForEach(tags, id: \.self) { tag in
-                                HStack(spacing: KV.Space.s1) {
-                                    Text(tag).font(KV.Typography.footnote)
-                                    Button { tags.removeAll { $0 == tag } } label: { Image(systemName: "xmark.circle.fill") }
-                                        .buttonStyle(.borderless)
-                                        .accessibilityLabel("移除标签\(tag)")
-                                }
-                                .padding(.horizontal, KV.Space.s2)
-                                .padding(.vertical, KV.Space.s0_5)
-                                .background(KV.Colors.bgSunken, in: Capsule())
+                    ForEach(groups) { group in
+                        groupView(group)
+                    }
+                    Button { addSection() } label: {
+                        Label("添加分区", systemImage: "plus.rectangle.on.rectangle")
+                    }
+                    .buttonStyle(.kvLink)
+                    tagEditor
+                    if let error {
+                        HStack(spacing: KV.Space.s2) {
+                            Banner(kind: .danger, message: error)
+                            if needsRebuild {
+                                Button("重建为新条目") { rebuild() }.buttonStyle(.kvBordered)
                             }
                         }
                     }
-                    HStack {
-                        TextField("添加标签", text: $newTag)
-                            .onSubmit(addTag)
-                        Button("添加", action: addTag)
-                            .disabled(newTag.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
                 }
+                .padding(.horizontal, 28)
+                .padding(.vertical, KV.Space.s6)
+                .frame(maxWidth: 760, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .formStyle(.grouped)
-            VStack(alignment: .leading, spacing: KV.Space.s2) {
-                if let error {
-                    Banner(kind: .danger, message: error)
-                }
-                HStack {
-                    if needsRebuild {
-                        Button("重建为新条目") { rebuild() }
-                    }
-                    Spacer()
-                    Button("取消", role: .cancel) { dismiss() }
-                        .keyboardShortcut(.cancelAction)
-                    Button("保存") { save() }
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(needsRebuild)
-                }
-            }
-            .padding([.horizontal, .bottom], 24)
         }
-        .frame(width: 640, height: 720)
+        .onAppear {
+            model.editingItem = base.id
+            if base.title.isEmpty { titleFocused = true }
+        }
+        .onDisappear {
+            if model.editingItem == base.id { model.editingItem = nil }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 14) {
+            SiteIcon(title: title, url: fields.first { $0.kind == "url" && !removed.contains($0.id) }?.value, size: 48)
+            VStack(alignment: .leading, spacing: 4) {
+                TextField("标题", text: $title)
+                    .textFieldStyle(.plain)
+                    .font(KV.Typography.title)
+                    .foregroundStyle(KV.Colors.fgPrimary)
+                    .focused($titleFocused)
+                    .padding(.horizontal, KV.Space.s2)
+                    .padding(.vertical, 3)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(titleFocused ? KV.Colors.focusRing : KV.Colors.borderSubtle, lineWidth: titleFocused ? 2 : 1)
+                    )
+                    .accessibilityLabel("标题")
+                Text("\(ItemTypeInfo.name(base.itemType)) · \(ItemDetailView.vaultLabel(model.vaults.first { $0.id == base.vaultId }?.name ?? ""))")
+                    .font(KV.Typography.footnote)
+                    .foregroundStyle(KV.Colors.fgSecondary)
+                    .padding(.leading, KV.Space.s2)
+            }
+            Button { favorite.toggle() } label: {
+                Image(systemName: favorite ? "star.fill" : "star")
+                    .font(.system(size: 16))
+                    .foregroundStyle(favorite ? KV.Colors.statusWarningFg : KV.Colors.fgTertiary)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(favorite ? "取消收藏" : "收藏")
+            .accessibilityLabel(favorite ? "取消收藏" : "收藏")
+        }
+    }
+
+    private func groupView(_ group: EditorGroup) -> some View {
+        VStack(alignment: .leading, spacing: KV.Space.s2) {
+            if let section = group.section {
+                SectionHeaderEditor(
+                    label: Binding(
+                        get: { sections.first { $0.id == section.id }?.label ?? "" },
+                        set: { v in
+                            if let i = sections.firstIndex(where: { $0.id == section.id }) { sections[i].label = v }
+                        }
+                    ),
+                    remove: { removeSection(section.id) }
+                )
+            }
+            KVCard {
+                ForEach(Array(group.fields.enumerated()), id: \.element.id) { index, field in
+                    if index > 0 { CardRowDivider() }
+                    DraftFieldRow(
+                        field: binding(field),
+                        sections: sections.filter { !removedSections.contains($0.id) },
+                        canMoveUp: canMove(field.id, by: -1),
+                        canMoveDown: canMove(field.id, by: 1),
+                        move: { move(field.id, by: $0) },
+                        moveTo: { moveTo(field.id, section: $0) },
+                        remove: { remove(field.id) }
+                    )
+                }
+                if !group.fields.isEmpty { CardRowDivider() }
+                AddFieldMenu { kind in
+                    fields.append(DraftField(newKind: kind, section: group.section?.id))
+                }
+            }
+        }
+    }
+
+    private var tagEditor: some View {
+        VStack(alignment: .leading, spacing: KV.Space.s2) {
+            GroupTitle(text: "标签")
+            FlowLayout {
+                ForEach(tags, id: \.self) { tag in
+                    HStack(spacing: KV.Space.s1) {
+                        Text(tag).font(KV.Typography.footnote).foregroundStyle(KV.Colors.accentFg)
+                        Button { tags.removeAll { $0 == tag } } label: {
+                            Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(KV.Colors.accentFg)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("移除标签\(tag)")
+                    }
+                    .padding(.leading, 10)
+                    .padding(.trailing, KV.Space.s2)
+                    .padding(.vertical, 3)
+                    .background(KV.Colors.accentSubtle, in: Capsule())
+                }
+                TextField("添加标签", text: $newTag)
+                    .textFieldStyle(.plain)
+                    .font(KV.Typography.footnote)
+                    .frame(width: 120)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 3)
+                    .overlay(Capsule().strokeBorder(KV.Colors.borderSubtle, style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+                    .onSubmit(addTag)
+                    .help("输入后按回车添加")
+            }
+        }
     }
 
     // MARK: - 排列
@@ -442,15 +503,17 @@ struct ItemEditorSheet: View {
     }
 
     private func save() {
+        addTag()
         let edits = edits
         // 没有改动但有待确认的状态（撤销删除、来源不一致、多个头）时，空编辑也写一个收敛修订：保存即确认
         guard !edits.isEmpty || base.resurrected || base.integrityIssues > 0 || base.headCount > 1 else {
-            dismiss()
+            close()
             return
         }
         do {
             try model.update(itemId: base.id, edits: edits, force: true)
-            dismiss()
+            model.showToast("已保存")
+            close()
         } catch KeevoError.ItemNeedsRebuild {
             needsRebuild = true
             error = AppModel.describe(KeevoError.ItemNeedsRebuild)
@@ -464,7 +527,7 @@ struct ItemEditorSheet: View {
             if let id = try model.rebuild(itemId: base.id) {
                 selectedItem = id
             }
-            dismiss()
+            close()
         } catch {
             self.error = AppModel.describe(error)
         }
@@ -474,7 +537,7 @@ struct ItemEditorSheet: View {
     /// 字段的移动在这种情况下不保留，需要重新调整。
     private func rebase() {
         guard let new = model.detail(of: base.id) else {
-            dismiss()
+            close()
             return
         }
         if title == base.title { title = new.title }
@@ -496,20 +559,42 @@ struct SectionHeaderEditor: View {
     let remove: () -> Void
 
     var body: some View {
-        HStack {
+        HStack(spacing: KV.Space.s2) {
             TextField("分区名称", text: $label)
                 .textFieldStyle(.plain)
-                .font(KV.Typography.bodyStrong)
-            Spacer()
-            Button(role: .destructive, action: remove) { Label("删除分区", systemImage: "trash") }
-                .buttonStyle(.borderless)
-                .labelStyle(.iconOnly)
-                .help("删除分区（其中的字段移到默认分区）")
+                .font(KV.Typography.body.weight(.semibold))
+                .foregroundStyle(KV.Colors.fgSecondary)
+                .accessibilityLabel("分区名称")
+            IconButton(systemImage: "trash", label: "删除分区", help: "删除分区（其中的字段移到默认分区）", action: remove)
         }
     }
 }
 
-/// 编辑器中的一行字段。
+/// "＋ 添加字段"：卡片末尾的一行，点开选择字段类型。
+struct AddFieldMenu: View {
+    let add: (String) -> Void
+
+    var body: some View {
+        Menu {
+            ForEach(FieldKindInfo.addable, id: \.self) { kind in
+                Button(FieldKindInfo.name(kind)) { add(kind) }
+            }
+        } label: {
+            Label("添加字段", systemImage: "plus")
+                .font(KV.Typography.footnote.weight(.semibold))
+                .foregroundStyle(KV.Colors.accentFg)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// 编辑器中的一行字段：名称在上（可改），值在下；右侧为显示、生成、导入与"⋯"菜单。
 struct DraftFieldRow: View {
     @Binding var field: DraftField
     let sections: [DraftSection]
@@ -522,16 +607,20 @@ struct DraftFieldRow: View {
     @ViewState private var generating = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: KV.Space.s1_5) {
-            HStack(alignment: .firstTextBaseline, spacing: KV.Space.s2) {
-                TextField("名称", text: $field.label)
-                    .frame(width: 130)
-                if !FieldKindInfo.structured(field.kind) {
-                    valueEditor
-                } else {
-                    Spacer()
-                }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: KV.Space.s2) {
+                TextField("字段名称", text: $field.label)
+                    .textFieldStyle(.plain)
+                    .font(KV.Typography.footnote)
+                    .foregroundStyle(KV.Colors.fgSecondary)
+                    .accessibilityLabel("字段名称")
+                Spacer(minLength: 0)
                 fieldMenu
+            }
+            if !FieldKindInfo.structured(field.kind) {
+                HStack(alignment: .top, spacing: KV.Space.s1) {
+                    valueEditor
+                }
             }
             switch field.kind {
             case "kv_list": KvEditor(entries: $field.kv)
@@ -540,6 +629,8 @@ struct DraftFieldRow: View {
             default: FormatHint(kind: field.kind, value: field.value)
             }
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .popover(isPresented: $generating) {
             GeneratorView { field.replace(with: $0) }
         }
@@ -550,47 +641,55 @@ struct DraftFieldRow: View {
         if field.hidesValue {
             Group {
                 if revealed {
-                    TextField("值", text: $field.value).font(KV.Typography.mono)
+                    TextField("", text: $field.value, prompt: DraftFieldRow.prompt("值")).kvInput(mono: true)
                 } else {
-                    SecureField("值", text: $field.value, prompt: Text(field.loaded ? "" : "保持不变"))
+                    SecureField("", text: $field.value, prompt: Self.prompt(field.loaded ? "" : "保持不变")).kvInput()
                 }
             }
-            Button {
+            .accessibilityLabel(field.label)
+            IconButton(systemImage: revealed ? "eye.slash" : "eye", label: revealed ? "隐藏" : "显示") {
                 field.load()
                 revealed.toggle()
-            } label: { Image(systemName: revealed ? "eye.slash" : "eye") }
-                .buttonStyle(.borderless)
-                .accessibilityLabel(revealed ? "隐藏" : "显示")
+            }
+            .padding(.top, 3)
             if field.kind == "concealed" {
-                Button { generating = true } label: { Image(systemName: "wand.and.stars") }
-                    .buttonStyle(.borderless)
-                    .help("生成密码")
-                    .accessibilityLabel("生成密码")
+                IconButton(systemImage: "wand.and.stars", label: "生成密码") { generating = true }
+                    .padding(.top, 3)
             }
             if field.kind == "totp" {
                 OtpImportMenu { text in
                     field.replace(with: text)
                     revealed = true
                 }
+                .padding(.top, 3)
             }
         } else if field.kind == "multiline" {
-            TextField("值", text: $field.value, axis: .vertical)
-                .lineLimit(2...8)
+            TextField("", text: $field.value, prompt: Self.prompt("值"), axis: .vertical)
+                .lineLimit(3...12)
+                .kvInput()
+                .accessibilityLabel(field.label)
         } else {
-            TextField(placeholder, text: $field.value)
+            TextField("", text: $field.value, prompt: Self.prompt(placeholder))
+                .kvInput()
+                .accessibilityLabel(field.label)
         }
+    }
+
+    static func prompt(_ text: String) -> Text {
+        Text(text).foregroundStyle(KV.Colors.fgTertiary)
     }
 
     private var placeholder: String {
         switch field.kind {
         case "date": "例如 2026-11-18"
         case "url": "https://…"
+        case "email": "name@example.com"
         default: "值"
         }
     }
 
     private var fieldMenu: some View {
-        Menu {
+        IconMenu(label: field.isNew ? "字段操作（新字段保存后才能调整位置）" : "字段操作") {
             Button("上移") { move(-1) }.disabled(!canMoveUp)
             Button("下移") { move(1) }.disabled(!canMoveDown)
             if !field.isNew {
@@ -612,12 +711,7 @@ struct DraftFieldRow: View {
             }
             Divider()
             Button("删除字段", role: .destructive, action: remove)
-        } label: {
-            Image(systemName: "ellipsis.circle")
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help(field.isNew ? "新字段保存后才能调整位置" : "字段操作")
     }
 }
 
@@ -685,10 +779,17 @@ struct OtpImportMenu: View {
             Button("扫描屏幕上的二维码…") { Task { await scanScreen() } }
         } label: {
             Image(systemName: "qrcode.viewfinder")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(KV.Colors.accentFg)
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
         .fixedSize()
         .help(message ?? "从二维码导入")
+        .accessibilityLabel("从二维码导入")
         .alert("没有找到一次性密码的二维码", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("好") { message = nil }
         } message: {
@@ -741,25 +842,28 @@ struct KvEditor: View {
         VStack(alignment: .leading, spacing: KV.Space.s1) {
             ForEach($entries) { $entry in
                 HStack(spacing: KV.Space.s2) {
-                    TextField("键", text: $entry.key).font(KV.Typography.mono).frame(width: 160)
+                    TextField("", text: $entry.key, prompt: DraftFieldRow.prompt("KEY")).kvInput(mono: true).frame(width: 180)
                     if entry.concealed {
-                        SecureField("值", text: $entry.value)
+                        SecureField("", text: $entry.value, prompt: DraftFieldRow.prompt("值")).kvInput()
                     } else {
-                        TextField("值", text: $entry.value).font(KV.Typography.mono)
+                        TextField("", text: $entry.value, prompt: DraftFieldRow.prompt("值")).kvInput(mono: true)
                     }
-                    Toggle("隐藏", isOn: $entry.concealed).toggleStyle(.checkbox)
-                    Button { entries.removeAll { $0.id == entry.id } } label: { Image(systemName: "minus.circle") }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel("删除 \(entry.key)")
+                    Toggle("秘密", isOn: $entry.concealed)
+                        .toggleStyle(.checkbox)
+                        .font(KV.Typography.footnote)
+                        .help("秘密的值默认隐藏，复制后自动清除")
+                    IconButton(systemImage: "minus.circle", label: "删除 \(entry.key)") {
+                        entries.removeAll { $0.id == entry.id }
+                    }
                 }
             }
-            HStack {
-                Button("添加一项") { entries.append(DraftKv(key: "", value: "", concealed: true)) }
+            HStack(spacing: KV.Space.s4) {
+                Button { entries.append(DraftKv(key: "", value: "", concealed: true)) } label: { Label("添加一项", systemImage: "plus") }
                 Button("从剪贴板导入 .env") { importEnv() }
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.kvLink)
+            .padding(.top, KV.Space.s1)
         }
-        .padding(.leading, 138)
     }
 
     /// 解析 `KEY=VALUE` 行：忽略空行与 `#` 注释，去掉值两端成对的引号。
@@ -792,15 +896,15 @@ struct CodesEditor: View {
         VStack(alignment: .leading, spacing: KV.Space.s1) {
             ForEach($codes) { $code in
                 HStack(spacing: KV.Space.s2) {
-                    SecureField("恢复码", text: $code.code).font(KV.Typography.mono)
-                    Toggle("已使用", isOn: $code.used).toggleStyle(.checkbox)
-                    Button { codes.removeAll { $0.id == code.id } } label: { Image(systemName: "minus.circle") }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel("删除恢复码")
+                    SecureField("", text: $code.code, prompt: DraftFieldRow.prompt("恢复码")).kvInput(mono: true)
+                    Toggle("已使用", isOn: $code.used).toggleStyle(.checkbox).font(KV.Typography.footnote)
+                    IconButton(systemImage: "minus.circle", label: "删除恢复码") {
+                        codes.removeAll { $0.id == code.id }
+                    }
                 }
             }
-            HStack {
-                Button("添加一个") { codes.append(DraftCode(code: "", used: false)) }
+            HStack(spacing: KV.Space.s4) {
+                Button { codes.append(DraftCode(code: "", used: false)) } label: { Label("添加一个", systemImage: "plus") }
                 Button("从剪贴板导入（每行一个）") {
                     let lines = (NSPasteboard.general.string(forType: .string) ?? "")
                         .split(whereSeparator: \.isNewline)
@@ -809,8 +913,8 @@ struct CodesEditor: View {
                     codes += lines.map { DraftCode(code: $0, used: false) }
                 }
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.kvLink)
+            .padding(.top, KV.Space.s1)
         }
-        .padding(.leading, 138)
     }
 }

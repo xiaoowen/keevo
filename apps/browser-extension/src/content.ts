@@ -159,19 +159,20 @@
 
   // ---- 图标
 
-  function keyGlyph(): SVGSVGElement {
+  /** Keevo 标志中的盾形（与 brand.ts 的 SHIELD_PATH 相同；内容脚本不是模块，不能导入）。 */
+  function shieldGlyph(): SVGSVGElement {
     const ns = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(ns, "svg");
     svg.setAttribute("viewBox", "0 0 20 20");
-    svg.setAttribute("width", "14");
-    svg.setAttribute("height", "14");
+    svg.setAttribute("width", "13");
+    svg.setAttribute("height", "13");
     svg.setAttribute("aria-hidden", "true");
     const path = document.createElementNS(ns, "path");
-    path.setAttribute("fill", "currentColor");
-    path.setAttribute(
-      "d",
-      "M7 3a4 4 0 0 1 3.87 5H18v3h-2v2h-3v-2h-2.13A4 4 0 1 1 7 3Zm0 2.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z",
-    );
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "currentColor");
+    path.setAttribute("stroke-width", "2");
+    path.setAttribute("stroke-linejoin", "round");
+    path.setAttribute("d", "M10 2.6 4.4 4.8v4.4c0 3.6 2.4 6.6 5.6 7.8 3.2-1.2 5.6-4.2 5.6-7.8V4.8L10 2.6Z");
     svg.append(path);
     return svg;
   }
@@ -196,13 +197,14 @@
         "place-items": "center",
         border: "0",
         "border-radius": "6px",
-        background: "#0f766e",
+        // 设计令牌 accent.fill（内容脚本运行在网页中，不能引用 tokens.css）
+        background: "#127F71",
         color: "#ffffff",
         cursor: "pointer",
         "box-shadow": "0 1px 2px rgba(0,0,0,.25)",
       };
       for (const [k, v] of Object.entries(s)) button.style.setProperty(k, v);
-      button.append(keyGlyph());
+      button.append(shieldGlyph());
       // 按下时阻止默认行为，避免输入框失去焦点、图标随之消失
       button.addEventListener("mousedown", (e) => e.preventDefault());
       button.addEventListener("click", (e) => {

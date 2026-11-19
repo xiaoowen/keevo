@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later（附加 App Store 许可，见仓库根目录 LICENSE）
 
-/// 编辑器计算字段移动时使用（apps/macos/Sources/Keevo/ItemEditor.swift）。
+/// 编辑器计算字段移动时使用（apps/macos/Sources/KeevoUI/ItemEditor.swift）。
 public enum Ordering {
     /// 最长严格递增子序列的下标，忽略取值为负的元素（来自其他分区的字段）。
     /// 这些字段的相对顺序没有变，保存时不需要移动。

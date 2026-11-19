@@ -3,7 +3,7 @@
 
 读取 design/tokens/*.json（单一来源），校验 WCAG 对比度，生成：
   - apps/browser-extension/static/tokens.css      浏览器扩展（CSS 自定义属性）
-  - apps/macos/Sources/Keevo/DesignTokens.swift   macOS 应用（随系统外观切换的颜色）
+  - apps/macos/Sources/KeevoUI/DesignTokens.swift   macOS 应用（随系统外观切换的颜色）
   - design/contrast.md                            对比度报告（供评审与审计）
 
 用法：
@@ -25,7 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TOKENS = ROOT / "design" / "tokens"
 OUT_CSS = ROOT / "apps" / "browser-extension" / "static" / "tokens.css"
-OUT_SWIFT = ROOT / "apps" / "macos" / "Sources" / "Keevo" / "DesignTokens.swift"
+OUT_SWIFT = ROOT / "apps" / "macos" / "Sources" / "KeevoUI" / "DesignTokens.swift"
 OUT_REPORT = ROOT / "design" / "contrast.md"
 
 THEMES = ["light", "dark", "light-hc", "dark-hc"]

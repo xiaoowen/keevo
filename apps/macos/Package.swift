@@ -39,11 +39,25 @@ let package = Package(
             path: "Sources/keevo-smoke",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
-        // SwiftUI 空壳应用
+        // 界面（SwiftUI）
+        .target(
+            name: "KeevoUI",
+            dependencies: ["KeevoKit"],
+            path: "Sources/KeevoUI",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        // 应用
         .executableTarget(
             name: "Keevo",
-            dependencies: ["KeevoKit"],
+            dependencies: ["KeevoUI"],
             path: "Sources/Keevo",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        // 界面截图（只在 debug 构建中可用，见 scripts/snapshots.sh）
+        .executableTarget(
+            name: "keevo-snapshots",
+            dependencies: ["KeevoUI", "KeevoKit"],
+            path: "Sources/keevo-snapshots",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

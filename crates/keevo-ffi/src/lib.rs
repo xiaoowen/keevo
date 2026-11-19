@@ -581,6 +581,8 @@ pub struct ItemEntry {
     pub tags: Vec<String>,
     /// 是否在回收站。
     pub trashed: bool,
+    /// 最后修改时间（Unix 毫秒，取各记录时间戳的最大值）。
+    pub updated_ms: u64,
     /// 是否有未解决的并发冲突。
     pub has_conflicts: bool,
 }
@@ -686,6 +688,10 @@ pub struct ItemDetail {
     pub integrity_issues: u32,
     /// 头修订数；大于 1 表示有尚未收敛的并发修改。
     pub head_count: u32,
+    /// 最后修改时间（Unix 毫秒）。
+    pub updated_ms: u64,
+    /// 历史修订数（含已清理内容的修订）。
+    pub revision_count: u32,
 }
 
 /// 一个记录键上的冲突。
@@ -1123,6 +1129,7 @@ impl KeevoVault {
                 favorite: i.overview.favorite,
                 tags: i.overview.tags,
                 trashed: i.overview.trashed_at.is_some(),
+                updated_ms: i.overview.updated.millis(),
                 has_conflicts: i.has_conflicts,
             })
             .collect())
@@ -1243,7 +1250,11 @@ impl KeevoVault {
     /// # Errors
     /// 已锁定或条目不存在（含已永久删除）时返回对应错误。
     pub fn item(&self, item_id: String) -> Result<ItemDetail, KeevoError> {
-        let view = self.vault().item(parse_id(&item_id)?)?;
+        let id = parse_id(&item_id)?;
+        let (view, revisions) = {
+            let vault = self.vault();
+            (vault.item(id)?, vault.revision_count(id)?)
+        };
         let overview = view.doc.overview();
         let conflicts = view
             .conflicts
@@ -1264,6 +1275,8 @@ impl KeevoVault {
             resurrected: view.resurrected,
             integrity_issues: u32::try_from(view.integrity_issues.len()).unwrap_or(u32::MAX),
             head_count: u32::try_from(view.head_count).unwrap_or(u32::MAX),
+            updated_ms: overview.updated.millis(),
+            revision_count: u32::try_from(revisions).unwrap_or(u32::MAX),
         })
     }
 

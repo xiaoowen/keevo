@@ -7,21 +7,48 @@ import SwiftUI
 /// SwiftUIMacros 插件；用别名可以绕开宏，语义与 `@State` 相同。只用 Command Line Tools 也能构建，是有意保留的。
 typealias ViewState<Value> = SwiftUI.State<Value>
 
-@main
-struct KeevoApp: App {
+/// 应用。入口在 `Sources/Keevo/main.swift`：界面代码放在 KeevoUI 库中，调试用的截图程序
+/// （`keevo-snapshots`）也能用同一份代码渲染各个页面。
+public struct KeevoApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @ViewState private var model = AppModel()
 
-    var body: some Scene {
+    public init() {}
+
+    public var body: some Scene {
         WindowGroup("Keevo") {
             RootView().tinted
                 .environment(model)
-                .frame(minWidth: 860, minHeight: 540)
+                .frame(minWidth: 960, minHeight: 600)
         }
+        // 设计稿：没有标题栏与工具栏，各栏自己的顶部区域放搜索与操作
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1200, height: 760)
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("立即锁定") { model.lock() }
                     .keyboardShortcut("l", modifiers: [.command, .shift])
+            }
+            CommandGroup(replacing: .newItem) {
+                let unlocked = model.phase == .unlocked && !model.vaults.isEmpty
+                Button("新建登录") { model.mainRequest = .newItem(NewItemChoice.all[0]) }
+                    .keyboardShortcut("n")
+                    .disabled(!unlocked)
+                Menu("新建") {
+                    ForEach(NewItemChoice.all.dropFirst()) { choice in
+                        Button(choice.name) { model.mainRequest = .newItem(choice) }
+                    }
+                }
+                .disabled(!unlocked)
+                Divider()
+                Button("生成密码…") { model.mainRequest = .generator }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+                    .disabled(model.phase != .unlocked)
+            }
+            CommandGroup(after: .textEditing) {
+                Button("搜索条目") { model.mainRequest = .focusSearch }
+                    .keyboardShortcut("f")
+                    .disabled(model.phase != .unlocked)
             }
         }
         Settings {
@@ -89,6 +116,15 @@ struct RootView: View {
             .frame(maxWidth: 440)
             .padding(.top, KV.Space.s3)
         }
+        // 复制等操作的短暂提示
+        .overlay(alignment: .bottom) {
+            if let toast = model.toast {
+                ToastView(message: toast)
+                    .padding(.bottom, KV.Space.s6)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: KV.Motion.base), value: model.toast)
         .sheet(item: $model.browserDialog) { item in
             switch item {
             case .pairing(let request): PairingConfirmSheet(request: request).interactiveDismissDisabled()

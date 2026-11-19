@@ -5,6 +5,7 @@
 // 点击劫持防护见 guard.ts（docs/security.md §12）。
 // - 菜单只拿到条目概要；凭据由 Service Worker 直接发给发起菜单的那个帧，不经过这里。
 
+import { logoMark, siteIcon } from "./brand.js";
 import { createGuard } from "./guard.js";
 import type { Candidate, MenuInit, MenuRequest, MenuResponse } from "./types.js";
 
@@ -68,7 +69,11 @@ function render(note?: { kind: "info" | "danger"; text: string }): void {
   root.replaceChildren();
   if (!init) return;
   const head = el("div", undefined, "head");
-  head.append(el("span", init.kind === "otp" ? "填入一次性密码到" : "填充到", "label"), el("span", host(init.origin), "site"));
+  head.append(
+    logoMark(16),
+    el("span", init.kind === "otp" ? "Keevo · 一次性密码填入" : "Keevo · 填充到", "label"),
+    el("span", host(init.origin), "site"),
+  );
   root.append(head);
   if (init.message) {
     root.append(el("p", MESSAGES[init.message] ?? MESSAGES.error, "muted"));
@@ -83,15 +88,19 @@ function render(note?: { kind: "info" | "danger"; text: string }): void {
     }
     const items = init.candidates;
     if (items.length === 0) {
-      root.append(el("p", "这个网站没有匹配的登录。", "muted"));
-      root.append(
-        el("p", "Keevo 只在条目中保存的网站上填充。如果这是你常用的网站，网址却对不上，可能是仿冒网站。", "hint"),
+      // 没有匹配时提醒仿冒网站的可能（设计稿"钓鱼网站"）：用警示样式，而不是普通的灰字
+      const warn = el("div", undefined, "banner warning");
+      warn.append(
+        el("strong", "这个网站没有匹配的登录。"),
+        document.createTextNode("Keevo 只在条目中保存的网站上填充。如果这是你常用的网站，网址却对不上，可能是仿冒网站。"),
       );
+      root.append(warn);
     }
     const list = el("div", undefined, "list");
     list.setAttribute("role", "listbox");
     items.forEach((c) => list.append(row(c)));
     root.append(list);
+    if (items.length > 0) root.append(el("p", "↑↓ 选择 · ↩ 填充 · Esc 关闭", "keys"));
   }
   if (note) root.append(el("p", note.text, `banner ${note.kind}`));
   updateReady();
@@ -106,7 +115,12 @@ function row(c: Candidate): HTMLElement {
   b.disabled = busy;
   const text = el("span", undefined, "text");
   text.append(el("span", c.title, "title"), el("span", c.subtitle, "subtitle"));
-  b.append(text);
+  b.append(siteIcon(c.title, init?.origin ?? ""), text);
+  if (pendingConfirm !== c.item_id) {
+    const enter = el("span", "↩", "enter");
+    enter.setAttribute("aria-hidden", "true");
+    b.append(enter);
+  }
   if (pendingConfirm === c.item_id) b.append(el("span", "再次点击确认", "confirm"));
   b.addEventListener("click", (e) => {
     if (!guard.check(e) || busy) return;

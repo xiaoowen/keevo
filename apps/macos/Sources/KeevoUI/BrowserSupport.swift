@@ -156,7 +156,33 @@ final class BrowserPromptBridge: BrowserPrompt, @unchecked Sendable {
     }
 }
 
+/// 浏览器确认对话框中的条目（图标、标题、用户名）。
+private struct PromptItemRow: View {
+    let title: String
+    let username: String
+    let url: String?
+
+    var body: some View {
+        HStack(spacing: KV.Space.s3) {
+            SiteIcon(title: title, url: url, size: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title.isEmpty ? "（无标题）" : title)
+                    .font(KV.Typography.bodyStrong)
+                    .foregroundStyle(KV.Colors.fgPrimary)
+                if !username.isEmpty {
+                    Text(username).font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 /// 配对确认：比对两边显示的短认证串（spec/ipc.md §4.2）。
+/// 浏览器确认对话框都没有默认按钮、两个按钮同等样式：回车不会误放行，界面也不引导用户点"允许"。
 struct PairingConfirmSheet: View {
     @Environment(AppModel.self) private var model
     let request: PairingRequest
@@ -164,26 +190,31 @@ struct PairingConfirmSheet: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let left = max(0, Int(request.deadline.timeIntervalSince(context.date).rounded(.up)))
-            VStack(alignment: .leading, spacing: 16) {
-                Label("浏览器请求配对", systemImage: "puzzlepiece.extension")
-                    .font(.title3.weight(.semibold))
-                Text("「\(request.name)」（\(browserName(request.browser))）请求连接 Keevo。请逐个确认扩展弹窗中的 6 个词与下面完全一致，顺序也要相同。")
-                    .fixedSize(horizontal: false, vertical: true)
-                PairingCode(words: request.words)
-                Text("如果不一致，或者你没有在扩展中发起配对，请选择「不一致」。配对后，这个扩展可以在你授权的网站上取用密码。")
-                    .font(KV.Typography.footnote)
-                    .foregroundStyle(KV.Colors.fgSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    Text("\(left) 秒后自动拒绝").font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgTertiary)
-                    Spacer()
-                    Button("不一致") { answer(false) }
-                        .keyboardShortcut(.cancelAction)
-                    Button("一致，确认配对") { answer(true) }
+            SheetScaffold(
+                title: "浏览器请求配对",
+                subtitle: "「\(request.name)」（\(browserName(request.browser))）请求连接 Keevo。",
+                systemImage: "puzzlepiece.extension",
+                width: 500,
+                note: "\(left) 秒后自动拒绝"
+            ) {
+                VStack(alignment: .leading, spacing: KV.Space.s3) {
+                    Text("请逐个确认扩展弹窗中的 6 个词与下面完全一致，顺序也要相同。")
+                        .font(KV.Typography.body)
+                        .foregroundStyle(KV.Colors.fgPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    PairingCode(words: request.words)
+                    Text("如果不一致，或者你没有在扩展中发起配对，请选择「不一致」。配对后，这个扩展可以在你授权的网站上取用密码。")
+                        .font(KV.Typography.footnote)
+                        .foregroundStyle(KV.Colors.fgSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+            } footer: {
+                Button("不一致") { answer(false) }
+                    .buttonStyle(.kvSecondary)
+                    .keyboardShortcut(.cancelAction)
+                Button("一致，确认配对") { answer(true) }
+                    .buttonStyle(.kvSecondary)
             }
-            .padding(24)
-            .frame(width: 480)
             .onChange(of: left) { if left == 0, model.browserDialog?.id == request.id { model.browserDialog = nil } }
         }
     }
@@ -205,51 +236,54 @@ struct FillAuthorizationSheet: View {
 
     /// 站点的主机部分，作为最醒目的一行：用户据此判断是不是自己正在访问的网站。
     private var host: String {
-        let rest = r.site.split(separator: "://", maxSplits: 1).last.map(String.init) ?? r.site
-        return rest
+        r.site.split(separator: "://", maxSplits: 1).last.map(String.init) ?? r.site
     }
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let left = max(0, Int(request.deadline.timeIntervalSince(context.date).rounded(.up)))
-            VStack(alignment: .leading, spacing: 16) {
-                Label("允许扩展在这个网站上填充？", systemImage: "key.viewfinder")
-                    .font(.title3.weight(.semibold))
-                Text("「\(r.pairingName)」（\(browserName(r.browser))）请求在下面这个网站上填充登录信息：")
-                    .fixedSize(horizontal: false, vertical: true)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(host).font(.title2.weight(.semibold)).textSelection(.enabled)
-                    Text(r.site).font(.callout.monospaced()).foregroundStyle(KV.Colors.fgSecondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(KV.Space.s4)
-                .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: KV.Radius.md))
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("网站 \(r.site)")
-                Label {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(r.title.isEmpty ? "（无标题）" : r.title)
-                        if !r.username.isEmpty {
-                            Text(r.username).font(.callout).foregroundStyle(KV.Colors.fgSecondary)
+            SheetScaffold(
+                title: "允许扩展在这个网站上填充？",
+                subtitle: "「\(r.pairingName)」（\(browserName(r.browser))）请求在下面这个网站上填充登录信息。",
+                systemImage: "key.viewfinder",
+                width: 500,
+                note: "\(left) 秒后自动拒绝"
+            ) {
+                VStack(alignment: .leading, spacing: KV.Space.s3) {
+                    KVCard {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("网站")
+                                .font(KV.Typography.caption)
+                                .foregroundStyle(KV.Colors.fgSecondary)
+                            Text(host)
+                                .font(KV.Typography.title)
+                                .foregroundStyle(KV.Colors.fgPrimary)
+                                .textSelection(.enabled)
+                            Text(r.site)
+                                .font(KV.Typography.mono)
+                                .foregroundStyle(KV.Colors.fgSecondary)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(KV.Colors.bgSurface)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("网站 \(r.site)")
+                        CardRowDivider()
+                        PromptItemRow(title: r.title, username: r.username, url: r.site)
                     }
-                } icon: {
-                    Image(systemName: "person.badge.key")
+                    Text("这是这个扩展第一次在这个网站上使用这个条目。允许后不再询问，可在「设置 → 浏览器」中撤销。如果你没有在浏览器中点击填充，或者网站不是你正在访问的那个，请选择「拒绝」。")
+                        .font(KV.Typography.footnote)
+                        .foregroundStyle(KV.Colors.fgSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("这是这个扩展第一次在这个网站上使用这个条目。允许后不再询问，可在「设置 → 浏览器」中撤销。如果你没有在浏览器中点击填充，或者网站不是你正在访问的那个，请选择「拒绝」。")
-                    .font(KV.Typography.footnote)
-                    .foregroundStyle(KV.Colors.fgSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    Text("\(left) 秒后自动拒绝").font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgTertiary)
-                    Spacer()
-                    Button("拒绝") { answer(false) }
-                        .keyboardShortcut(.cancelAction)
-                    Button("允许") { answer(true) }
-                }
+            } footer: {
+                Button("拒绝") { answer(false) }
+                    .buttonStyle(.kvSecondary)
+                    .keyboardShortcut(.cancelAction)
+                Button("允许") { answer(true) }
+                    .buttonStyle(.kvSecondary)
             }
-            .padding(24)
-            .frame(width: 480)
             .onChange(of: left) { if left == 0, model.browserDialog?.id == request.id { model.browserDialog = nil } }
         }
     }
@@ -270,41 +304,32 @@ struct UpdateConfirmationSheet: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let left = max(0, Int(request.deadline.timeIntervalSince(context.date).rounded(.up)))
-            VStack(alignment: .leading, spacing: 16) {
-                Label("更新这个登录的密码？", systemImage: "key.horizontal")
-                    .font(.title3.weight(.semibold))
-                Text("「\(r.pairingName)」（\(browserName(r.browser))）在 \(r.site) 上提交了新密码，请求更新：")
-                    .fixedSize(horizontal: false, vertical: true)
-                Label {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(r.title.isEmpty ? "（无标题）" : r.title)
-                        if !r.username.isEmpty {
-                            Text(r.username).font(.callout).foregroundStyle(KV.Colors.fgSecondary)
-                        }
+            SheetScaffold(
+                title: "更新这个登录的密码？",
+                subtitle: "「\(r.pairingName)」（\(browserName(r.browser))）在 \(r.site) 上提交了新密码。",
+                systemImage: "key.horizontal",
+                width: 500,
+                note: "\(left) 秒后自动拒绝"
+            ) {
+                VStack(alignment: .leading, spacing: KV.Space.s3) {
+                    KVCard {
+                        PromptItemRow(title: r.title, username: r.username, url: r.site)
                     }
-                } icon: {
-                    Image(systemName: "person.badge.key")
+                    if !request.changed {
+                        Banner(kind: .info, message: "新密码与保存的相同，确认后不会有任何改动。")
+                    }
+                    Text("旧密码会保留在这个条目的历史中，可以随时恢复。如果你没有在这个网站上修改密码，请选择「不更新」。")
+                        .font(KV.Typography.footnote)
+                        .foregroundStyle(KV.Colors.fgSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(KV.Space.s3)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: KV.Radius.md))
-                if !request.changed {
-                    Banner(kind: .info, message: "新密码与保存的相同，确认后不会有任何改动。")
-                }
-                Text("旧密码会保留在这个条目的历史中，可以随时恢复。如果你没有在这个网站上修改密码，请选择「不更新」。")
-                    .font(KV.Typography.footnote)
-                    .foregroundStyle(KV.Colors.fgSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    Text("\(left) 秒后自动拒绝").font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgTertiary)
-                    Spacer()
-                    Button("不更新") { answer(false) }
-                        .keyboardShortcut(.cancelAction)
-                    Button("更新密码") { answer(true) }
-                }
+            } footer: {
+                Button("不更新") { answer(false) }
+                    .buttonStyle(.kvSecondary)
+                    .keyboardShortcut(.cancelAction)
+                Button("更新密码") { answer(true) }
+                    .buttonStyle(.kvSecondary)
             }
-            .padding(24)
-            .frame(width: 480)
             .onChange(of: left) { if left == 0, model.browserDialog?.id == request.id { model.browserDialog = nil } }
         }
     }
@@ -387,71 +412,101 @@ struct BrowserSettings: View {
     @ViewState private var installed = NativeHostManifest.installed
 
     var body: some View {
-        Form {
-            Section("Chrome") {
-                LabeledContent("连接 Keevo 扩展") {
+        VStack(alignment: .leading, spacing: KV.Space.s5) {
+            SettingsSection(
+                title: "Chrome",
+                footer: "扩展第一次连接时，需要在 Keevo 中核对 6 个词并确认配对。"
+            ) {
+                SettingsRow(title: "连接 Keevo 扩展", detail: "Chrome 中的 Keevo 扩展通过本机的安全通道连接 Keevo，不经过网络。") {
                     if installed {
-                        HStack {
-                            Label("已安装", systemImage: "checkmark.circle.fill").foregroundStyle(KV.Colors.statusSuccessFg)
+                        HStack(spacing: KV.Space.s2) {
+                            Label("已安装", systemImage: "checkmark.circle.fill")
+                                .font(KV.Typography.footnote.weight(.semibold))
+                                .foregroundStyle(KV.Colors.statusSuccessFg)
                             Button("卸载") { run { try NativeHostManifest.uninstall() } }
+                                .buttonStyle(.kvBordered)
                         }
                     } else {
                         Button("安装") { run { try NativeHostManifest.install() } }
+                            .buttonStyle(KVButtonStyle(kind: .primary, compact: true))
                     }
                 }
-                if let installMessage {
-                    Text(installMessage).font(.callout).foregroundStyle(KV.Colors.statusDangerFg)
-                }
-                if let error = model.browserServiceError {
-                    Text("浏览器服务没有启动：\(error)").font(.callout).foregroundStyle(KV.Colors.statusWarningFg)
-                }
-                Text("安装后，Chrome 中的 Keevo 扩展可以通过本机的安全通道连接 Keevo。扩展第一次连接时需要在这里确认配对。")
-                    .font(.callout).foregroundStyle(.secondary)
             }
-            Section("已配对的扩展") {
+            if let installMessage {
+                Banner(kind: .danger, message: installMessage)
+            }
+            if let error = model.browserServiceError {
+                Banner(kind: .warning, message: "浏览器服务没有启动：\(error)")
+            }
+            SettingsSection(title: "已配对的扩展") {
                 if model.phase != .unlocked {
-                    Text("解锁 Keevo 之后才能查看。").foregroundStyle(.secondary)
+                    SettingsRow(title: "解锁 Keevo 之后才能查看。") { EmptyView() }
                 } else if model.browserPairings.isEmpty {
-                    Text("还没有配对的扩展。").foregroundStyle(.secondary)
+                    SettingsRow(title: "还没有配对的扩展", detail: "在 Chrome 的 Keevo 扩展中点「连接 Keevo」开始配对。") { EmptyView() }
                 } else {
-                    ForEach(model.browserPairings, id: \.id) { p in
-                        VStack(alignment: .leading, spacing: KV.Space.s2) {
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(p.name.isEmpty ? "（未命名）" : p.name)
-                                    Text("\(browserName(p.browser)) · 配对于 \(Date(timeIntervalSince1970: TimeInterval(p.pairedAtMs) / 1000).formatted(date: .abbreviated, time: .shortened))")
-                                        .font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if p.paused {
-                                    Label("已暂停", systemImage: "pause.circle.fill")
-                                        .foregroundStyle(KV.Colors.statusWarningFg)
-                                    Button("恢复") { model.resumeBrowserPairing(id: p.id) }
-                                }
-                                Button("解除配对…") { revoking = p }
-                            }
-                            AuthorizationList(pairing: p)
-                        }
+                    ForEach(Array(model.browserPairings.enumerated()), id: \.element.id) { index, p in
+                        if index > 0 { CardRowDivider() }
+                        pairingRow(p)
                     }
                 }
-                if model.pendingRevocationWarning {
-                    Banner(kind: .warning, message: "有撤销没能写入数据库，重启 Keevo 后可能失效。下次解锁时会自动重试。")
-                }
-                if model.authorizationRevokeWarning {
-                    Banner(kind: .warning, message: "撤销授权没能写入数据库，重启 Keevo 后这项授权可能恢复。请稍后再试一次。")
-                }
+            }
+            if model.pendingRevocationWarning {
+                Banner(kind: .warning, message: "有撤销没能写入数据库，重启 Keevo 后可能失效。下次解锁时会自动重试。")
+            }
+            if model.authorizationRevokeWarning {
+                Banner(kind: .warning, message: "撤销授权没能写入数据库，重启 Keevo 后这项授权可能恢复。请稍后再试一次。")
             }
         }
-        .formStyle(.grouped)
-        .padding()
         .onAppear { model.refreshBrowserPairings() }
         .sheet(item: Binding(get: { revoking.map(RevokeItem.init) }, set: { if $0 == nil { revoking = nil } })) { item in
             ReverifySheet(
                 title: "解除「\(item.pairing.name)」的配对",
-                message: "解除后，这个扩展立即断开，不能再取用任何密码。请先确认是你本人。"
+                message: "解除后，这个扩展立即断开，不能再取用任何密码。请先确认是你本人。",
+                confirmTitle: "解除配对",
+                destructive: true
             ) { password in
                 await model.revokeBrowserPairing(id: item.pairing.id, password: password)
             }
+        }
+    }
+
+    private func pairingRow(_ p: BrowserPairing) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: KV.Space.s3) {
+                Image(systemName: "puzzlepiece.extension.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(KV.Colors.accentFg)
+                    .frame(width: 32, height: 32)
+                    .background(KV.Colors.accentSubtle, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: KV.Space.s2) {
+                        Text(p.name.isEmpty ? "（未命名）" : p.name)
+                            .font(KV.Typography.bodyStrong)
+                            .foregroundStyle(KV.Colors.fgPrimary)
+                        if p.paused {
+                            Text("已暂停")
+                                .font(KV.Typography.caption.weight(.semibold))
+                                .foregroundStyle(KV.Colors.statusWarningFg)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                .background(KV.Colors.statusWarningBg, in: Capsule())
+                        }
+                    }
+                    Text("\(browserName(p.browser)) · 配对于 \(Date(timeIntervalSince1970: TimeInterval(p.pairedAtMs) / 1000).formatted(date: .abbreviated, time: .shortened))")
+                        .font(KV.Typography.footnote)
+                        .foregroundStyle(KV.Colors.fgSecondary)
+                }
+                Spacer(minLength: KV.Space.s2)
+                if p.paused {
+                    Button("恢复") { model.resumeBrowserPairing(id: p.id) }
+                        .buttonStyle(.kvBordered)
+                }
+                Button("解除配对…") { revoking = p }
+                    .buttonStyle(.kvBordered)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            AuthorizationList(pairing: p)
         }
     }
 
@@ -474,26 +529,50 @@ struct BrowserSettings: View {
 private struct AuthorizationList: View {
     @Environment(AppModel.self) private var model
     let pairing: BrowserPairing
+    @ViewState private var expanded = false
 
     var body: some View {
         let items = model.browserAuthorizations[pairing.id] ?? []
         if !items.isEmpty {
-            DisclosureGroup("已授权的网站（\(items.count)）") {
-                ForEach(items, id: \.key) { a in
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(a.title ?? "（条目已删除）")
-                            Text("\(a.site) · \(Date(timeIntervalSince1970: TimeInterval(a.grantedAtMs) / 1000).formatted(date: .abbreviated, time: .shortened))")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("撤销") {
-                            model.revokeBrowserAuthorization(pairingId: pairing.id, itemId: a.itemId, site: a.site)
-                        }
+            VStack(alignment: .leading, spacing: 0) {
+                Button { withAnimation(.easeOut(duration: 0.15)) { expanded.toggle() } } label: {
+                    HStack(spacing: KV.Space.s1) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .bold))
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                        Text("已授权的网站（\(items.count)）")
                     }
+                    .font(KV.Typography.footnote.weight(.semibold))
+                    .foregroundStyle(KV.Colors.fgSecondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 58)
+                .padding(.bottom, KV.Space.s2)
+                .accessibilityValue(expanded ? "已展开" : "已收起")
+                if expanded {
+                    ForEach(items, id: \.key) { a in
+                        HStack(spacing: KV.Space.s2) {
+                            SiteIcon(title: a.title ?? a.site, url: a.site, size: 20)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(a.title ?? "（条目已删除）").font(KV.Typography.body)
+                                Text("\(a.site) · \(Date(timeIntervalSince1970: TimeInterval(a.grantedAtMs) / 1000).formatted(date: .abbreviated, time: .shortened))")
+                                    .font(KV.Typography.caption)
+                                    .foregroundStyle(KV.Colors.fgSecondary)
+                            }
+                            Spacer()
+                            Button("撤销") {
+                                model.revokeBrowserAuthorization(pairingId: pairing.id, itemId: a.itemId, site: a.site)
+                            }
+                            .buttonStyle(.kvLink)
+                        }
+                        .padding(.leading, 58)
+                        .padding(.trailing, 14)
+                        .padding(.vertical, 5)
+                    }
+                    Spacer().frame(height: KV.Space.s2)
                 }
             }
-            .font(.callout)
         }
     }
 }
@@ -509,35 +588,48 @@ struct ReverifySheet: View {
     @Environment(\.dismiss) private var dismiss
     let title: String
     let message: String
+    var confirmTitle = "确认"
+    var destructive = false
     let action: (String?) async -> Bool
     @ViewState private var password = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(title).font(.title3.weight(.semibold))
-            Text(message).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if model.touchIDUsable {
-                Button {
-                    Task { if await action(nil) { dismiss() } }
-                } label: {
-                    Label("用 Touch ID 确认", systemImage: "touchid")
+        SheetScaffold(
+            title: title,
+            subtitle: message,
+            systemImage: "person.badge.shield.checkmark",
+            tint: destructive ? KV.Colors.statusDangerFg : KV.Colors.accentFg,
+            width: 440
+        ) {
+            VStack(alignment: .leading, spacing: KV.Space.s3) {
+                if model.touchIDUsable {
+                    Button {
+                        Task { if await action(nil) { dismiss() } }
+                    } label: {
+                        Label("用 Touch ID 确认", systemImage: "touchid")
+                    }
+                    .buttonStyle(KVButtonStyle(kind: .secondary, fullWidth: true))
+                    .disabled(model.busy)
+                    TextDivider(text: "或输入主密码")
                 }
-                .disabled(model.busy)
-                Text("或者输入主密码：").font(.callout).foregroundStyle(.secondary)
+                LabeledInput(label: "主密码") {
+                    SecureField("", text: $password).onSubmit(confirm)
+                }
+                ErrorText()
             }
-            SecureField("主密码", text: $password).frame(width: 320)
-            ErrorText()
-            HStack {
-                Spacer()
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("确认") {
-                    Task { if await action(password) { dismiss() } }
-                }
+        } footer: {
+            Button("取消") { dismiss() }
+                .buttonStyle(.kvSecondary)
+                .keyboardShortcut(.cancelAction)
+            Button(confirmTitle, action: confirm)
+                .buttonStyle(KVButtonStyle(kind: destructive ? .danger : .primary))
                 .keyboardShortcut(.defaultAction)
                 .disabled(password.isEmpty || model.busy)
-            }
         }
-        .padding(24)
-        .frame(width: 460)
+    }
+
+    private func confirm() {
+        guard !password.isEmpty, !model.busy else { return }
+        Task { if await action(password) { dismiss() } }
     }
 }
