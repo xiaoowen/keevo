@@ -171,3 +171,18 @@ public extension LocalEnvironment {
         return String(cString: buffer)
     }
 }
+
+public extension KeevoVault {
+    /// 此时不能用 Touch ID 的原因；为 `nil` 时可以用 Touch ID 解锁（docs/ux.md §3.2）。读取失败时保守地按
+    /// "重启之后"处理。
+    ///
+    /// 不要写成 `(try? passwordReason()) ?? .restarted`：`try?` 会把可选值压平，"可以用 Touch ID"（`nil`）
+    /// 也会被替换成 `.restarted`，Touch ID 就永远不可用。
+    func touchIDBlocker() -> PasswordReasonKind? {
+        do {
+            return try passwordReason()
+        } catch {
+            return .restarted
+        }
+    }
+}

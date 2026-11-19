@@ -283,6 +283,18 @@ do {
     check(vault.hasLocalSecretKey(), "重新登记后补登账户密钥")
 }
 
+// 启用 Touch ID 之后锁定：不需要先输入主密码，可以直接用 Touch ID 解锁（只检查状态，不弹出提示）。
+// 回归：界面曾写成 `(try? passwordReason()) ?? .restarted`，把"可以用"（nil）也当成"重启之后"
+do {
+    let db3 = dir.appendingPathComponent("vault3.sqlite").path
+    let local3 = dir.appendingPathComponent("local3").path
+    let created = try createAccount(path: db3, password: password, local: .thisMac(localDir: local3, enclave: enclave))
+    try created.vault.enableTouchId(password: password)
+    created.vault.lock()
+    check(created.vault.touchIdEnabled(), "启用 Touch ID（不弹出提示）")
+    check(created.vault.touchIDBlocker() == nil, "启用后锁定：可以直接用 Touch ID 解锁，不要求先输入主密码")
+}
+
 if failures > 0 {
     print("失败 \(failures) 项")
     exit(1)

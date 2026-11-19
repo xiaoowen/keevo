@@ -402,7 +402,7 @@ final class AppModel {
         guard let vault else { return }
         needsSecretKey = !vault.hasLocalSecretKey()
         touchIDEnabled = vault.touchIdEnabled()
-        passwordReason = (try? vault.passwordReason()) ?? .restarted
+        passwordReason = vault.touchIDBlocker()
         passwordIntervalDays = (try? vault.passwordIntervalDays()) ?? 14
     }
 

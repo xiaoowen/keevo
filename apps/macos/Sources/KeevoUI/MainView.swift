@@ -623,7 +623,8 @@ struct NewItemSheet: View {
 
     var body: some View {
         SheetScaffold(
-            title: "新建\(choice.name)",
+            // 中文与拉丁字母之间加空格："新建 SSH 密钥"
+            title: "新建" + (choice.name.first?.isASCII == true ? " " : "") + choice.name,
             subtitle: "先起个名字，然后在详情中填写其余内容。",
             systemImage: choice.symbol,
             width: 440

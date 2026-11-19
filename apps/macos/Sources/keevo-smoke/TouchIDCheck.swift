@@ -74,7 +74,7 @@ private func checkPrompts() throws -> Step {
 
     let r2 = attempt(2, "请点「取消」")
     step.expect(r2 == "\(KeevoError.Cancelled)", "取消：什么都不改变", detail: enclave.lastFailureDescription ?? r2)
-    step.expect(vault.touchIdEnabled() && (try? vault.passwordReason()) == .some(nil), "取消后 Touch ID 仍可用")
+    step.expect(vault.touchIdEnabled() && vault.touchIDBlocker() == nil, "取消后 Touch ID 仍可用")
 
     let r3 = attempt(3, "请用没有登记的手指（或指关节）按，直到提示消失")
     step.expect(
@@ -85,7 +85,7 @@ private func checkPrompts() throws -> Step {
 
     let r4 = attempt(4, "请用已登记的手指验证")
     step.expect(r4 == "成功", "再次用已登记的手指：解锁", detail: r4)
-    step.expect((try? vault.passwordReason()) == .some(nil), "成功后失败次数清零")
+    step.expect(vault.touchIDBlocker() == nil, "成功后失败次数清零")
     return step
 }
 
@@ -135,7 +135,7 @@ private func checkFingerprintChange(phase: String, dir: URL) throws -> Step {
         r == "\(KeevoError.TouchIdUnavailable)", "指纹变化后：Touch ID 失效",
         detail: "\(r)；\(enclave.lastFailureDescription ?? "无原始错误")"
     )
-    step.expect((try? vault.passwordReason()) == .some(.invalidated), "解锁界面说明原因：Touch ID 已失效")
+    step.expect(vault.touchIDBlocker() == .invalidated, "解锁界面说明原因：Touch ID 已失效")
     let p = outcome { try vault.unlockWithPassword(password: checkPassword) }
     step.expect(p == "成功" && vault.touchIdEnabled(), "主密码解锁后自动重新包裹", detail: p)
     vault.lock()
