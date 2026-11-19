@@ -12,6 +12,7 @@ publish.workspace = true
 keevo-crypto = { path = "../keevo-crypto" }
 keevo-format = { path = "../keevo-format" }
 keevo-store = { path = "../keevo-store" }
+unicode-normalization = "0.1"
 url = "2"
 zeroize = "1"
 

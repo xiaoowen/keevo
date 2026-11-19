@@ -8,6 +8,8 @@ pub mod generator;
 pub mod local;
 pub mod otp;
 pub mod search;
+pub mod secret_ref;
+pub mod ssh_agent;
 pub mod templates;
 pub mod url_match;
 mod vault;

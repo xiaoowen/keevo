@@ -20,6 +20,7 @@
 //! - [`seal`] / [`open`]：加密信封；[`SymmetricKey::wrap_key`] / [`SymmetricKey::unwrap_key`]：密钥包裹。
 //! - [`Handshake`] / [`Transport`]：本地 IPC 的 Noise 握手与传输加密（`spec/ipc.md`）。
 
+mod ed25519;
 mod envelope;
 mod error;
 mod hkdf;
@@ -43,6 +44,9 @@ mod kat;
 #[cfg(test)]
 mod vectors;
 
+pub use ed25519::{
+    ED25519_PUBLIC_LEN, ED25519_SEED_LEN, ED25519_SIGNATURE_LEN, Ed25519SigningKey, ed25519_verify,
+};
 pub use envelope::{
     AAD_LEN, AadContext, HEADER_LEN, MAX_ENVELOPE_LEN, MAX_PLAINTEXT_LEN, MIN_ENVELOPE_LEN,
     ObjectType, Part, envelope_key_id, open, seal,
@@ -63,6 +67,12 @@ pub use noise::{
     pairing_nonce,
 };
 pub use random::random_below;
+
+/// SHA-256。只用于非秘密值（例如 SSH 公钥指纹，`spec/ssh-agent.md` §3）。
+#[must_use]
+pub fn sha256(data: &[u8]) -> [u8; 32] {
+    hkdf::sha256(&[data])
+}
 pub use secret_key::AccountSecretKey;
 pub use totp::{MAX_OTP_SECRET_LEN, OTP_DIGITS, OtpAlgorithm, OtpKey};
 pub use two_skd::{MAX_PASSWORD_LEN, derive_account_unlock_key};

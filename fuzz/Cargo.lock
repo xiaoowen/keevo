@@ -567,6 +567,7 @@ dependencies = [
  "keevo-crypto",
  "keevo-format",
  "keevo-store",
+ "unicode-normalization",
  "url",
  "zeroize",
 ]
@@ -607,6 +608,7 @@ dependencies = [
  "keevo-crypto",
  "keevo-format",
  "keevo-ipc",
+ "keevo-ssh",
  "libfuzzer-sys",
 ]
 
@@ -618,6 +620,15 @@ dependencies = [
  "keevo-crypto",
  "serde",
  "serde_json",
+ "zeroize",
+]
+
+[[package]]
+name = "keevo-ssh"
+version = "0.0.0"
+dependencies = [
+ "base64",
+ "keevo-crypto",
  "zeroize",
 ]
 

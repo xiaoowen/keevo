@@ -165,6 +165,8 @@ pub enum Edit {
     },
     /// 删除分区：其中的字段依次移到默认分区的末尾，不会被删除。
     RemoveSection(Id128),
+    /// 设置 SSH Agent 的授权策略（`ssh_key` 条目的属性 `ssh_agent`）；`None` 表示不在 Agent 中提供。
+    SetSshAgent(Option<crate::ssh_agent::AgentPolicy>),
 }
 
 /// 保险库信息。
@@ -1764,6 +1766,18 @@ fn apply(doc: &mut ItemDoc, edit: Edit, hlc: Hlc, rev: Id128) -> Result<()> {
             doc.set(RecordKey::attr("favorite"), RecordValue::Bool(f), hlc, rev)?
         }
         Edit::AddTag(t) => doc.set(RecordKey::Tag(t), RecordValue::Tag, hlc, rev)?,
+        Edit::SetSshAgent(Some(policy)) => doc.set(
+            RecordKey::attr(crate::ssh_agent::ATTRIBUTE),
+            RecordValue::Text(policy.as_str().into()),
+            hlc,
+            rev,
+        )?,
+        Edit::SetSshAgent(None) => {
+            let key = RecordKey::attr(crate::ssh_agent::ATTRIBUTE);
+            if doc.get(&key).is_some() {
+                doc.delete(key, hlc, rev)?;
+            }
+        }
         Edit::RemoveTag(t) => doc.delete(RecordKey::Tag(t), hlc, rev)?,
         Edit::AddField(field) => {
             let order = order_at(doc, None, None, hlc, rev)?;

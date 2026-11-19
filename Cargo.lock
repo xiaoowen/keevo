@@ -796,6 +796,7 @@ dependencies = [
  "keevo-format",
  "keevo-store",
  "rusqlite",
+ "unicode-normalization",
  "url",
  "zeroize",
 ]
@@ -884,8 +885,19 @@ dependencies = [
  "keevo-crypto",
  "keevo-ipc",
  "keevo-macos",
+ "keevo-ssh",
  "serde",
  "serde_json",
+ "zeroize",
+]
+
+[[package]]
+name = "keevo-ssh"
+version = "0.0.0"
+dependencies = [
+ "base64",
+ "hex",
+ "keevo-crypto",
  "zeroize",
 ]
 

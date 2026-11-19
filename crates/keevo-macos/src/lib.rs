@@ -1,13 +1,17 @@
-//! macOS 平台集成：进程代码签名校验（`spec/ipc.md` §3）。
+//! macOS 平台集成：进程代码签名校验（`spec/ipc.md` §3）与进程表的只读查询。
 //!
 //! - Vault Service 用 [`verify_socket_peer`] 校验 Unix socket 对端（native host、CLI）。
 //! - native host 用 [`verify_pid`] 校验父进程是否为已知浏览器。
+//! - [`process`]：识别 CLI 与 SSH 请求的来源（`spec/cli.md` §5、`spec/ssh-agent.md` §4.2）。
 //!
 //! 校验基于内核提供的 audit token 或 pid，再由 Security.framework 按代码签名要求
 //! （Code Signing Requirement Language）判定。整个 workspace 只有本 crate 允许 `unsafe`，
-//! 且仅限 [`peer_audit_token`] 中一次 `getsockopt` 调用。
+//! 且仅限四个只读系统调用：`getsockopt(LOCAL_PEERTOKEN)`、`proc_pidinfo`、`proc_pidpath`、
+//! `sysctl(KERN_PROCARGS2)`，结果都写入调用方拥有的缓冲区。
 
 #![cfg_attr(not(target_os = "macos"), allow(unused))]
+
+pub mod process;
 
 use core::fmt;
 

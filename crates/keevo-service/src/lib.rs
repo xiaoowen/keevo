@@ -6,8 +6,15 @@
 //! 3. 把状态机的后端接口接到 [`keevo_core::Vault`] 上，按网址匹配规则提供候选与填充数据。
 //!
 //! M0 由开发服务 `keevo-dev-service` 使用；M1 由 Keevo.app 经 FFI 启动。
+//!
+//! M1.4 起还提供命令行工具的服务（[`cli`]，`spec/cli.md`）与 SSH Agent（[`agent`]，`spec/ssh-agent.md`），
+//! 两者共用 [`developer::Developer`]（原生确认界面、等待解锁、按会话授权）。
 
+pub mod agent;
 mod backend;
+pub mod cli;
+pub mod developer;
+pub mod origin;
 mod pairing;
 mod server;
 mod write;

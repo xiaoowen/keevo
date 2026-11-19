@@ -1,10 +1,10 @@
 # Keevo 本地通信协议（IPC）
 
-- **版本**：2.1
+- **版本**：2.2
 - **状态**：
   - **协议 v1 已冻结**（2026-11-18，经四轮模型评审，[处理记录](../docs/reviews/)）：§2–§5.4 定义的全部内容，范围与版本规则见 [README.md](README.md)。
   - **协议 v2**（§5.5，2026-11-19）= v1 的全部内容 + `save` 与 `update`。M1.3 新增，**尚未冻结**，评审后冻结。
-  - CLI 会话授权不在 v1 与 v2 中。
+  - CLI 使用单独的 socket 与协议（[cli.md](cli.md)），不在本规范中。
 - **参考实现**：
   - `crates/keevo-crypto` 的 `noise` 模块（Noise 握手与传输加密）
   - `crates/keevo-ipc`（分帧、消息、配对与会话）
@@ -13,9 +13,8 @@
 ## 1. 范围与拓扑
 
 ```
-Chrome 扩展 ──Native Messaging(stdio)──▶ keevo-native-host ──Unix socket──▶ Vault Service（Keevo.app）
-                                                                        ▲
-keevo CLI ─────────────────────────────────Unix socket──────────────────┘
+Chrome 扩展 ──Native Messaging(stdio)──▶ keevo-native-host ──Unix socket（keevo.sock）──▶ Vault Service（Keevo.app）
+keevo CLI ──────────────────────────────────────────────Unix socket（cli.sock）──────▶ （同上，见 cli.md）
 ```
 
 本规范定义：
@@ -25,7 +24,7 @@ keevo CLI ───────────────────────�
 3. 扩展与 Vault Service 之间的端到端加密：配对与会话；
 4. 会话内的请求与响应。
 
-CLI 的会话授权（按终端会话划分）在 v0.2 定义。
+CLI 与 Vault Service 之间的协议、会话授权见 [cli.md](cli.md)；对端校验使用本规范 §3.1 的同一机制。
 
 ## 2. 分帧
 
@@ -52,7 +51,7 @@ CLI 的会话授权（按终端会话划分）在 v0.2 定义。
    - **运行时不从磁盘读取**辅助程序的 cdhash。否则同用户进程只需替换一个辅助程序，下次启动时服务就会信任替代品（第二轮评审 G6）。信任锚因此是正在运行的主程序本身。
 3. 校验失败时立即断开，并记入本地安全日志。
 4. **更新**：更新替换整个应用包，并重启 Vault Service（Sparkle 更新后重新启动应用）。重启之前，旧服务会拒绝新版本的 host；扩展遇到连接失败时等待片刻再重试。不在旧服务运行期间从磁盘重新加载白名单。
-5. 从源码自行构建、不在应用包内的 CLI：用户在 App 中显式信任后，固定其 cdhash（v0.2）。
+5. CLI 连接的是另一个 socket，同样按固定的 cdhash 校验（[cli.md](cli.md) §2）。
 6. **信任边界**：本层只防"任意外部程序连接 socket"。同用户进程替换磁盘上的 Keevo 主程序，等于替换 Keevo 本身，属于非目标（`docs/security.md` §1）。
 
 ### 3.2 native host 校验父进程
@@ -376,7 +375,7 @@ v2 没有新增事件与错误码。
 | 事项 | 类别 | 计划 |
 |---|---|---|
 | SAS 词表 v1（中文 / 英文） | 只是 6 个 SAS 字节的显示映射，单独版本化，不改变握手 | ✅ 已发布（§4.2，`sas-wordlist-v1.tsv`） |
-| CLI 会话授权（TTY + 父 shell）与 cdhash 信任 | **不在 v1 中**：新的握手用途或协议版本 | M1.4 |
+| CLI 会话授权（TTY + 父 shell）与 cdhash 信任 | 单独的 socket 与协议，不改变本协议 | ✅ M1.4，[cli.md](cli.md) |
 | 更多推送事件（例如 `items_changed`） | **不在 v1 中**：协议 v2 | 需要时 |
 | 浏览器 Team ID 白名单的维护流程 | 实现 | ✅ [docs/browser-allowlist.md](../docs/browser-allowlist.md)，核实脚本 `scripts/verify-browser.sh` |
 | `fill` 按站点授权与频率限制的实现（§5.2） | 实现 | ✅ M1.3 |
@@ -400,3 +399,4 @@ v2 没有新增事件与错误码。
 | 1.3 | 2026-11-19 | §4.2 发布 SAS 词表 v1（`sas-wordlist-v1.tsv`，中英文各 256 个词，互为翻译）：写明文件格式、SHA-256、显示规则与词表性质。握手与安全界限不变 |
 | 2.0 | 2026-11-19 | 新增 §5.5 协议 v2（v1 + `save` 与 `update`，未冻结）：版本协商、prologue 写入协议版本（防降级）、规则与扩展何时询问用户；§4.1、§5.1、§5.4、§6 相应补充。协议 v1 的线上格式不变 |
 | 2.1 | 2026-11-19 | §5.2 新增 `candidates` 的频率限制（实现策略，线上格式不变）；§5.3 补全 `not_authorized` 的含义；§6 新增"冒充 Vault Service"一行与 `candidates` 的评估结论；§4.2 链接多会话分析；§7 更新完成状态（测试向量、分析、白名单流程） |
+| 2.2 | 2026-11-19 | CLI 改用单独的 socket 与协议（[cli.md](cli.md)）：更新 §1 的拓扑、§3.1 第 5 条与 §7。本协议的消息与格式不变 |
