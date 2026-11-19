@@ -705,6 +705,96 @@ impl Store {
         Ok(base.saturating_add(elapsed))
     }
 
+    /// 把整个数据库写成 `dest` 处的一个新文件（备份，`docs/sync.md` §2）：用 `VACUUM INTO` 得到一致的副本，
+    /// 内容与数据库相同，仍然只有密文。`dest` 必须不存在。
+    ///
+    /// # Errors
+    /// `dest` 已存在或无法写入时返回 SQLite 错误。
+    pub fn backup_to(&self, dest: &Path) -> Result<()> {
+        if dest.exists() {
+            return Err(StoreError::Sqlite("backup destination exists".into()));
+        }
+        let dest = dest
+            .to_str()
+            .ok_or_else(|| StoreError::Sqlite("non-UTF-8 backup path".into()))?;
+        self.conn.execute("VACUUM INTO ?1", [dest])?;
+        Ok(())
+    }
+
+    /// 检查 `src` 是否为可以恢复的 Keevo 数据库：schema 不新于当前版本，并且有账户。只读打开，不修改它。
+    ///
+    /// # Errors
+    /// 不是 Keevo 数据库时返回 [`StoreError::Corrupt`]；来自更新版本时返回 [`StoreError::UnsupportedSchema`]。
+    pub fn inspect_backup(src: &Path) -> Result<AccountRow> {
+        let conn = Connection::open_with_flags(src, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let version: u32 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .map_err(|_| StoreError::Corrupt("not a keevo database"))?;
+        if version > SCHEMA_VERSION {
+            return Err(StoreError::UnsupportedSchema(version));
+        }
+        if version == 0 {
+            return Err(StoreError::Corrupt("not a keevo database"));
+        }
+        let probe = Self {
+            conn,
+            _lock: None,
+            clock: None,
+        };
+        probe
+            .account()
+            .map_err(|_| StoreError::Corrupt("not a keevo database"))?
+            .ok_or(StoreError::Corrupt("no account"))
+    }
+
+    /// 用 `src` 处的备份替换保险库内容（SQLite 在线备份接口），然后按需迁移 schema。连接保持不变，
+    /// 持有这个 `Store` 的对象不需要重新打开。调用方先用 [`Store::inspect_backup`] 检查。
+    ///
+    /// 本机状态不随备份回退：`meta`（设备 ID、HLC、有效时间、解锁策略与失败计数）与 `local_record`
+    /// （浏览器配对、授权）保持恢复前的内容，否则已撤销的配对会随旧备份重新生效。
+    ///
+    /// # Errors
+    /// 备份无效或 SQLite 错误。替换失败时数据库保持原样。
+    pub fn restore_from(&mut self, src: &Path) -> Result<()> {
+        Self::inspect_backup(src)?;
+        let meta: Vec<(String, Vec<u8>)> = {
+            let mut stmt = self.conn.prepare("SELECT key, value FROM meta")?;
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        let local: Vec<(String, Vec<u8>, Vec<u8>)> = {
+            let mut stmt = self.conn.prepare("SELECT kind, id, ct FROM local_record")?;
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        let source = Connection::open_with_flags(src, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        {
+            let backup = rusqlite::backup::Backup::new(&source, &mut self.conn)?;
+            backup.run_to_completion(256, std::time::Duration::ZERO, None)?;
+        }
+        self.clock = None;
+        self.migrate()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute("DELETE FROM meta", [])?;
+        for (key, value) in &meta {
+            tx.execute(
+                "INSERT INTO meta (key, value) VALUES (?1, ?2)",
+                params![key, value],
+            )?;
+        }
+        tx.execute("DELETE FROM local_record", [])?;
+        for (kind, id, ct) in &local {
+            tx.execute(
+                "INSERT INTO local_record (kind, id, ct) VALUES (?1, ?2, ?3)",
+                params![kind, id, ct],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// 测试用：直接执行 SQL（例如注入故障）。只在启用 `test-util` 特性时存在，供其他 crate 的测试使用。
     ///
     /// # Errors

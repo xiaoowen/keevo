@@ -45,6 +45,26 @@ final class AppModel {
     var securityVersion = 0
     @ObservationIgnored var securityTask: Task<Void, Never>?
 
+    /// 每天自动备份（docs/product.md §5.7，默认开启）。
+    var autoBackupEnabled = UserDefaults.standard.object(forKey: "backup.auto") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(autoBackupEnabled, forKey: "backup.auto") }
+    }
+    /// 用户选择的备份文件夹；`nil` 为默认的 `~/Library/Application Support/Keevo/backups`。
+    var customBackupFolder = UserDefaults.standard.string(forKey: "backup.folder") {
+        didSet { UserDefaults.standard.set(customBackupFolder, forKey: "backup.folder") }
+    }
+    /// 保留的份数。
+    var backupKeep = UserDefaults.standard.object(forKey: "backup.keep") as? Int ?? 30 {
+        didSet { UserDefaults.standard.set(backupKeep, forKey: "backup.keep") }
+    }
+    /// 备份文件夹中的备份，新的在前。
+    var backups: [BackupInfo] = []
+    /// 上次自动备份失败的原因（例如外部硬盘没有连接）。
+    var backupError: String?
+    /// 锁屏上显示一次的说明（例如"已从备份恢复"），解锁后清除。
+    var lockNotice: String?
+    @ObservationIgnored var backupTimer: Task<Void, Never>?
+
     /// 有浏览器正在请求配对（spec/ipc.md §4.2 第 8 步：每次尝试都对用户可见）。值为浏览器标识。
     var pairingNotice: String?
     /// 浏览器写入保险库的提示（spec/ipc.md §5.5：每次保存都对用户可见）。
@@ -162,6 +182,7 @@ final class AppModel {
             at: support, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]
         )
         dbPath = support.appendingPathComponent("vault.sqlite").path
+        defaultBackupFolder = support.appendingPathComponent("backups", isDirectory: true).path
         localDir = support.appendingPathComponent("local", isDirectory: true).path
         if FileManager.default.fileExists(atPath: dbPath) {
             open(reenrolling: false)
@@ -173,6 +194,8 @@ final class AppModel {
     }
 
     private let background: Bool
+    /// 默认的备份文件夹（数据目录下的 backups）。
+    let defaultBackupFolder: String
     /// 是否为正式运行（监听系统事件、启动本地服务）；截图程序中为 `false`。
     var isBackground: Bool { background }
 
@@ -197,6 +220,7 @@ final class AppModel {
             phase = .locked
             startBrowserService()
             startDeveloperServices()
+            if background { startAutoBackup() }
         } catch KeevoError.EnclaveUnavailable {
             phase = .unavailable
         } catch {
@@ -409,6 +433,7 @@ final class AppModel {
     }
 
     private func didUnlock() throws {
+        lockNotice = nil
         refreshLocalState()
         try reload()
         phase = .unlocked
@@ -688,6 +713,12 @@ final class AppModel {
             return "无法启动：\(reason)"
         case .SshKey(let code, let detail):
             return sshKeyProblem(code: code, detail: detail)
+        case .Backup(let code) where code == "other_account":
+            return "这份备份属于另一个 Keevo 账户，不能用来恢复这个保险库。"
+        case .Backup(let code) where code == "newer_version":
+            return "这份备份来自更新版本的 Keevo，请先更新 Keevo。"
+        case .Backup:
+            return "这不是 Keevo 备份文件，或者文件已损坏。"
         case .KdfNeedsConfirmation:
             return "这个保险库的解锁参数异常地高，可能被篡改过。为安全起见，Keevo 没有自动解锁。"
         case .ItemTooLarge:

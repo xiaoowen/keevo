@@ -452,3 +452,71 @@ fn review4_parent_lists_are_normalized() {
         vec![id(1)]
     );
 }
+
+/// 备份与恢复（docs/sync.md §2）：备份是一致的副本；恢复替换整个数据库，连接保持可用；
+/// 不是 Keevo 数据库、来自更新版本的文件被拒绝，恢复失败时数据库保持原样。
+#[test]
+fn backup_and_restore() {
+    let dir = std::env::temp_dir().join(format!(
+        "keevo-store-backup-{}",
+        Id128::random().unwrap().to_hex()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(dir.clone());
+    let mut store = Store::open(&dir.join("vault.sqlite")).unwrap();
+    store
+        .create_account(&AccountRow {
+            id: id(1),
+            format_version: 1,
+            epoch: 1,
+            kdf_params: vec![1; 29],
+            keyset_ct: vec![2; 400],
+        })
+        .unwrap();
+    store.insert_revision(&rev(1, &[])).unwrap();
+    let backup = dir.join("one.keevo-backup");
+    store.backup_to(&backup).unwrap();
+    assert!(store.backup_to(&backup).is_err(), "不覆盖已有的文件");
+    assert_eq!(Store::inspect_backup(&backup).unwrap().id, id(1));
+
+    store.insert_revision(&rev(2, &[1])).unwrap();
+    store.set_meta("device_id", &[7; 16]).unwrap();
+    store.put_local_record("pairing", &[1], &[9; 40]).unwrap();
+    assert_eq!(head_ids(&store), [id(2)]);
+    store.restore_from(&backup).unwrap();
+    assert_eq!(head_ids(&store), [id(1)], "恢复到备份时的状态");
+    assert_eq!(
+        store.meta("device_id").unwrap(),
+        Some(vec![7; 16]),
+        "本机状态不回退"
+    );
+    assert_eq!(
+        store.local_records("pairing").unwrap(),
+        [(vec![1], vec![9; 40])]
+    );
+    store.insert_revision(&rev(3, &[1])).unwrap();
+    assert_eq!(head_ids(&store), [id(3)], "连接照常可用");
+
+    let junk = dir.join("junk");
+    std::fs::write(&junk, b"not sqlite").unwrap();
+    assert!(Store::inspect_backup(&junk).is_err());
+    assert!(store.restore_from(&junk).is_err());
+    assert_eq!(head_ids(&store), [id(3)], "失败时保持原样");
+
+    let newer = dir.join("newer.keevo-backup");
+    store.backup_to(&newer).unwrap();
+    rusqlite::Connection::open(&newer)
+        .unwrap()
+        .pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+        .unwrap();
+    assert_eq!(
+        Store::inspect_backup(&newer).err(),
+        Some(StoreError::UnsupportedSchema(SCHEMA_VERSION + 1))
+    );
+}

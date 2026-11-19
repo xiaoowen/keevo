@@ -128,6 +128,9 @@ struct LockView: View {
             Text("Keevo 已锁定")
                 .font(KV.Typography.largeTitle)
                 .foregroundStyle(KV.Colors.fgPrimary)
+            if let notice = model.lockNotice {
+                Banner(kind: .success, message: notice)
+            }
             // 命令行工具或 SSH 正在等待解锁（spec/cli.md §4.1、spec/ssh-agent.md §6）
             if let waiter = model.unlockWaiter {
                 Banner(kind: .info, message: waiter.text)

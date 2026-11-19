@@ -124,10 +124,17 @@ public enum Snapshots {
         await shooter.shoot("kdf-confirm", sheet: true) {
             KdfConfirmSheet(info: KdfInfo(memoryKib: 4 * 1024 * 1024, iterations: 12, parallelism: 4)) {}
         }
-        await shooter.shoot("settings-security", sheet: true) { SettingsView(initialTab: 0) }
-        await shooter.shoot("settings-browser", sheet: true) { SettingsView(initialTab: 1) }
+        await shooter.shoot("settings-security", sheet: true) { SettingsView(initialPage: .security) }
+        // 备份：三份不同原因的备份
+        for kind in ["auto", "import", "manual"] { await model.backupNow(kind: kind) }
+        await shooter.shoot("settings-backup", sheet: true) { SettingsView(initialPage: .backup) }
+        await shooter.shoot("restore-picker", sheet: true) { RestorePickerSheet { _ in } }
+        if let backup = model.backups.first(where: { $0.kind == "import" }) {
+            await shooter.shoot("restore-confirm", sheet: true) { RestoreConfirmSheet(backup: backup) }
+        }
+        await shooter.shoot("settings-browser", sheet: true) { SettingsView(initialPage: .browser) }
         model.refreshDeveloper()
-        await shooter.shoot("settings-developer", sheet: true) { SettingsView(initialTab: 2) }
+        await shooter.shoot("settings-developer", sheet: true) { SettingsView(initialPage: .developer) }
 
         let words = zip(["秋千", "珍珠", "薄荷", "稻米", "企鹅", "胡同"], ["swing", "pearl", "mint", "rice", "penguin", "alley"])
             .map { SasWord(zh: $0, en: $1) }

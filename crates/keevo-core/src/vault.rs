@@ -922,6 +922,41 @@ impl Vault {
         self.session = None;
     }
 
+    /// 把整个数据库备份到 `dest`（[`crate::backup`]）。锁定时也可以进行：备份中只有密文。
+    ///
+    /// # Errors
+    /// `dest` 已存在或无法写入。
+    pub fn backup_to(&self, dest: &Path) -> Result<()> {
+        Ok(self.store.backup_to(dest)?)
+    }
+
+    /// 用备份替换保险库内容，之后保险库处于锁定状态（[`crate::backup::restore`]）。备份必须属于同一个账户；
+    /// 本机状态（设备 ID、配对、解锁策略）保持不变（[`Store::restore_from`]）。
+    ///
+    /// # Errors
+    /// 不是 Keevo 备份、来自更新版本、属于另一个账户，或 SQLite 错误。失败时什么都不改变。
+    pub(crate) fn restore_from(&mut self, src: &Path) -> Result<()> {
+        let current = self.store.account()?.ok_or(CoreError::NoAccount)?;
+        if Store::inspect_backup(src)?.id != current.id {
+            return Err(CoreError::OtherAccount);
+        }
+        self.lock();
+        self.store.restore_from(src)?;
+        Ok(())
+    }
+
+    /// 备份属于哪个账户、是否可以用来恢复这个保险库（不改变任何东西）。
+    ///
+    /// # Errors
+    /// 不是 Keevo 备份、来自更新版本，或属于另一个账户。
+    pub fn check_backup(&self, src: &Path) -> Result<()> {
+        let current = self.store.account()?.ok_or(CoreError::NoAccount)?;
+        if Store::inspect_backup(src)?.id != current.id {
+            return Err(CoreError::OtherAccount);
+        }
+        Ok(())
+    }
+
     /// 全部保险库，按名称排序。
     ///
     /// # Errors

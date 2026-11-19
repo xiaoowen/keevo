@@ -1322,3 +1322,57 @@ fn security_center() {
     f.vault.lock();
     assert!(matches!(f.vault.security_report(), Ok(None)), "锁定时丢弃");
 }
+
+#[test]
+fn backup_and_restore() {
+    let f = Fixture::new();
+    let dir = f.dir.join("backups").to_string_lossy().into_owned();
+    assert!(auto_backup_due(dir.clone()));
+    assert!(list_backups(dir.clone()).is_empty());
+    let first = f.vault.create_backup(dir.clone(), "auto".into()).unwrap();
+    assert_eq!(first.kind, "auto");
+    assert!(!auto_backup_due(dir.clone()));
+    assert!(matches!(
+        f.vault.create_backup(dir.clone(), "restore".into()),
+        Err(KeevoError::InvalidInput { .. })
+    ));
+    f.vault.check_backup(first.path.clone()).unwrap();
+
+    let later = f.login("备份之后");
+    _ = f.vault.search(String::new()).unwrap();
+    let safety = f
+        .vault
+        .restore_backup(first.path.clone(), dir.clone())
+        .unwrap();
+    assert_eq!(safety.kind, "restore");
+    assert!(
+        matches!(f.vault.items(), Err(KeevoError::Locked)),
+        "恢复后锁定"
+    );
+    f.vault.unlock("pw".into(), f.secret_key.clone()).unwrap();
+    assert!(f.vault.items().unwrap().iter().all(|i| i.id != later));
+    assert_eq!(list_backups(dir.clone()).len(), 2);
+    assert_eq!(prune_backups(dir.clone(), 1).unwrap(), 1);
+
+    let junk = f.dir.join("junk.keevo-backup");
+    std::fs::write(&junk, b"junk").unwrap();
+    let junk = junk.to_string_lossy().into_owned();
+    assert!(
+        matches!(f.vault.check_backup(junk.clone()), Err(KeevoError::Backup { code }) if code == "not_backup")
+    );
+    assert!(matches!(
+        f.vault.restore_backup(junk, dir.clone()),
+        Err(KeevoError::Backup { .. })
+    ));
+    assert!(f.vault.items().is_ok(), "无效的备份不改变任何东西");
+
+    // 另一个账户的备份
+    let other = Fixture::new();
+    let theirs = other
+        .vault
+        .create_backup(dir.clone(), "manual".into())
+        .unwrap();
+    assert!(
+        matches!(f.vault.check_backup(theirs.path), Err(KeevoError::Backup { code }) if code == "other_account")
+    );
+}

@@ -86,6 +86,11 @@ pub enum KeevoError {
         /// 不支持的算法名（`unsupported`）或加密方式（`cipher`）。
         detail: String,
     },
+    /// 备份文件无法用来恢复（`not_backup`、`newer_version`、`other_account`）。
+    Backup {
+        /// 原因代码。
+        code: String,
+    },
     /// 输入不合法。
     InvalidInput {
         /// 说明。
@@ -124,6 +129,7 @@ impl fmt::Display for KeevoError {
                 write!(f, "developer service unavailable: {reason}")
             }
             Self::SshKey { code, detail } => write!(f, "ssh key: {code} {detail}"),
+            Self::Backup { code } => write!(f, "backup: {code}"),
             Self::InvalidInput { message } => write!(f, "invalid input: {message}"),
             Self::Internal { message } => write!(f, "internal: {message}"),
         }
@@ -2421,8 +2427,10 @@ fn purpose_from(name: &str) -> Option<Purpose> {
     .find(|p| purpose_name(*p) == name)
 }
 
+mod backup;
 mod developer;
 mod security;
+pub use backup::{BackupInfo, auto_backup_due, list_backups, prune_backups};
 pub use developer::{
     CliSessionInfo, DeveloperPrompt, RequestOrigin, SshAgentInfo, SshKeyInfo, SshSignRequest,
     ssh_agent_link_path,

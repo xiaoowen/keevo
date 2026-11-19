@@ -48,6 +48,8 @@ pub enum CoreError {
     AlreadyExists,
     /// 一次性密码的配置不合法（不是 `otpauth://totp/` URI 或 Base32 密钥，或参数超出范围）。
     InvalidOtp,
+    /// 备份属于另一个账户，不能用来恢复这个保险库。
+    OtherAccount,
     /// 本机密钥文件读写失败。
     Io(std::io::ErrorKind),
     /// 密码学错误。
@@ -78,6 +80,7 @@ impl fmt::Display for CoreError {
             Self::OutOfRange => f.write_str("value out of range"),
             Self::InvalidOtp => f.write_str("invalid one-time password configuration"),
             Self::AlreadyExists => f.write_str("already exists"),
+            Self::OtherAccount => f.write_str("backup belongs to another account"),
             Self::Io(kind) => write!(f, "io: {kind}"),
             Self::Crypto(e) => write!(f, "crypto: {e}"),
             Self::Format(e) => write!(f, "format: {e}"),

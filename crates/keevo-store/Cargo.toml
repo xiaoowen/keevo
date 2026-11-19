@@ -10,7 +10,7 @@ publish.workspace = true
 
 [dependencies]
 keevo-crypto = { path = "../keevo-crypto" }
-rusqlite = { version = "0.43.0", features = ["bundled"] }
+rusqlite = { version = "0.43.0", features = ["bundled", "backup"] }
 
 [features]
 # 只供其他 crate 的测试使用：暴露注入故障的辅助函数。正式构建不得启用。
