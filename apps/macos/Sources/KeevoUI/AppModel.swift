@@ -83,6 +83,8 @@ final class AppModel {
     var sshKeys: [SshKeyInfo] = []
     /// 命令行工具或 SSH 正在等待解锁（锁屏上说明）。
     var unlockWaiter: UnlockWaiter?
+    /// 最近的 SSH 签名（只在内存中，锁定时清空）：让每次使用都可见，包括"解锁期间自动"的密钥。
+    var recentSshUse: [SshUseRecord] = []
     /// SSH Agent 是否开启（记在本机，默认关闭，spec/ssh-agent.md §1）。
     var sshAgentEnabled: Bool {
         didSet { UserDefaults.standard.set(sshAgentEnabled, forKey: Self.sshAgentKey) }
@@ -372,6 +374,7 @@ final class AppModel {
         items = []
         sshKeys = []
         cliSessions = []
+        recentSshUse = []
         browserPairings = []
         browserAuthorizations = [:]
         browserDialog = nil

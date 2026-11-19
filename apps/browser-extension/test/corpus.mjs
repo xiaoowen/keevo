@@ -31,7 +31,16 @@ const VALUES = { $U: "corpus-user", $P: "corpus-pass", $T: "123456" };
 const LABELS = { "用 Keevo 填充": "login", "用 Keevo 填入一次性密码": "otp" };
 
 const dir = mkdtempSync(join(tmpdir(), "kvcorpus"));
-const cleanups = [() => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })];
+// 删除临时目录失败不影响测试结果：Chrome 被结束后，它的辅助进程可能还在写配置目录
+const cleanups = [
+  () => {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    } catch (e) {
+      console.warn(`  · 临时目录没有删除干净（${e.code ?? e.message}）：${dir}`);
+    }
+  },
+];
 async function cleanup() {
   while (cleanups.length) await cleanups.pop()();
 }

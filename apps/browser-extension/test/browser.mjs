@@ -31,7 +31,16 @@ if (!existsSync(CHROME)) {
 
 const dir = mkdtempSync(join(tmpdir(), "kvbr"));
 /** 清理按登记的相反顺序进行：先结束 Chrome 与开发服务，再删除临时目录。 */
-const cleanups = [() => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })];
+// 删除临时目录失败不影响测试结果：Chrome 被结束后，它的辅助进程可能还在写配置目录
+const cleanups = [
+  () => {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    } catch (e) {
+      console.warn(`  · 临时目录没有删除干净（${e.code ?? e.message}）：${dir}`);
+    }
+  },
+];
 async function cleanup() {
   while (cleanups.length) await cleanups.pop()();
 }

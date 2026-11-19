@@ -20,6 +20,14 @@ enum UnlockWaiter {
     }
 }
 
+/// 一次 SSH 签名（"设置 → 开发者 → 最近使用"）。
+struct SshUseRecord: Identifiable {
+    let id = UUID()
+    let date: Date
+    let keyTitle: String
+    let source: String
+}
+
 /// 一次终端会话授权（spec/cli.md §5）。
 struct CliAuthorizationRequest: Identifiable {
     let id = UUID()
@@ -48,8 +56,14 @@ final class DeveloperPromptBridge: DeveloperPrompt, @unchecked Sendable {
         DispatchQueue.main.async { [weak self] in
             guard let model = self?.model, model.phase == .locked else { return }
             model.unlockWaiter = reason == "ssh" ? .ssh : .cli
-            NSApp.activate()
-            NSApp.windows.first { $0.isVisible || $0.isMiniaturized }?.makeKeyAndOrderFront(nil)
+            if reason == "ssh" {
+                // SSH 可能来自后台程序（编辑器定时 git fetch）：只在程序坞提示，不抢占焦点
+                NSApp.requestUserAttention(.informationalRequest)
+            } else {
+                // 用户正在终端里等待 keevo 的结果
+                NSApp.activate()
+                NSApp.windows.first { $0.isVisible || $0.isMiniaturized }?.makeKeyAndOrderFront(nil)
+            }
         }
     }
 
@@ -66,10 +80,17 @@ final class DeveloperPromptBridge: DeveloperPrompt, @unchecked Sendable {
     }
 
     func sshSigned(request: SshSignRequest) {
-        // 解锁期间自动签名的密钥：给出一个短暂提示，让每次使用都可见
-        guard request.policy == "unlocked" else { return }
         DispatchQueue.main.async { [weak self] in
-            self?.model?.showToast("已用「\(request.keyTitle)」签名（\(request.origin.app ?? request.origin.parentName)）")
+            guard let model = self?.model else { return }
+            let source = [request.origin.app, request.origin.parentCommand ?? request.origin.command]
+                .compactMap { $0 }
+                .joined(separator: " · ")
+            model.recentSshUse.insert(SshUseRecord(date: Date(), keyTitle: request.keyTitle, source: source), at: 0)
+            if model.recentSshUse.count > 20 { model.recentSshUse.removeLast(model.recentSshUse.count - 20) }
+            // 解锁期间自动签名的密钥：给出一个短暂提示，让每次使用都可见
+            if request.policy == "unlocked" {
+                model.showToast("已用「\(request.keyTitle)」签名（\(request.origin.app ?? request.origin.parentName)）")
+            }
         }
     }
 
@@ -665,6 +686,18 @@ struct DeveloperSettings: View {
             }
             if let problem = model.sshAgent?.linkProblem {
                 Banner(kind: .warning, message: "便捷路径没有创建：\(problem)。可以直接使用 \(model.sshAgent?.socketPath ?? "")。")
+            }
+            if !model.recentSshUse.isEmpty {
+                SettingsSection(title: "最近使用（SSH）", footer: "只记在内存中，锁定时清空。") {
+                    ForEach(Array(model.recentSshUse.prefix(10).enumerated()), id: \.element.id) { index, use in
+                        if index > 0 { CardRowDivider() }
+                        SettingsRow(title: use.keyTitle, detail: use.source) {
+                            Text(use.date, style: .relative)
+                                .font(KV.Typography.footnote)
+                                .foregroundStyle(KV.Colors.fgSecondary)
+                        }
+                    }
+                }
             }
             SettingsSection(title: "SSH 密钥") {
                 if model.phase != .unlocked {

@@ -23,6 +23,8 @@ pub const SESSION_IDLE: Duration = Duration::from_secs(10 * 60);
 pub const SESSION_MAX: Duration = Duration::from_secs(12 * 60 * 60);
 /// 被拒绝后，同一会话的请求在这段时间内直接拒绝（`spec/cli.md` §5 第 2 条）。
 pub const DENIAL_COOLDOWN: Duration = Duration::from_secs(10);
+/// 请 Keevo.app 显示解锁界面的最小间隔：后台程序（例如编辑器定时 git fetch）反复连接时不反复打扰用户。
+pub const UNLOCK_REQUEST_INTERVAL: Duration = Duration::from_secs(30);
 
 /// 谁在等待解锁。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +133,8 @@ pub struct Developer {
     prompting: Mutex<()>,
     /// 等待解锁的时限：CLI、SSH。
     unlock_waits: (Duration, Duration),
+    /// 上一次请 Keevo.app 显示解锁界面的时间（按原因）。
+    last_unlock_request: Mutex<HashMap<bool, Instant>>,
 }
 
 impl Developer {
@@ -154,6 +158,7 @@ impl Developer {
             grants: Mutex::default(),
             prompting: Mutex::new(()),
             unlock_waits: (cli, agent),
+            last_unlock_request: Mutex::default(),
         })
     }
 
@@ -170,7 +175,21 @@ impl Developer {
         if self.vault().is_unlocked() {
             return true;
         }
-        self.prompt.unlock_requested(reason);
+        let now = Instant::now();
+        let notify = {
+            let mut last = lock(&self.last_unlock_request);
+            let key = reason == UnlockReason::Cli;
+            let due = last
+                .get(&key)
+                .is_none_or(|t| now.saturating_duration_since(*t) >= UNLOCK_REQUEST_INTERVAL);
+            if due {
+                last.insert(key, now);
+            }
+            due
+        };
+        if notify {
+            self.prompt.unlock_requested(reason);
+        }
         let deadline = Instant::now()
             .checked_add(timeout)
             .unwrap_or_else(Instant::now);

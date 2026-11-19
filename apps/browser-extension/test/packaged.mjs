@@ -34,7 +34,16 @@ for (const f of [BUNDLED_HOST, SMOKE, UNSIGNED_HOST, join(here, "..", "dist", "m
 
 // Unix socket 路径有长度上限：HOME 用 /tmp 下的短路径
 const home = mkdtempSync("/tmp/kvp-");
-const cleanups = [() => rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })];
+// 删除临时目录失败不影响测试结果：Chrome 被结束后，它的辅助进程可能还在写配置目录
+const cleanups = [
+  () => {
+    try {
+      rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    } catch (e) {
+      console.warn(`  · 临时目录没有删除干净（${e.code ?? e.message}）：${home}`);
+    }
+  },
+];
 async function cleanup() {
   while (cleanups.length) await cleanups.pop()();
 }
