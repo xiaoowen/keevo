@@ -1194,8 +1194,8 @@ impl Vault {
     pub fn items(&self) -> Result<Vec<ItemSummary>> {
         let session = self.session()?;
         let mut out = Vec::new();
-        for item_id in self.store.objects(ObjectKind::Item)? {
-            let heads = self.store.heads(&item_id)?;
+        // 一次查询取出全部头修订（不含详情）：1 万条目时列表在 300 ms 内可用（docs/product.md §6.1）
+        for (item_id, heads) in self.store.heads_of_kind(ObjectKind::Item)? {
             match heads.as_slice() {
                 [only] if only.deleted => {}
                 [only] => {
@@ -1499,6 +1499,14 @@ impl Vault {
     #[cfg(test)]
     pub(crate) const fn store_for_tests(&self) -> &Store {
         &self.store
+    }
+
+    /// 数据库的完整性检查（验收与诊断）：返回 SQLite 发现的问题，没有问题时为空。
+    ///
+    /// # Errors
+    /// SQLite 错误。
+    pub fn integrity_check(&self) -> Result<Vec<String>> {
+        Ok(self.store.integrity_check()?)
     }
 
     /// 回收附件：删除这个条目中不再被任何留有内容的修订引用的附件。返回删除的个数。

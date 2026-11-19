@@ -556,3 +556,21 @@ fn attachments_round_trip_and_checks() {
     assert_eq!(store.attachment(&id(70)).unwrap(), None);
     assert!(store.attachments_of(&id(50)).unwrap().is_empty());
 }
+
+#[test]
+fn heads_of_kind_matches_heads() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.insert_revision(&rev(1, &[])).unwrap();
+    store.insert_revision(&rev(2, &[1])).unwrap();
+    store.insert_revision(&rev(3, &[1])).unwrap();
+    let all = store.heads_of_kind(ObjectKind::Item).unwrap();
+    assert_eq!(all.len(), 1);
+    let (object, heads) = &all[0];
+    assert_eq!(*object, id(50));
+    let mut expected = store.heads(&id(50)).unwrap();
+    for h in &mut expected {
+        h.details_ct = None;
+    }
+    assert_eq!(heads, &expected, "与逐个读取一致，只是不含详情");
+    assert!(store.heads_of_kind(ObjectKind::Vault).unwrap().is_empty());
+}

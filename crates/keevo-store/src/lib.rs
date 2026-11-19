@@ -600,6 +600,56 @@ impl Store {
         rows
     }
 
+    /// 某类对象的全部头修订，按对象 ID 分组（列表用：一次快照、一次长度检查、一次查询，代替逐个对象的
+    /// [`Store::heads`]）。详情密文不读取（`details_ct` 为 `None`），需要详情时再按对象读取。
+    ///
+    /// # Errors
+    /// SQLite 错误；某列超长时返回 [`StoreError::Corrupt`]。
+    pub fn heads_of_kind(&self, kind: ObjectKind) -> Result<Vec<(Id128, Vec<RevisionRow>)>> {
+        let tx = self.snapshot()?;
+        let env = keevo_crypto::MAX_ENVELOPE_LEN;
+        let parents = MAX_PARENTS * 16;
+        let tomb_parents = MAX_TOMBSTONE_PARENTS * 16;
+        let oversized: bool = tx.query_row(
+            &format!(
+                "SELECT EXISTS(SELECT 1 FROM head h JOIN revision r ON r.rev_id = h.rev_id
+                 WHERE r.object_type = ?1 AND (
+                   length(h.object_id) != 16 OR length(h.rev_id) != 16
+                   OR length(r.rev_id) != 16 OR length(r.object_id) != 16 OR length(r.vault_id) != 16
+                   OR length(r.origin_device) != 16 OR length(r.parents) % 16 != 0
+                   OR length(r.parents) > (CASE WHEN r.deleted THEN {tomb_parents} ELSE {parents} END)
+                   OR coalesce(length(r.wrapped_key_ct), 0) > {env}
+                   OR coalesce(length(r.overview_ct), 0) > {env}))"
+            ),
+            [kind.code()],
+            |r| r.get(0),
+        )?;
+        if oversized {
+            return Err(StoreError::Corrupt("column exceeds its size limit"));
+        }
+        let rows: Vec<RevisionRow> = {
+            let mut stmt = tx.prepare(
+                "SELECT r.rev_id, r.object_id, r.object_type, r.vault_id, r.parents, r.origin_device,
+                        r.origin_seq, r.wrapped_key_ct, r.overview_ct, NULL, r.deleted, r.pruned
+                 FROM head h JOIN revision r ON r.rev_id = h.rev_id
+                 WHERE r.object_type = ?1
+                 ORDER BY h.object_id, r.rev_id",
+            )?;
+            let rows = stmt.query_map([kind.code()], raw_revision)?;
+            rows.map(|r| r.map_err(StoreError::from).and_then(RawRevision::into_row))
+                .collect::<Result<_>>()?
+        };
+        tx.commit()?;
+        let mut out: Vec<(Id128, Vec<RevisionRow>)> = Vec::new();
+        for row in rows {
+            match out.last_mut() {
+                Some((id, list)) if *id == row.object_id => list.push(row),
+                _ => out.push((row.object_id, vec![row])),
+            }
+        }
+        Ok(out)
+    }
+
     /// 某类型的全部对象 ID，按 ID 排序。
     ///
     /// # Errors
@@ -825,6 +875,19 @@ impl Store {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// SQLite 的完整性检查（`PRAGMA integrity_check`）：返回发现的问题，没有问题时为空。
+    /// 用于验收中的 `kill -9` 测试与诊断。
+    ///
+    /// # Errors
+    /// SQLite 错误。
+    pub fn integrity_check(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("PRAGMA integrity_check")?;
+        let rows: Vec<String> = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<core::result::Result<_, _>>()?;
+        Ok(rows.into_iter().filter(|r| r != "ok").collect())
     }
 
     /// 写入一个附件与它的全部块（一个事务）。

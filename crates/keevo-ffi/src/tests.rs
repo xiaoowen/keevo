@@ -1554,3 +1554,87 @@ fn attachments() {
         Err(KeevoError::Attachment { code }) if code == "unreadable"
     ));
 }
+
+/// 性能预算（`docs/product.md` §6.1，1 万条目）：解锁后列表可用（不含密钥派生）< 300 ms，
+/// 每次按键的搜索 < 16 ms。只在 release 构建中有意义：scripts/acceptance.sh 中运行。
+#[test]
+#[ignore = "性能测试：cargo test -p keevo-ffi --release -- --ignored performance_budget"]
+#[allow(clippy::print_stdout, reason = "性能测试打印测得的时间，供验收记录")]
+fn performance_budget() {
+    use std::fmt::Write as _;
+    use std::time::Instant;
+    let dir =
+        std::env::temp_dir().join(format!("keevo-perf-{}", Id128::random().unwrap().to_hex()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (mut vault, sk) = Vault::create(&dir.join("vault.sqlite"), "pw", fast_params()).unwrap();
+    let vault_id = vault.vaults().unwrap()[0].id;
+    let words = [
+        "github", "google", "apple", "figma", "aliyun", "outlook", "slack", "notion", "stripe",
+        "linear",
+    ];
+    let mut csv = String::from("name,url,username,password\n");
+    for i in 0..10_000u32 {
+        let w = words[usize::try_from(i).unwrap() % words.len()];
+        writeln!(
+            csv,
+            "{w} {i},https://{w}{i}.example.com,user{i}@example.com,pw-{i}-xyz"
+        )
+        .unwrap();
+    }
+    let parsed =
+        keevo_core::import::parse(keevo_core::import::Source::Chrome, csv.as_bytes(), None)
+            .unwrap();
+    let started = Instant::now();
+    vault.import_items(vault_id, parsed.items, None).unwrap();
+    println!("导入 1 万条目：{:?}", started.elapsed());
+    vault.lock();
+    vault.unlock("pw", &sk).unwrap();
+    let v = KeevoVault::new(vault);
+
+    // 列表可用：读取全部概要并建立搜索索引
+    let started = Instant::now();
+    let items = v.items().unwrap();
+    let list_ready = started.elapsed();
+    assert_eq!(items.len(), 10_000);
+    println!("列表可用（概要解密 + 索引）：{list_ready:?}");
+
+    // 每次按键
+    let keystrokes = [
+        "g",
+        "gi",
+        "git",
+        "gith",
+        "githu",
+        "github",
+        "github 12",
+        "type:login git",
+        "url:figma",
+        "-tag:x st",
+    ];
+    let mut worst = std::time::Duration::ZERO;
+    for q in keystrokes {
+        let started = Instant::now();
+        let hits = v.search(q.into()).unwrap();
+        let took = started.elapsed();
+        worst = worst.max(took);
+        println!("搜索 {q:?}：{} 个结果，{took:?}", hits.len());
+    }
+
+    let started = Instant::now();
+    let report = v.run_security_check().unwrap();
+    println!(
+        "安全检查：{:?}（{} 项）",
+        started.elapsed(),
+        report.findings.len()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        list_ready.as_millis() < 300,
+        "列表可用 {list_ready:?}，预算 300 ms"
+    );
+    assert!(
+        worst.as_millis() < 16,
+        "最慢的一次按键 {worst:?}，预算 16 ms"
+    );
+}

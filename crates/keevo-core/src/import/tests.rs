@@ -334,3 +334,113 @@ fn builder_limits() {
     assert_eq!(date_from_days(0), "1970-01-01");
     assert_eq!(date_from_days(20_776), "2026-11-19");
 }
+
+/// 导入后条目中的全部文本（标题、字段、标签），用于"字段零丢失"的检查。
+fn all_text(p: &Parsed) -> String {
+    let mut out = String::new();
+    for i in &p.items {
+        out.push_str(&i.title);
+        out.push('\n');
+        for t in &i.tags {
+            out.push_str(t);
+            out.push('\n');
+        }
+        for s in &i.sections {
+            out.push_str(s);
+            out.push('\n');
+        }
+        for (_, f) in &i.fields {
+            out.push_str(&f.label);
+            out.push('\n');
+            if let FieldData::Text(t) = &f.data {
+                out.push_str(t.expose());
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+/// 验收（docs/roadmap.md §3.8）：导入 Bitwarden 与 1Password 样例时字段零丢失。样例中每个有内容的值
+/// 都必须出现在导入后的条目里（ID、类型代码等结构信息除外；日期等按约定换了写法的值单独检查）。
+#[test]
+fn imports_lose_no_fields() {
+    use serde_json::Value;
+    fn leaves<'a>(v: &'a Value, key: &str, skip: &[&str], out: &mut Vec<(String, &'a str)>) {
+        match v {
+            Value::String(s) if !s.trim().is_empty() && !skip.contains(&key) => {
+                out.push((key.to_owned(), s))
+            }
+            Value::Array(a) => a.iter().for_each(|x| leaves(x, key, skip, out)),
+            Value::Object(o) => o.iter().for_each(|(k, x)| leaves(x, k, skip, out)),
+            _ => {}
+        }
+    }
+
+    // Bitwarden：id、folderId、collectionIds、type 等是结构信息；Steam 令牌原样保留为秘密文本
+    let mut bw: Value = serde_json::from_slice(&sample("bitwarden.json")).unwrap();
+    // 链接字段（type 3）只指向本条目中的另一个字段，自身没有值
+    for item in bw["items"].as_array_mut().unwrap() {
+        if let Some(fields) = item.get_mut("fields").and_then(Value::as_array_mut) {
+            fields.retain(|f| f["type"] != 3);
+        }
+    }
+    let parsed = parse(Source::Bitwarden, &sample("bitwarden.json"), None).unwrap();
+    let text = all_text(&parsed);
+    let mut values = Vec::new();
+    leaves(&bw["items"], "", &["id", "folderId", "match"], &mut values);
+    leaves(&bw["folders"], "", &["id"], &mut values);
+    assert!(values.len() > 30);
+    for (key, v) in values {
+        // 银行卡有效期合并为 MM/YYYY
+        if key == "expMonth" || key == "expYear" {
+            continue;
+        }
+        assert!(text.contains(v), "Bitwarden：{key} = {v:?} 没有导入");
+    }
+    assert!(text.contains("03/2029"));
+
+    // 1PUX：uuid、类别代码、状态、表单字段的元信息与"记住我"之类的复选框不是用户数据
+    let zip = sample("sample.1pux");
+    let data = zip::read(&zip, "export.data", 1 << 20).unwrap().unwrap();
+    let px: Value = serde_json::from_slice(&data).unwrap();
+    let parsed = parse(Source::OnePassword, &zip, None).unwrap();
+    let text = all_text(&parsed);
+    let mut values = Vec::new();
+    for item in px["accounts"][0]["vaults"][0]["items"].as_array().unwrap() {
+        leaves(&item["overview"], "", &["subtitle"], &mut values);
+        for f in item["details"]["loginFields"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            if f["fieldType"] != "C" {
+                values.push(("loginFields".into(), f["value"].as_str().unwrap()));
+            }
+        }
+        leaves(
+            &item["details"]["notesPlain"],
+            "notesPlain",
+            &[],
+            &mut values,
+        );
+        for s in item["details"]["sections"].as_array().into_iter().flatten() {
+            leaves(&s["title"], "section", &[], &mut values);
+            for f in s["fields"].as_array().into_iter().flatten() {
+                leaves(&f["value"], "value", &["keyType"], &mut values);
+            }
+        }
+    }
+    leaves(
+        &px["accounts"][0]["vaults"][0]["attrs"]["name"],
+        "vault",
+        &[],
+        &mut values,
+    );
+    assert!(values.len() > 20);
+    for (key, v) in values {
+        assert!(text.contains(v), "1Password：{key} = {v:?} 没有导入");
+    }
+    // 换了写法的值：日期、年月
+    assert!(text.contains("2023-11-14") && text.contains("2029-03"));
+}

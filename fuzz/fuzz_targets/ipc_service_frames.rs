@@ -33,21 +33,21 @@ fn key() -> Arc<StaticKeypair> {
 const HELLO: &[u8] = br#"{"v":1,"client":"native-host","extension_origin":"chrome-extension://x/","browser":"b"}"#;
 
 fuzz_target!(|data: &[u8]| {
-    let store = MemoryPairingStore::default();
+    let mut store = MemoryPairingStore::default();
     // 输入按 0xff 切分为多帧
     let frames: Vec<&[u8]> = data.split(|b| *b == 0xff).collect();
 
     // 情形一：任意帧直接作为第一帧
     let mut conn = ServiceConnection::new(key());
     for f in &frames {
-        let _ = conn.on_frame(f, &store, &Backend);
+        let _ = conn.on_frame(f, &mut store, &Backend);
     }
 
     // 情形二：合法 HostHello 之后的任意帧序列。配对存储为空，因此绝不能建立会话
     let mut conn = ServiceConnection::new(key());
-    let _ = conn.on_frame(HELLO, &store, &Backend);
+    let _ = conn.on_frame(HELLO, &mut store, &Backend);
     for f in &frames {
-        let _ = conn.on_frame(f, &store, &Backend);
+        let _ = conn.on_frame(f, &mut store, &Backend);
         assert!(!conn.is_established(), "未配对却建立了会话");
     }
 });

@@ -99,3 +99,24 @@ path = "fuzz_targets/import_parse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "breach_range"
+path = "fuzz_targets/breach_range.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "password_strength"
+path = "fuzz_targets/password_strength.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "export_open"
+path = "fuzz_targets/export_open.rs"
+test = false
+doc = false
+bench = false
