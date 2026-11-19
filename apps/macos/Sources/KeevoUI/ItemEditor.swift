@@ -174,7 +174,8 @@ struct ItemEditor: View {
         _title = .init(initialValue: detail.title)
         _favorite = .init(initialValue: detail.favorite)
         _sections = .init(initialValue: detail.sections.map { DraftSection(id: $0.id, label: $0.label, isNew: false, originalLabel: $0.label) })
-        _fields = .init(initialValue: detail.fields.map(DraftField.init))
+        // 附件在详情中管理，编辑器不显示也不改动它们
+        _fields = .init(initialValue: detail.fields.filter { $0.kind != "attachment" }.map(DraftField.init))
         _tags = .init(initialValue: detail.tags)
     }
 
@@ -544,7 +545,7 @@ struct ItemEditor: View {
         if favorite == base.favorite { favorite = new.favorite }
         if tags == base.tags { tags = new.tags }
         let kept = Dictionary(uniqueKeysWithValues: fields.filter { $0.modified && !$0.isNew }.map { ($0.id, $0) })
-        fields = new.fields.map { kept[$0.id] ?? DraftField($0) } + fields.filter(\.isNew)
+        fields = new.fields.filter { $0.kind != "attachment" }.map { kept[$0.id] ?? DraftField($0) } + fields.filter(\.isNew)
         let renamed = Dictionary(uniqueKeysWithValues: sections.filter { !$0.isNew }.map { ($0.id, $0.label) })
         sections = new.sections.map { s in
             DraftSection(id: s.id, label: renamed[s.id].flatMap { $0 == s.label ? nil : $0 } ?? s.label, isNew: false, originalLabel: s.label)

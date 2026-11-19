@@ -3,6 +3,7 @@
 //! [`Vault`] 持有唯一的解锁状态：锁定时内存中没有任何密钥；解锁后缓存账户密钥集与各保险库密钥，
 //! 条目密钥按需解开、用后即弃。所有写入都会生成新的修订（`spec/revisions.md`），从不原地改写。
 
+pub mod attachment;
 pub mod backup;
 mod error;
 pub mod export;

@@ -194,6 +194,8 @@ final class AppModel {
         )
         dbPath = support.appendingPathComponent("vault.sqlite").path
         defaultBackupFolder = support.appendingPathComponent("backups", isDirectory: true).path
+        // 上次运行留下的附件预览
+        try? FileManager.default.removeItem(at: support.appendingPathComponent("preview", isDirectory: true))
         localDir = support.appendingPathComponent("local", isDirectory: true).path
         if FileManager.default.fileExists(atPath: dbPath) {
             open(reenrolling: false)
@@ -437,6 +439,7 @@ final class AppModel {
         showingExport = false
         showingPractice = false
         onboardingStep = nil
+        clearPreviews()
         breachChecking = false
         pendingSecretKey = nil
         pendingKdf = nil

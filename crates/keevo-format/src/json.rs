@@ -60,12 +60,17 @@ pub fn from_canonical_json<T: DeserializeOwned + Serialize>(bytes: &[u8]) -> Res
 /// 只读取 `v`：其余成员按 [`serde::de::IgnoredAny`] 跳过，不构造任何值。其他情况（不是对象、没有 `v`、
 /// `v` 不是整数、重复的 `v`）交给之后的结构检查。
 pub(crate) fn check_version(bytes: &[u8], expected: u32) -> Result<()> {
+    check_version_in(bytes, &[expected])
+}
+
+/// 同 [`check_version`]，但接受若干个版本（条目详情：v1 与 v2）。
+pub(crate) fn check_version_in(bytes: &[u8], known: &[u32]) -> Result<()> {
     #[derive(serde::Deserialize)]
     struct Probe {
         v: Option<i64>,
     }
     if let Ok(Probe { v: Some(v) }) = serde_json::from_slice::<Probe>(bytes)
-        && v != i64::from(expected)
+        && !known.iter().any(|k| i64::from(*k) == v)
     {
         return Err(FormatError::UnsupportedVersion(
             u32::try_from(v).unwrap_or(u32::MAX),

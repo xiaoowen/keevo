@@ -141,7 +141,12 @@ fn item(doc: &ItemDoc) -> ExportItem {
         .records
         .iter()
         .filter_map(|(k, v)| match (k, &v.value) {
-            (RecordKey::Field(_), Some(RecordValue::Field(f))) => Some(f),
+            // 附件不导出（spec/export.md §2）
+            (RecordKey::Field(_), Some(RecordValue::Field(f)))
+                if !matches!(f.data, FieldData::Attachment(_)) =>
+            {
+                Some(f)
+            }
             _ => None,
         })
         .collect();
@@ -181,6 +186,7 @@ fn item(doc: &ItemDoc) -> ExportItem {
                         ),
                         None,
                     ),
+                    FieldData::Attachment(_) => (None, None, None),
                     FieldData::Codes(list) => (
                         None,
                         None,

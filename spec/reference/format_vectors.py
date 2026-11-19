@@ -23,6 +23,7 @@ from pathlib import Path
 OUT_DIR = Path(__file__).resolve().parent.parent / "test-vectors"
 FORMAT_OUT = OUT_DIR / "vault-format-v1.json"
 REVISIONS_OUT = OUT_DIR / "revisions-v1.json"
+FORMAT_V2_OUT = OUT_DIR / "vault-format-v2.json"
 
 # ---------------------------------------------------------------------------
 # 常量（vault-format.md §1–§2）
@@ -35,7 +36,9 @@ TEXT_KINDS = {
     "text", "multiline", "concealed", "email", "url", "phone", "date", "month_year", "select", "totp",
     "ssh_private_key", "reference",
 }
-KINDS = TEXT_KINDS | {"kv_list", "recovery_codes"}
+KINDS = TEXT_KINDS | {"kv_list", "recovery_codes", "attachment"}
+# 条目详情的版本（vault-format.md §2.5）：含 attachment 字段的文档为 2，否则为 1
+ITEM_VERSIONS = (1, 2)
 PURPOSES = {"username", "password", "otp", "notes"}
 MAX_SAFE = 2**53 - 1
 I64_MIN, I64_MAX = -(2**63), 2**63 - 1
@@ -152,6 +155,7 @@ def enc_id(i: bytes) -> str:
 #   记录值 ("text", s) | ("bool", b) | ("int", n) | ("tag",) | ("section", label, order) | ("field", FieldValue)
 #   FieldValue = dict(section: bytes|None, order, kind, label, purpose: str|None, data)
 #   data = ("text", s) | ("kv", [(key, value, concealed)]) | ("codes", [(code, used)])
+#        | ("attachment", (id: bytes, name, size, added))
 #   记录版本 = (hlc: int, rev: bytes, value | None)
 #   记录键 = (kind, name)，section/field 的 name 是 16 字节 ID
 
@@ -162,6 +166,9 @@ def enc_data(d) -> str:
     if d[0] == "kv":
         items = [enc_obj([("key", enc_str(k)), ("value", enc_str(v)), ("concealed", enc_bool(c))]) for k, v, c in d[1]]
         return enc_obj([("kv", "[" + ",".join(items) + "]")])
+    if d[0] == "attachment":
+        aid, name, size, added = d[1]
+        return enc_obj([("attachment", enc_obj([("id", enc_id(aid)), ("name", enc_str(name)), ("size", str(size)), ("added", str(added))]))])
     items = [enc_obj([("code", enc_str(c)), ("used", enc_bool(u))]) for c, u in d[1]]
     return enc_obj([("codes", "[" + ",".join(items) + "]")])
 
@@ -212,10 +219,17 @@ def key_order(key):
     return (KEY_KINDS.index(kind), name if isinstance(name, bytes) else name.encode("utf-8"))
 
 
+def doc_version(doc) -> int:
+    """条目详情的版本：任何记录版本（含并发版本）是 attachment 字段时为 2，否则为 1。"""
+    versions = list(doc["records"].values()) + [v for vs in doc["concurrent"].values() for v in vs]
+    has = any(v[2] is not None and v[2][0] == "field" and v[2][1]["kind"] == "attachment" for v in versions)
+    return 2 if has else 1
+
+
 def enc_doc(doc) -> str:
     records = sorted(doc["records"].items(), key=lambda kv: key_order(kv[0]))
     fields = [
-        ("v", "1"),
+        ("v", str(doc_version(doc))),
         ("type", enc_str(doc["type"])),
         ("records", enc_obj([(key_str(k), enc_version(v)) for k, v in records])),
     ]
@@ -304,6 +318,9 @@ def s_data(x):
             exact_keys(e, {"code", "used"})
             out.append((s_str(e["code"]), s_bool(e["used"])))
         return ("codes", out)
+    if k == "attachment":
+        exact_keys(v, {"id", "name", "size", "added"})
+        return ("attachment", (s_id(v["id"]), s_str(v["name"]), s_i64(v["size"]), s_i64(v["added"])))
     raise malformed()
 
 
@@ -350,10 +367,10 @@ def s_version(x):
     return (s_hlc(x["hlc"]), s_id(x["rev"]), s_value(x["val"]) if "val" in x else None)
 
 
-def check_version_field(obj) -> None:
-    """错误先后的第 0 步（1.1 澄清）：`v` 是能用 64 位有符号整数表示的整数但不是 1 时返回 unsupported_version，
-    先于结构检查。新版本的文档可能带有 v1 不认识的字段，否则会被误报为 malformed。"""
-    if isinstance(obj, dict) and "v" in obj and is_int(obj["v"]) and I64_MIN <= obj["v"] <= I64_MAX and obj["v"] != 1:
+def check_version_field(obj, known=(1,)) -> None:
+    """错误先后的第 0 步（1.1 澄清）：`v` 是能用 64 位有符号整数表示的整数但不是已知版本时返回 unsupported_version，
+    先于结构检查。新版本的文档可能带有本版本不认识的字段，否则会被误报为 malformed。"""
+    if isinstance(obj, dict) and "v" in obj and is_int(obj["v"]) and I64_MIN <= obj["v"] <= I64_MAX and obj["v"] not in known:
         raise FormatError("unsupported_version")
 
 
@@ -388,9 +405,13 @@ def check_value(key, value) -> None:
         raise FormatError("value_kind_mismatch")
     if vk == "field":
         f = value[1]
-        expected = {"kv_list": "kv", "recovery_codes": "codes"}.get(f["kind"], "text")
+        expected = {"kv_list": "kv", "recovery_codes": "codes", "attachment": "attachment"}.get(f["kind"], "text")
         if f["data"][0] != expected:
             raise FormatError("value_kind_mismatch")
+        if expected == "attachment":
+            _, _, size, added = f["data"][1]
+            if not (0 <= size <= MAX_SAFE and 0 <= added <= MAX_SAFE):
+                raise FormatError("value_too_large")
         if not valid_order(f["order"]):
             raise FormatError("value_kind_mismatch")
     if vk == "section" and not valid_order(value[2]):
@@ -403,10 +424,10 @@ def check_value(key, value) -> None:
 
 def decode_item(data: bytes):
     obj = parse_json(data)
-    check_version_field(obj)
+    check_version_field(obj, ITEM_VERSIONS)
     # 1. 结构
     exact_keys(obj, {"v", "type", "records"}, {"concurrent"})
-    if not is_int(obj["v"]) or obj["v"] != 1:
+    if not is_int(obj["v"]) or obj["v"] not in ITEM_VERSIONS:
         raise malformed()
     item_type = s_str(obj["type"])
     if item_type not in ITEM_TYPES:
@@ -825,8 +846,8 @@ def item_vectors() -> dict:
         return '{"v":1,"type":"' + item_type + '","records":{' + records + "}" + extra + "}"
 
     # 第 0 步：版本
-    bad("unsupported_version", minimal.replace('"v":1', '"v":2'), "unsupported_version")
-    bad("unsupported_version_before_structure", '{"v":2,"type":"login","records":{},"attachments":[]}', "unsupported_version")
+    bad("unsupported_version", minimal.replace('"v":1', '"v":3'), "unsupported_version")
+    bad("unsupported_version_before_structure", '{"v":3,"type":"login","records":{},"attachments":[]}', "unsupported_version")
     bad("version_as_string", minimal.replace('"v":1', '"v":"1"'), "malformed")
     bad("version_as_bool", minimal.replace('"v":1', '"v":true'), "malformed")
     bad("version_as_fraction", minimal.replace('"v":1', '"v":1.0'), "malformed")
@@ -906,6 +927,63 @@ def item_vectors() -> dict:
     bad("precedence_version_over_structure", '{"v":3,"type":"passkey"}', "unsupported_version")
     bad("precedence_structure_over_semantic", doc_with('"attr:Title":' + title_ver, extra=',"x":1'), "malformed")
     bad("precedence_canonical_over_semantic", doc_with('"attr:Title":' + title_ver.replace(",", ", ")), "malformed")
+    return {"valid": valid_docs, "invalid": invalid}
+
+
+def item_v2_vectors() -> dict:
+    """条目详情 v2（vault-format.md §2.5）：attachment 字段。"""
+    r0, r1 = det_id("rev:0"), det_id("rev:1")
+    att = ("attachment", (det_id("attachment:ca"), "ca-certificate.pem", 1843, BASE_MS))
+    valid_docs = []
+
+    def add_valid(name, doc):
+        enc = enc_doc(doc)
+        assert enc.startswith('{"v":2,'), name
+        decode_item(enc.encode("utf-8"))
+        valid_docs.append({"name": name, "doc": enc})
+
+    d = new_doc("database")
+    d["records"][A("title")] = (hlc(0), r0, text("生产数据库"))
+    d["records"][F("证书")] = (hlc(0), r0, field("0", "attachment", "ca-certificate.pem", data=att))
+    add_valid("attachment_field", d)
+    with_att = enc_doc(d)
+    d2 = new_doc("database")
+    d2["records"][F("证书")] = (hlc(1), r1, None)
+    d2["concurrent"] = {}
+    d2["records"][A("title")] = (hlc(0), r0, text("x"))
+    d2["concurrent"][F("证书")] = [(hlc(0), r0, field("0", "attachment", "a", data=att))]
+    add_valid("attachment_only_in_concurrent", d2)
+    e = new_doc("secure_note")
+    e["records"][F("空文件")] = (hlc(0), r0, field("0", "attachment", "empty.txt", data=("attachment", (det_id("attachment:e"), "", 0, 0))))
+    add_valid("attachment_empty_name_zero_size", e)
+
+    invalid = []
+
+    def bad(name, doc: str, error: str):
+        try:
+            decode_item(doc.encode("utf-8"))
+        except FormatError as err:
+            assert err.code == error, (name, err.code, error)
+        else:
+            raise AssertionError(f"{name} 应当失败")
+        invalid.append({"name": name, "doc": doc, "error": error})
+
+    minimal_v1 = enc_doc(new_doc("secure_note"))
+    bad("v1_with_attachment", with_att.replace('"v":2', '"v":1', 1), "malformed")
+    bad("v2_without_attachment", minimal_v1.replace('"v":1', '"v":2', 1), "malformed")
+    bad("unsupported_version_3", minimal_v1.replace('"v":1', '"v":3', 1), "unsupported_version")
+    bad("attachment_missing_member", with_att.replace(',"added":' + str(BASE_MS), "", 1), "malformed")
+    bad("attachment_unknown_member", with_att.replace(',"added":' + str(BASE_MS), ',"added":' + str(BASE_MS) + ',"mime":"x"', 1), "malformed")
+    bad("attachment_id_uppercase", with_att.replace(det_id("attachment:ca").hex(), det_id("attachment:ca").hex().upper(), 1), "malformed")
+    bad("attachment_size_string", with_att.replace('"size":1843', '"size":"1843"', 1), "malformed")
+    bad("attachment_member_order", with_att.replace('"size":1843,"added":' + str(BASE_MS), '"added":' + str(BASE_MS) + ',"size":1843', 1), "malformed")
+    bad("attachment_size_beyond_safe", with_att.replace('"size":1843', '"size":' + str(MAX_SAFE + 1), 1), "value_too_large")
+    bad("attachment_size_negative", with_att.replace('"size":1843', '"size":-1', 1), "value_too_large")
+    bad("attachment_kind_with_text_data", with_att.replace(
+        enc_data(att), enc_data(("text", "x")), 1), "value_kind_mismatch")
+    t = new_doc("secure_note")
+    t["records"][F("x")] = (hlc(0), r0, field("0", "text", "x", data=att))
+    bad("text_kind_with_attachment_data", enc_doc(t), "value_kind_mismatch")
     return {"valid": valid_docs, "invalid": invalid}
 
 
@@ -1309,8 +1387,14 @@ def build() -> tuple[str, str]:
         "或 error。结果必须与 heads 的顺序无关。",
         "merges": merge_vectors(),
     }
+    v2 = {
+        "description": "spec/vault-format.md 1.5 §2.5 条目详情 v2（attachment 字段）的测试向量，由独立的 Python 参考实现生成"
+        "（spec/reference/format_vectors.py）。读取方必须同时接受 v1（vault-format-v1.json）。"
+        "valid：必须原样接受，重新编码后逐字节相同。invalid：必须返回 error 指定的错误码。",
+        "item_details": item_v2_vectors(),
+    }
     dump = lambda d: json.dumps(d, ensure_ascii=False, indent=2) + "\n"  # noqa: E731
-    return dump(fmt), dump(rev)
+    return dump(fmt), dump(rev), dump(v2)
 
 
 def main() -> int:
@@ -1320,9 +1404,14 @@ def main() -> int:
     args = parser.parse_args()
     if args.self_test:
         self_test()
-    fmt, rev = build()
+    fmt, rev, v2 = build()
     if args.check:
-        ok = FORMAT_OUT.read_text(encoding="utf-8") == fmt and REVISIONS_OUT.read_text(encoding="utf-8") == rev
+        ok = (
+            FORMAT_OUT.read_text(encoding="utf-8") == fmt
+            and REVISIONS_OUT.read_text(encoding="utf-8") == rev
+            and FORMAT_V2_OUT.exists()
+            and FORMAT_V2_OUT.read_text(encoding="utf-8") == v2
+        )
         if not ok:
             print("测试向量与参考实现的输出不一致", file=sys.stderr)
             return 1
@@ -1330,7 +1419,8 @@ def main() -> int:
         return 0
     FORMAT_OUT.write_text(fmt, encoding="utf-8")
     REVISIONS_OUT.write_text(rev, encoding="utf-8")
-    print(f"已写入 {FORMAT_OUT.name}、{REVISIONS_OUT.name}")
+    FORMAT_V2_OUT.write_text(v2, encoding="utf-8")
+    print(f"已写入 {FORMAT_OUT.name}、{REVISIONS_OUT.name}、{FORMAT_V2_OUT.name}")
     return 0
 
 

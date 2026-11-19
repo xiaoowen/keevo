@@ -1315,9 +1315,224 @@ impl Vault {
         };
         let parents = heads.iter().map(|h| h.rev_id).collect();
         self.write_item_revision(view.vault_id, item_id, rev_id, parents, &ik, Some(&doc))?;
-        self.store
+        let pruned = self
+            .store
             .prune(&item_id, HISTORY_KEEP, HISTORY_MIN_AGE_MS)?;
+        if pruned > 0 {
+            // 清理历史之后，只被已清理的修订引用的附件随之删除
+            self.collect_attachments(item_id)?;
+        }
         Ok(())
+    }
+
+    /// 添加附件（`spec/crypto.md` §8.9）：加密保存内容，并在条目末尾新增一个附件字段。返回附件引用。
+    /// `added_ms` 为添加时间（Unix 毫秒）。
+    ///
+    /// # Errors
+    /// 超过 [`crate::attachment::MAX_ATTACHMENT_LEN`] 时返回 [`CoreError::OutOfRange`]；其余同
+    /// [`Vault::update_item`]。失败时什么都不留下。
+    pub fn add_attachment(
+        &mut self,
+        item_id: Id128,
+        name: &str,
+        data: &[u8],
+        added_ms: u64,
+    ) -> Result<keevo_format::AttachmentRef> {
+        use crate::attachment::{
+            CHUNK_LEN, MAX_ATTACHMENT_LEN, Meta, chunk_binding, clean_name, context as actx,
+        };
+        if data.len() > MAX_ATTACHMENT_LEN {
+            return Err(CoreError::OutOfRange);
+        }
+        let view = self.item(item_id)?;
+        let vault_id = view.vault_id;
+        let name = clean_name(name);
+        let attachment_id = Id128::random()?;
+        let ak = SymmetricKey::generate()?;
+        let (row, chunks) = {
+            let session = self.session()?;
+            let vk = session
+                .vault_keys
+                .get(&vault_id)
+                .ok_or(CoreError::NotFound)?;
+            let acct = session.account_id;
+            let count =
+                u32::try_from(data.len().div_ceil(CHUNK_LEN)).map_err(|_| CoreError::OutOfRange)?;
+            let wrapped = vk.wrap_key(
+                &actx(acct, vault_id, attachment_id, Part::WrappedKey, 0, [0; 32]),
+                &ak,
+            )?;
+            let meta = Meta {
+                v: 1,
+                item: item_id.to_hex(),
+                name: name.clone(),
+                size: u64::try_from(data.len()).map_err(|_| CoreError::OutOfRange)?,
+                chunks: count,
+            };
+            let meta_json = serde_json::to_vec(&meta).map_err(|_| CoreError::Tampered)?;
+            let meta_ct = seal(
+                &ak,
+                &actx(acct, vault_id, attachment_id, Part::Content, 0, [0; 32]),
+                &meta_json,
+            )?;
+            let binding = chunk_binding(count);
+            let chunks = (0u32..)
+                .zip(data.chunks(CHUNK_LEN))
+                .map(|(i, c)| {
+                    seal(
+                        &ak,
+                        &actx(acct, vault_id, attachment_id, Part::Chunk, i, binding),
+                        c,
+                    )
+                })
+                .collect::<core::result::Result<Vec<_>, _>>()?;
+            let row = keevo_store::AttachmentRow {
+                id: attachment_id,
+                item_id,
+                wrapped_key_ct: wrapped,
+                meta_ct,
+                chunk_count: count,
+            };
+            (row, chunks)
+        };
+        self.store.insert_attachment(&row, &chunks)?;
+        let reference = keevo_format::AttachmentRef {
+            id: attachment_id,
+            name: name.clone(),
+            size: i64::try_from(data.len()).map_err(|_| CoreError::OutOfRange)?,
+            added: i64::try_from(added_ms)
+                .unwrap_or(0)
+                .clamp(0, keevo_format::MAX_SAFE_INT),
+        };
+        let field = NewField {
+            kind: FieldKind::Attachment,
+            label: name,
+            purpose: None,
+            data: FieldData::Attachment(reference.clone()),
+        };
+        if let Err(e) = self.update_item(item_id, vec![Edit::AddField(field)]) {
+            let _ = self.store.delete_attachment(&attachment_id);
+            return Err(e);
+        }
+        Ok(reference)
+    }
+
+    /// 读取附件内容。附件必须属于这个条目（存储与加密的元数据都核对）。
+    ///
+    /// # Errors
+    /// 已锁定；附件不存在或不属于该条目时返回 [`CoreError::NotFound`]；被篡改或损坏时返回
+    /// [`CoreError::Tampered`] 或对应的密码学错误。
+    pub fn attachment_data(
+        &self,
+        item_id: Id128,
+        attachment_id: Id128,
+    ) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+        use crate::attachment::{CHUNK_LEN, Meta, chunk_binding, context as actx};
+        let session = self.session()?;
+        let (row, chunks) = self
+            .store
+            .attachment(&attachment_id)?
+            .ok_or(CoreError::NotFound)?;
+        if row.item_id != item_id {
+            return Err(CoreError::NotFound);
+        }
+        let vault_id = self
+            .store
+            .heads(&item_id)?
+            .first()
+            .map(|h| h.vault_id)
+            .ok_or(CoreError::NotFound)?;
+        let vk = session
+            .vault_keys
+            .get(&vault_id)
+            .ok_or(CoreError::NotFound)?;
+        let acct = session.account_id;
+        let ak = vk.unwrap_key(
+            &actx(acct, vault_id, attachment_id, Part::WrappedKey, 0, [0; 32]),
+            &row.wrapped_key_ct,
+        )?;
+        let meta_json = open(
+            &ak,
+            &actx(acct, vault_id, attachment_id, Part::Content, 0, [0; 32]),
+            &row.meta_ct,
+        )?;
+        let meta: Meta = serde_json::from_slice(&meta_json).map_err(|_| CoreError::Tampered)?;
+        if meta.v != 1 || meta.item != item_id.to_hex() || meta.chunks != row.chunk_count {
+            return Err(CoreError::Tampered);
+        }
+        let size = usize::try_from(meta.size).map_err(|_| CoreError::Tampered)?;
+        if size > crate::attachment::MAX_ATTACHMENT_LEN || size.div_ceil(CHUNK_LEN) != chunks.len()
+        {
+            return Err(CoreError::Tampered);
+        }
+        let binding = chunk_binding(meta.chunks);
+        let mut out = zeroize::Zeroizing::new(Vec::with_capacity(size));
+        let last = chunks.len().saturating_sub(1);
+        for ((i, idx), ct) in chunks
+            .iter()
+            .enumerate()
+            .zip(0u32..)
+            .map(|((i, ct), idx)| ((i, idx), ct))
+        {
+            let plain = open(
+                &ak,
+                &actx(acct, vault_id, attachment_id, Part::Chunk, idx, binding),
+                ct,
+            )?;
+            let ok = if i == last {
+                !plain.is_empty() && plain.len() <= CHUNK_LEN
+            } else {
+                plain.len() == CHUNK_LEN
+            };
+            if !ok {
+                return Err(CoreError::Tampered);
+            }
+            out.extend_from_slice(&plain);
+        }
+        if out.len() != size {
+            return Err(CoreError::Tampered);
+        }
+        Ok(out)
+    }
+
+    /// 测试用：直接访问存储。
+    #[cfg(test)]
+    pub(crate) const fn store_for_tests(&self) -> &Store {
+        &self.store
+    }
+
+    /// 回收附件：删除这个条目中不再被任何留有内容的修订引用的附件。返回删除的个数。
+    fn collect_attachments(&mut self, item_id: Id128) -> Result<usize> {
+        let stored = self.store.attachments_of(&item_id)?;
+        if stored.is_empty() {
+            return Ok(0);
+        }
+        let mut referenced = std::collections::HashSet::new();
+        for row in self.store.history(&item_id)? {
+            if row.deleted || row.pruned {
+                continue;
+            }
+            let doc = ItemDoc::decode(&self.decrypt_part(&row, Part::Details)?)?;
+            let versions = doc
+                .records
+                .values()
+                .chain(doc.concurrent.values().flatten());
+            for v in versions {
+                if let Some(RecordValue::Field(FieldValue {
+                    data: FieldData::Attachment(a),
+                    ..
+                })) = &v.value
+                {
+                    referenced.insert(a.id);
+                }
+            }
+        }
+        let mut removed = 0usize;
+        for id in stored.into_iter().filter(|id| !referenced.contains(id)) {
+            self.store.delete_attachment(&id)?;
+            removed = removed.saturating_add(1);
+        }
+        Ok(removed)
     }
 
     /// 移入回收站。
@@ -1350,6 +1565,10 @@ impl Vault {
             heads.iter().map(|h| h.rev_id).collect(),
         )?;
         self.store.insert_revisions(&rows)?;
+        // 永久删除：附件随之删除
+        for id in self.store.attachments_of(&item_id)? {
+            self.store.delete_attachment(&id)?;
+        }
         Ok(())
     }
 

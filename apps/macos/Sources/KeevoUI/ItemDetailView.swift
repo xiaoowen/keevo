@@ -6,6 +6,7 @@
 import AppKit
 import KeevoKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ItemDetailView: View {
     @Environment(AppModel.self) private var model
@@ -25,6 +26,9 @@ struct ItemDetailView: View {
     @ViewState private var showingHistory = false
     @ViewState private var showingConflicts = false
     @ViewState private var confirmPurge = false
+    /// 附件：拖放提示与超过上限的说明。
+    @ViewState private var dropTargeted = false
+    @ViewState private var tooBig: TooBigAttachment?
 
     /// 秘密字段显示 30 秒后自动隐藏（docs/ux.md §5）。
     private static let revealDuration: Duration = .seconds(30)
@@ -39,6 +43,13 @@ struct ItemDetailView: View {
             } else if let detail {
                 DetailTopBar { actions(detail) }
                 ScrollView { content(detail) }
+                    // 把文件拖到详情上即添加为附件（设计稿"macOS · 附件"）
+                    .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
+                        guard !detail.trashed else { return false }
+                        dropFiles(providers, itemId: detail.id)
+                        return true
+                    }
+                    .overlay { if dropTargeted, !detail.trashed { AttachmentDropOverlay(title: detail.title) } }
             } else {
                 DetailTopBar { EmptyView() }
                 EmptyState(symbol: "questionmark.square.dashed", title: "这个条目已不存在", message: "它可能已被永久删除。")
@@ -57,6 +68,7 @@ struct ItemDetailView: View {
             revealed = []
         }
         .sheet(item: $largeType) { item in LargeTypeView(value: item.value) }
+        .sheet(item: $tooBig) { TooBigAttachmentSheet(file: $0) }
         .sheet(isPresented: $showingHistory) {
             HistorySheet(itemId: itemId)
         }
@@ -149,6 +161,14 @@ struct ItemDetailView: View {
                 SshKeyAgentCard(itemId: d.id)
             }
             if !d.trashed {
+                AttachmentsSection(
+                    itemId: d.id,
+                    title: d.title,
+                    fields: d.fields.filter { $0.kind == "attachment" },
+                    tooBig: $tooBig
+                )
+            }
+            if !d.trashed {
                 ItemSecuritySection(itemId: d.id, info: security) { editing = true }
             }
             footer(d)
@@ -215,6 +235,22 @@ struct ItemDetailView: View {
         }
     }
 
+    private func dropFiles(_ providers: [NSItemProvider], itemId: String) {
+        Task {
+            var urls: [URL] = []
+            for p in providers {
+                if let url = try? await p.loadItem(forTypeIdentifier: UTType.fileURL.identifier) as? Data,
+                   let u = URL(dataRepresentation: url, relativeTo: nil) {
+                    urls.append(u)
+                }
+            }
+            guard !urls.isEmpty else { return }
+            if let big = await model.addAttachments(itemId: itemId, urls: urls) {
+                tooBig = TooBigAttachment(name: big.name, size: big.size)
+            }
+        }
+    }
+
     struct FieldGroup {
         let id: String
         let label: String?
@@ -222,7 +258,8 @@ struct ItemDetailView: View {
     }
 
     private func fieldGroups(_ d: ItemDetail) -> [FieldGroup] {
-        let visible = d.fields.filter(FieldDisplay.hasContent)
+        // 附件在单独的"附件"区中
+        let visible = d.fields.filter { FieldDisplay.hasContent($0) && $0.kind != "attachment" }
         var groups = [FieldGroup(id: "", label: nil, fields: visible.filter { $0.sectionId == nil })]
         groups += d.sections.map { s in
             FieldGroup(id: s.id, label: s.label, fields: visible.filter { $0.sectionId == s.id })

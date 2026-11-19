@@ -113,12 +113,12 @@
     "invalid": [
       {
         "name": "unsupported_version",
-        "doc": "{\"v\":2,\"type\":\"secure_note\",\"records\":{}}",
+        "doc": "{\"v\":3,\"type\":\"secure_note\",\"records\":{}}",
         "error": "unsupported_version"
       },
       {
         "name": "unsupported_version_before_structure",
-        "doc": "{\"v\":2,\"type\":\"login\",\"records\":{},\"attachments\":[]}",
+        "doc": "{\"v\":3,\"type\":\"login\",\"records\":{},\"attachments\":[]}",
         "error": "unsupported_version"
       },
       {

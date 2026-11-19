@@ -1,0 +1,81 @@
+{
+  "description": "spec/vault-format.md 1.5 §2.5 条目详情 v2（attachment 字段）的测试向量，由独立的 Python 参考实现生成（spec/reference/format_vectors.py）。读取方必须同时接受 v1（vault-format-v1.json）。valid：必须原样接受，重新编码后逐字节相同。invalid：必须返回 error 指定的错误码。",
+  "item_details": {
+    "valid": [
+      {
+        "name": "attachment_field",
+        "doc": "{\"v\":2,\"type\":\"database\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"生产数据库\"}},\"field:78cdef24a05298d24c54a86481c0caa2\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0\",\"kind\":\"attachment\",\"label\":\"ca-certificate.pem\",\"data\":{\"attachment\":{\"id\":\"3d178c40b37fe79f3cf0c3290143017a\",\"name\":\"ca-certificate.pem\",\"size\":1843,\"added\":1763366400000}}}}}}}"
+      },
+      {
+        "name": "attachment_only_in_concurrent",
+        "doc": "{\"v\":2,\"type\":\"database\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"x\"}},\"field:78cdef24a05298d24c54a86481c0caa2\":{\"hlc\":\"019a90d3f0010000\",\"rev\":\"97015674702ca6810f30e5633873fa1d\"}},\"concurrent\":{\"field:78cdef24a05298d24c54a86481c0caa2\":[{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0\",\"kind\":\"attachment\",\"label\":\"a\",\"data\":{\"attachment\":{\"id\":\"3d178c40b37fe79f3cf0c3290143017a\",\"name\":\"ca-certificate.pem\",\"size\":1843,\"added\":1763366400000}}}}}]}}"
+      },
+      {
+        "name": "attachment_empty_name_zero_size",
+        "doc": "{\"v\":2,\"type\":\"secure_note\",\"records\":{\"field:bb30afcd45426294d2acc22e5cdc14b6\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0\",\"kind\":\"attachment\",\"label\":\"empty.txt\",\"data\":{\"attachment\":{\"id\":\"b4b8f45f17430a486fe0cff585384417\",\"name\":\"\",\"size\":0,\"added\":0}}}}}}}"
+      }
+    ],
+    "invalid": [
+      {
+        "name": "v1_with_attachment",
+        "doc": "{\"v\":1,\"type\":\"database\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"生产数据库\"}},\"field:78cdef24a05298d24c54a86481c0caa2\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0\",\"kind\":\"attachment\",\"label\":\"ca-certificate.pem\",\"data\":{\"attachment\":{\"id\":\"3d178c40b37fe79f3cf0c3290143017a\",\"name\":\"ca-certificate.pem\",\"size\":1843,\"added\":1763366400000}}}}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "v2_without_attachment",
+        "doc": "{\"v\":2,\"type\":\"secure_note\",\"records\":{}}",
+        "error": "malformed"
+      },
+      {
+        "name": "unsupported_version_3",
+        "doc": "{\"v\":3,\"type\":\"secure_note\",\"records\":{}}",
+        "error": "unsupported_version"
+      },
+      {
+        "name": "attachment_missing_member",
+        "doc": "{\"v\":2,\"type\":\"database\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"生产数据库\"}},\"field:78cdef24a05298d24c54a86481c0caa2\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0\",\"kind\":\"attachment\",\"label\":\"ca-certificate.pem\",\"data\":{\"attachment\":{\"id\":\"3d178c40b37fe79f3cf0c3290143017a\",\"name\":\"ca-certificate.pem\",\"size\":1843}}}}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "attachment_unknown_member",
+        "doc": "{\"v\":2,\"type\":\"database\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"生产数据库\"}},\"field:78cdef24a05298d24c54a86481c0caa2\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0\",\"kind\":\"attachment\",\"label\":\"ca-certificate.pem\",\"data\":{\"attachment\":{\"id\":\"3d178c40b37fe79f3cf0c3290143017a\",\"name\":\"ca-certificate.pem\",\"size\":1843,\"added\":1763366400000,\"mime\":\"x\"}}}}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "attachment_id_uppercase",
+        "doc": "{\"v\":2,\"type\":\"database\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"生产数据库\"}},\"field:78cdef24a05298d24c54a86481c0caa2\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0\",\"kind\":\"attachment\",\"label\":\"ca-certificate.pem\",\"data\":{\"attachment\":{\"id\":\"3D178C40B37FE79F3CF0C3290143017A\",\"name\":\"ca-certificate.pem\",\"size\":1843,\"added\":1763366400000}}}}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "attachment_size_string",
+        "doc": "{\"v\":2,\"type\":\"database\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"生产数据库\"}},\"field:78cdef24a05298d24c54a86481c0caa2\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0\",\"kind\":\"attachment\",\"label\":\"ca-certificate.pem\",\"data\":{\"attachment\":{\"id\":\"3d178c40b37fe79f3cf0c3290143017a\",\"name\":\"ca-certificate.pem\",\"size\":\"1843\",\"added\":1763366400000}}}}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "attachment_member_order",
+        "doc": "{\"v\":2,\"type\":\"database\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"生产数据库\"}},\"field:78cdef24a05298d24c54a86481c0caa2\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0\",\"kind\":\"attachment\",\"label\":\"ca-certificate.pem\",\"data\":{\"attachment\":{\"id\":\"3d178c40b37fe79f3cf0c3290143017a\",\"name\":\"ca-certificate.pem\",\"added\":1763366400000,\"size\":1843}}}}}}}",
+        "error": "malformed"
+      },
+      {
+        "name": "attachment_size_beyond_safe",
+        "doc": "{\"v\":2,\"type\":\"database\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"生产数据库\"}},\"field:78cdef24a05298d24c54a86481c0caa2\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0\",\"kind\":\"attachment\",\"label\":\"ca-certificate.pem\",\"data\":{\"attachment\":{\"id\":\"3d178c40b37fe79f3cf0c3290143017a\",\"name\":\"ca-certificate.pem\",\"size\":9007199254740992,\"added\":1763366400000}}}}}}}",
+        "error": "value_too_large"
+      },
+      {
+        "name": "attachment_size_negative",
+        "doc": "{\"v\":2,\"type\":\"database\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"生产数据库\"}},\"field:78cdef24a05298d24c54a86481c0caa2\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0\",\"kind\":\"attachment\",\"label\":\"ca-certificate.pem\",\"data\":{\"attachment\":{\"id\":\"3d178c40b37fe79f3cf0c3290143017a\",\"name\":\"ca-certificate.pem\",\"size\":-1,\"added\":1763366400000}}}}}}}",
+        "error": "value_too_large"
+      },
+      {
+        "name": "attachment_kind_with_text_data",
+        "doc": "{\"v\":2,\"type\":\"database\",\"records\":{\"attr:title\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"text\":\"生产数据库\"}},\"field:78cdef24a05298d24c54a86481c0caa2\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0\",\"kind\":\"attachment\",\"label\":\"ca-certificate.pem\",\"data\":{\"text\":\"x\"}}}}}}",
+        "error": "value_kind_mismatch"
+      },
+      {
+        "name": "text_kind_with_attachment_data",
+        "doc": "{\"v\":1,\"type\":\"secure_note\",\"records\":{\"field:1b8ec933fddf7f8f9ee50bb7b98c0227\":{\"hlc\":\"019a90d3f0000000\",\"rev\":\"c45f2fdfebdbce3b9174553daf6b60b1\",\"val\":{\"field\":{\"order\":\"0\",\"kind\":\"text\",\"label\":\"x\",\"data\":{\"attachment\":{\"id\":\"3d178c40b37fe79f3cf0c3290143017a\",\"name\":\"ca-certificate.pem\",\"size\":1843,\"added\":1763366400000}}}}}}}",
+        "error": "value_kind_mismatch"
+      }
+    ]
+  }
+}

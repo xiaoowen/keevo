@@ -185,9 +185,13 @@ impl FieldValue {
     pub fn is_consistent(&self) -> bool {
         matches!(
             (self.kind, &self.data),
-            (FieldKind::KvList, FieldData::Kv(_)) | (FieldKind::RecoveryCodes, FieldData::Codes(_))
-        ) || (!matches!(self.kind, FieldKind::KvList | FieldKind::RecoveryCodes)
-            && matches!(self.data, FieldData::Text(_)))
+            (FieldKind::KvList, FieldData::Kv(_))
+                | (FieldKind::RecoveryCodes, FieldData::Codes(_))
+                | (FieldKind::Attachment, FieldData::Attachment(_))
+        ) || (!matches!(
+            self.kind,
+            FieldKind::KvList | FieldKind::RecoveryCodes | FieldKind::Attachment
+        ) && matches!(self.data, FieldData::Text(_)))
     }
 
     /// 文本数据（`kv_list` 与 `recovery_codes` 字段返回 `None`）。
@@ -210,6 +214,24 @@ pub enum FieldData {
     Kv(Vec<KvEntry>),
     /// 恢复码列表（`recovery_codes`）。
     Codes(Vec<CodeEntry>),
+    /// 附件引用（`attachment`，条目详情 v2）。
+    Attachment(AttachmentRef),
+}
+
+/// 附件引用（`spec/vault-format.md` §2.5）：附件内容另行分块加密保存（`spec/crypto.md` §8.9），
+/// 这里只有找到它、显示它所需的信息。附件内容不可变：替换文件即是新的附件。
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AttachmentRef {
+    /// 附件 ID。
+    #[serde(with = "id_hex")]
+    pub id: Id128,
+    /// 文件名。
+    pub name: String,
+    /// 大小（字节），0 到 2⁵³−1。
+    pub size: i64,
+    /// 添加时间（Unix 毫秒），0 到 2⁵³−1。
+    pub added: i64,
 }
 
 /// 环境变量中的一项。
@@ -337,6 +359,14 @@ pub(crate) fn check_value(key: &RecordKey, value: &RecordValue) -> Result<()> {
     }
     if let RecordValue::Int(i) = value
         && !(-MAX_SAFE_INT..=MAX_SAFE_INT).contains(i)
+    {
+        return Err(FormatError::ValueTooLarge);
+    }
+    if let RecordValue::Field(FieldValue {
+        data: FieldData::Attachment(a),
+        ..
+    }) = value
+        && !((0..=MAX_SAFE_INT).contains(&a.size) && (0..=MAX_SAFE_INT).contains(&a.added))
     {
         return Err(FormatError::ValueTooLarge);
     }

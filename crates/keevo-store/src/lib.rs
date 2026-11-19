@@ -12,7 +12,7 @@ use keevo_crypto::Id128;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 /// 当前 schema 版本。
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 const SCHEMA_V1: &str = r"
 CREATE TABLE meta (
@@ -85,6 +85,20 @@ CREATE TABLE local_record (
   PRIMARY KEY (kind, id)
 ) STRICT;
 ";
+
+/// v4 → v5：附件分块（`spec/crypto.md` §8.9）。附件内容存放在数据库中，随备份一起保存。
+const MIGRATE_V5: &str = "
+CREATE TABLE attachment_chunk (
+  attachment_id  BLOB NOT NULL,
+  idx            INTEGER NOT NULL,
+  ct             BLOB NOT NULL,
+  PRIMARY KEY (attachment_id, idx)
+) STRICT;
+CREATE INDEX attachment_item ON attachment (item_id);
+";
+
+/// 一个附件的块数上限（50 MiB / 64 KiB）。
+pub const MAX_ATTACHMENT_CHUNKS: usize = 800;
 
 /// 本机记录密文的长度上限：64 KiB 明文加版本、nonce 与认证标签。
 pub const MAX_LOCAL_RECORD_CT: usize = 64 * 1024 + 1 + 24 + 16;
@@ -220,6 +234,21 @@ pub struct RevisionRow {
     pub pruned: bool,
 }
 
+/// 附件行（内容在 `attachment_chunk` 中）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentRow {
+    /// 附件 ID。
+    pub id: Id128,
+    /// 所属条目。
+    pub item_id: Id128,
+    /// 保险库密钥包裹的附件密钥。
+    pub wrapped_key_ct: Vec<u8>,
+    /// 附件密钥封装的元数据。
+    pub meta_ct: Vec<u8>,
+    /// 块数。
+    pub chunk_count: u32,
+}
+
 /// 修订图中一个节点的元数据。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevisionMeta {
@@ -315,6 +344,9 @@ impl Store {
         }
         if version < 4 {
             tx.execute_batch(MIGRATE_V4)?;
+        }
+        if version < 5 {
+            tx.execute_batch(MIGRATE_V5)?;
         }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
@@ -795,12 +827,161 @@ impl Store {
         Ok(())
     }
 
+    /// 写入一个附件与它的全部块（一个事务）。
+    ///
+    /// # Errors
+    /// 块数与 `row.chunk_count` 不符、超过 [`MAX_ATTACHMENT_CHUNKS`] 或某块超过信封上限时返回
+    /// [`StoreError::TooLarge`]；附件已存在时返回 SQLite 错误。
+    pub fn insert_attachment(&mut self, row: &AttachmentRow, chunks: &[Vec<u8>]) -> Result<()> {
+        let env = keevo_crypto::MAX_ENVELOPE_LEN;
+        if chunks.len() > MAX_ATTACHMENT_CHUNKS
+            || usize::try_from(row.chunk_count).ok() != Some(chunks.len())
+            || row.wrapped_key_ct.len() > env
+            || row.meta_ct.len() > env
+            || chunks.iter().any(|c| c.len() > env)
+        {
+            return Err(StoreError::TooLarge);
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO attachment (id, item_id, wrapped_key_ct, meta_ct, chunk_count) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                row.id.as_bytes(),
+                row.item_id.as_bytes(),
+                row.wrapped_key_ct,
+                row.meta_ct,
+                row.chunk_count
+            ],
+        )?;
+        for (idx, ct) in (0u32..).zip(chunks) {
+            tx.execute(
+                "INSERT INTO attachment_chunk (attachment_id, idx, ct) VALUES (?1, ?2, ?3)",
+                params![row.id.as_bytes(), idx, ct],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 读取附件行与全部块（按序号）。读取之前在同一个读事务里检查长度（第二、三轮评审 G4、H3）。
+    ///
+    /// # Errors
+    /// SQLite 错误；长度或块数不符时返回 [`StoreError::Corrupt`]。
+    pub fn attachment(&self, id: &Id128) -> Result<Option<(AttachmentRow, Vec<Vec<u8>>)>> {
+        let env = i64::try_from(keevo_crypto::MAX_ENVELOPE_LEN).unwrap_or(i64::MAX);
+        let tx = self.conn.unchecked_transaction()?;
+        let bad: Option<i64> = tx
+            .query_row(
+                "SELECT length(item_id) != 16 OR length(wrapped_key_ct) > ?2 OR length(meta_ct) > ?2
+                   OR chunk_count < 0 OR chunk_count > ?3
+                 FROM attachment WHERE id = ?1",
+                params![
+                    id.as_bytes(),
+                    env,
+                    i64::try_from(MAX_ATTACHMENT_CHUNKS).unwrap_or(i64::MAX)
+                ],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match bad {
+            None => return Ok(None),
+            Some(0) => {}
+            Some(_) => return Err(StoreError::Corrupt("attachment exceeds its size limit")),
+        }
+        let (oversized, count): (i64, i64) = tx.query_row(
+            "SELECT coalesce(sum(length(ct) > ?2), 0), count(*) FROM attachment_chunk WHERE attachment_id = ?1",
+            params![id.as_bytes(), env],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if oversized > 0 {
+            return Err(StoreError::Corrupt(
+                "attachment chunk exceeds its size limit",
+            ));
+        }
+        let (item_id, wrapped_key_ct, meta_ct, chunk_count): (Vec<u8>, Vec<u8>, Vec<u8>, i64) =
+            tx.query_row(
+                "SELECT item_id, wrapped_key_ct, meta_ct, chunk_count FROM attachment WHERE id = ?1",
+                params![id.as_bytes()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?;
+        if count != chunk_count {
+            return Err(StoreError::Corrupt("attachment chunk count"));
+        }
+        let mut stmt = tx.prepare(
+            "SELECT idx, ct FROM attachment_chunk WHERE attachment_id = ?1 ORDER BY idx",
+        )?;
+        let chunks: Vec<(i64, Vec<u8>)> = stmt
+            .query_map(params![id.as_bytes()], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<core::result::Result<_, _>>()?;
+        drop(stmt);
+        tx.commit()?;
+        if chunks
+            .iter()
+            .enumerate()
+            .any(|(i, (idx, _))| i64::try_from(i).ok() != Some(*idx))
+        {
+            return Err(StoreError::Corrupt("attachment chunk index"));
+        }
+        let row = AttachmentRow {
+            id: *id,
+            item_id: id_from(&item_id)?,
+            wrapped_key_ct,
+            meta_ct,
+            chunk_count: u32::try_from(chunk_count)
+                .map_err(|_| StoreError::Corrupt("chunk count"))?,
+        };
+        Ok(Some((row, chunks.into_iter().map(|(_, ct)| ct).collect())))
+    }
+
+    /// 条目的全部附件 ID。
+    ///
+    /// # Errors
+    /// SQLite 错误。
+    pub fn attachments_of(&self, item_id: &Id128) -> Result<Vec<Id128>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM attachment WHERE item_id = ?1 AND length(id) = 16 ORDER BY id",
+        )?;
+        let ids: Vec<Vec<u8>> = stmt
+            .query_map(params![item_id.as_bytes()], |r| r.get(0))?
+            .collect::<core::result::Result<_, _>>()?;
+        ids.iter().map(|b| id_from(b)).collect()
+    }
+
+    /// 删除附件与它的全部块（`secure_delete` 打开，删除的页用零覆盖）。
+    ///
+    /// # Errors
+    /// SQLite 错误。
+    pub fn delete_attachment(&mut self, id: &Id128) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM attachment_chunk WHERE attachment_id = ?1",
+            params![id.as_bytes()],
+        )?;
+        tx.execute(
+            "DELETE FROM attachment WHERE id = ?1",
+            params![id.as_bytes()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// 测试用：直接执行 SQL（例如注入故障）。只在启用 `test-util` 特性时存在，供其他 crate 的测试使用。
     ///
     /// # Errors
     /// SQLite 错误。
     #[cfg(feature = "test-util")]
     pub fn execute_for_tests(&self, sql: &str) -> Result<()> {
+        self.conn.execute_batch(sql)?;
+        Ok(())
+    }
+
+    /// 测试用：直接执行 SQL。
+    #[cfg(test)]
+    pub(crate) fn execute_for_tests_internal(&self, sql: &str) -> Result<()> {
         self.conn.execute_batch(sql)?;
         Ok(())
     }

@@ -1,4 +1,4 @@
-//! 跨实现测试向量：`spec/test-vectors/vault-format-v1.json` 与 `revisions-v1.json` 由独立的
+//! 跨实现测试向量：`spec/test-vectors/vault-format-v1.json`、`vault-format-v2.json` 与 `revisions-v1.json` 由独立的
 //! Python 参考实现（`spec/reference/format_vectors.py`）只依据规范生成。本实现必须逐字节复现。
 #![allow(
     clippy::unwrap_used,
@@ -16,6 +16,7 @@ use serde_json::Value;
 
 const FORMAT: &str = include_str!("../../../spec/test-vectors/vault-format-v1.json");
 const REVISIONS: &str = include_str!("../../../spec/test-vectors/revisions-v1.json");
+const FORMAT_V2: &str = include_str!("../../../spec/test-vectors/vault-format-v2.json");
 
 fn load(s: &str) -> Value {
     serde_json::from_str(s).unwrap()
@@ -86,6 +87,15 @@ fn check_documents<T>(
 #[test]
 fn item_details() {
     let doc = load(FORMAT);
+    check_documents(&doc["item_details"], ItemDoc::decode, |d| {
+        d.encode().unwrap().to_vec()
+    });
+}
+
+/// 条目详情 v2（附件字段）。
+#[test]
+fn item_details_v2() {
+    let doc = load(FORMAT_V2);
     check_documents(&doc["item_details"], ItemDoc::decode, |d| {
         d.encode().unwrap().to_vec()
     });

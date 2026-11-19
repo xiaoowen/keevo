@@ -1,9 +1,9 @@
 # Keevo 保险库明文格式
 
-- **版本**：1.4
-- **状态**：**已冻结**（2026-11-18，经四轮模型评审）。冻结范围与版本规则见 [README.md](README.md)
+- **版本**：1.5
+- **状态**：**已冻结**（2026-11-18，经四轮模型评审）。冻结范围与版本规则见 [README.md](README.md)。§2.5 条目详情 v2（附件）是草案，评审后冻结
 - **参考实现**：`crates/keevo-format`
-- **独立实现与测试向量**：`spec/reference/format_vectors.py`（Python 标准库，只依据本规范编写）生成 `spec/test-vectors/vault-format-v1.json`
+- **独立实现与测试向量**：`spec/reference/format_vectors.py`（Python 标准库，只依据本规范编写）生成 `spec/test-vectors/vault-format-v1.json` 与 `vault-format-v2.json`
 - **相关文档**：[revisions.md](revisions.md)（合并规则）、[crypto.md](crypto.md)（加密封装）
 
 本规范定义修订内容**加密前**的明文结构。所有明文都是 UTF-8 JSON，再按 crypto.md §8 封装为信封。
@@ -15,7 +15,7 @@
 | ID | 32 个**小写**十六进制字符（16 字节） |
 | HLC | 16 个小写十六进制字符（64 位）。用字符串而不是数字，是为了避免 JavaScript 等环境丢失超过 2⁵³ 的精度 |
 | 只接受规范编码 | 每个文档必须**恰好是它的规范编码**（见下文），否则返回 `malformed`。因此字段顺序、空白、转义、数字写法都只有一种合法写法；未知字段、可选字段写成 `null`、结构体写成数组等也都被拒绝。格式演进通过提升 `v` 来完成 |
-| 版本字段 | 每个文档都带 `"v": 1`；不认识的版本返回 `unsupported_version` |
+| 版本字段 | 每个文档都带 `"v"`：条目详情为 1 或 2（§2.5），其余为 1；不认识的版本返回 `unsupported_version` |
 | 重复键 | JSON 对象中出现重复的键时返回 `malformed`。不同实现对重复键可能保留第一个或最后一个，因此一律拒绝 |
 | 整数 | 条目详情与概要中的所有整数（包括概要的 `trashed_at`），范围均为 ±(2⁵³−1)，超出时返回 `value_too_large` |
 | 记录值大小 | 单个记录值的规范编码不超过 256 KiB，超出时返回 `value_too_large`；更大的内容用附件 |
@@ -57,7 +57,8 @@
 | 记录值 | 恰好一种：`{"text": 字符串}`、`{"bool": 布尔}`、`{"int": 整数}`、`"tag"`、`{"section": 分区}`、`{"field": 字段}` | `"tag"` 只能是这个字符串 |
 | 分区 | `label`、`order` | |
 | 字段 | `section`（可选）、`order`、`kind`、`label`、`purpose`（可选）、`data` | |
-| 字段数据 | 恰好一种：`{"text": 字符串}`、`{"kv": [键值项, …]}`、`{"codes": [恢复码, …]}` | |
+| 字段数据 | 恰好一种：`{"text": 字符串}`、`{"kv": [键值项, …]}`、`{"codes": [恢复码, …]}`、`{"attachment": 附件引用}`（只在 v2 中） | |
+| 附件引用 | `id`、`name`、`size`、`added` | §2.5 |
 | 键值项 | `key`、`value`、`concealed` | |
 | 恢复码 | `code`、`used` | |
 | 条目概要 | `v`、`type`、`title`、`subtitle`、`urls`、`tags`、`favorite`、`archived`、`trashed_at`（可选）、`updated`、`conflicts`（可选，只在为 `true` 时输出） | §3 |
@@ -146,12 +147,13 @@
 |---|---|
 | `kv_list` | `{"kv": [{"key": "API_KEY", "value": "…", "concealed": true}, …]}` |
 | `recovery_codes` | `{"codes": [{"code": "…", "used": false}, …]}` |
+| `attachment`（v2） | `{"attachment": {"id": "…", "name": "ca.pem", "size": 1843, "added": 1763366400000}}` |
 | 其他：`text`、`multiline`、`concealed`、`email`、`url`、`phone`、`date`、`month_year`、`select`、`totp`、`ssh_private_key`、`reference` | `{"text": "…"}` |
 
 - `kind` 与 `data` 的形态不对应时返回 `value_kind_mismatch`，与键和值的类型不对应同属一类。
 - **`totp` 的文本**：`otpauth://totp/…` URI（Key Uri Format：`secret` 为 Base32 密钥，可选 `issuer`、`algorithm` = `SHA1`/`SHA256`/`SHA512`、`digits` = 6–8、`period` = 1–3600 秒），或者只是一个 Base32 密钥，此时按 SHA1、6 位、30 秒计算。验证码按 RFC 6238 计算。这是文本内容的约定，不改变解码规则：内容不合法的 `totp` 字段照常解码，只是算不出验证码。
 
-- **附件不在 v1 中**：附件引用与分块格式定稿后，以新的字段类型随条目详情 v2 加入；读取 v2 的实现必须继续读取 v1。v1 中出现其他 `kind` 时返回 `malformed`。
+- **附件只在 v2 中**（§2.5）。v1 中出现 `attachment` 字段时，因为不是规范编码而返回 `malformed`；出现其他未知 `kind` 时返回 `malformed`。
 
 - **默认隐藏的字段类型**：`concealed`、`ssh_private_key`、`recovery_codes`。
 - **`purpose` 取值**：`username`、`password`、`otp`、`notes`。
@@ -160,6 +162,19 @@
 
 - **格式**：排序键是 1–64 个字符的字符串，字母表为 `[0-9A-Za-z]`（ASCII），按字节序比较；相同时按字段或分区 ID 排序。不符合时返回 `value_kind_mismatch`。
 - **生成算法不属于格式**：参考实现目前使用定宽十进制字符串（如 `"0000001024"`）；M1.1 可以改用分数索引，只要生成的键仍在这个字母表内，并且严格位于相邻两个键之间。已有的十进制键继续有效，不需要迁移。
+
+### 2.5 条目详情 v2：附件（草案，M1.5）
+
+条目详情 v2 = v1 的全部内容 + 字段类型 `attachment`。附件内容的加密见 crypto.md §8.9。
+
+- **版本由内容决定**：任何记录版本（含 `concurrent` 中的版本）是 `attachment` 字段时，文档的 `v` 为 2，否则为 1。
+  因此没有附件的条目仍按 v1 编码，旧版本的实现照常读取；`v` 与内容不符的文档不是规范编码，返回 `malformed`。
+  读取 v2 的实现必须继续读取 v1。
+- **附件引用**：`id` 为附件 ID；`name` 为文件名（任意字符串，显示用）；`size` 为字节数，`added` 为添加时间
+  （Unix 毫秒），两者都在 0 到 2⁵³−1 之间，否则返回 `value_too_large`。`kind` 为 `attachment` 而数据不是附件引用，
+  或数据是附件引用而 `kind` 不是 `attachment`，都返回 `value_kind_mismatch`。
+- **附件不可变**：修改附件只能删除这个字段、再添加新的附件。附件的显示名可以改（`label`），引用中的 `name` 不变。
+- **测试向量**：`spec/test-vectors/vault-format-v2.json`。v1 的测试向量中"不认识的版本"改用 `"v": 3`。
 
 ## 3. 条目概要（Item overview，part = Overview）
 
@@ -211,7 +226,7 @@
 | 事项 | 计划 |
 |---|---|
 | 分数索引的生成算法（不属于格式，见 §2.4） | M1.1 |
-| 附件引用与分块：条目详情 v2 | 与附件分块加密一起定义 |
+| 附件引用与分块：条目详情 v2 | 草案已定义（§2.5、crypto.md §8.9），评审后冻结 |
 | 条目类型模板（每种类型的默认字段；只是客户端的默认值，不属于格式） | M1.2 |
 | 保险库元数据改用记录映射：保险库元数据 v2 | M2 |
 
@@ -228,3 +243,4 @@
 | 1.2 | 2026-11-18 | §2.3 写明 `totp` 字段文本的约定（`otpauth://totp/` URI 或 Base32 密钥），此前未作规定。解码规则不变 |
 | 1.3 | 2026-11-19 | §2.1 新增属性 `ssh_agent`（SSH Agent 的授权策略）。属性名本来就是开放的，解码规则不变 |
 | 1.4 | 2026-11-19 | §2.1 新增属性 `security_alerts`（安全中心忽略某个条目）；文首版本号补正（1.3 时漏改）。解码规则不变 |
+| 1.5 | 2026-11-19 | 新增 §2.5 条目详情 v2（草案）：字段类型 `attachment` 与附件引用；版本由内容决定，没有附件的条目仍是 v1。v1 的解码规则不变；v1 测试向量中"不认识的版本"改用 3，新增 v2 测试向量 |

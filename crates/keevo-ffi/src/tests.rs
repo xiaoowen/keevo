@@ -1484,3 +1484,73 @@ fn import_and_export() {
     assert_eq!(f.vault.undo_import(result.item_ids.clone()).unwrap(), 6);
     assert!(f.vault.items().unwrap().iter().all(|i| i.trashed));
 }
+
+#[test]
+fn attachments() {
+    let f = Fixture::new();
+    let item = f.login("带附件");
+    let src = f.dir.join("ca-certificate.pem");
+    let content = b"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n".repeat(2000);
+    std::fs::write(&src, &content).unwrap();
+    let entry = f
+        .vault
+        .add_attachment(item.clone(), src.to_string_lossy().into_owned())
+        .unwrap();
+    assert_eq!(entry.name, "ca-certificate.pem");
+    assert_eq!(entry.size, u64::try_from(content.len()).unwrap());
+    let detail = f.vault.item(item.clone()).unwrap();
+    let field = detail
+        .fields
+        .iter()
+        .find(|x| x.kind == "attachment")
+        .unwrap();
+    assert_eq!(field.attachment.as_ref().unwrap(), &entry);
+
+    let out = f.dir.join("saved.pem");
+    f.vault
+        .save_attachment(
+            item.clone(),
+            entry.id.clone(),
+            out.to_string_lossy().into_owned(),
+        )
+        .unwrap();
+    assert_eq!(std::fs::read(&out).unwrap(), content);
+    let preview_dir = f.dir.join("preview");
+    let preview = f
+        .vault
+        .preview_attachment(
+            item.clone(),
+            entry.id.clone(),
+            preview_dir.to_string_lossy().into_owned(),
+            "../escape.pem".into(),
+        )
+        .unwrap();
+    assert!(
+        preview.starts_with(&*preview_dir.to_string_lossy()),
+        "文件名中的路径被去掉"
+    );
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&preview_dir)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700);
+    }
+
+    // 超过 50 MB：读取前就拒绝
+    let big = f.dir.join("big.bin");
+    std::fs::File::create(&big)
+        .unwrap()
+        .set_len(50 * 1024 * 1024 + 1)
+        .unwrap();
+    assert!(matches!(
+        f.vault.add_attachment(item.clone(), big.to_string_lossy().into_owned()),
+        Err(KeevoError::Attachment { code }) if code == "too_large"
+    ));
+    assert!(matches!(
+        f.vault.add_attachment(item, f.dir.to_string_lossy().into_owned()),
+        Err(KeevoError::Attachment { code }) if code == "unreadable"
+    ));
+}

@@ -86,6 +86,11 @@ pub enum KeevoError {
         /// 不支持的算法名（`unsupported`）或加密方式（`cipher`）。
         detail: String,
     },
+    /// 附件无法添加（`too_large`：超过 50 MB；`unreadable`：文件无法读取）。
+    Attachment {
+        /// 原因代码。
+        code: String,
+    },
     /// 导入文件无法导入（`not_recognized`、`password_required`、`wrong_password`、`account_restricted`、
     /// `too_large`、`malformed`、`empty`）。
     Import {
@@ -137,6 +142,7 @@ impl fmt::Display for KeevoError {
             Self::SshKey { code, detail } => write!(f, "ssh key: {code} {detail}"),
             Self::Backup { code } => write!(f, "backup: {code}"),
             Self::Import { code } => write!(f, "import: {code}"),
+            Self::Attachment { code } => write!(f, "attachment: {code}"),
             Self::InvalidInput { message } => write!(f, "invalid input: {message}"),
             Self::Internal { message } => write!(f, "internal: {message}"),
         }
@@ -638,6 +644,21 @@ pub struct FieldEntry {
     pub kv: Vec<KvItem>,
     /// 恢复码（`recovery_codes` 字段），其他字段为空。
     pub codes: Vec<CodeItem>,
+    /// 附件（`attachment` 字段），其他字段为 `None`。
+    pub attachment: Option<AttachmentEntry>,
+}
+
+/// 附件引用（`spec/vault-format.md` §2.5）。
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct AttachmentEntry {
+    /// 附件 ID（十六进制）。
+    pub id: String,
+    /// 文件名。
+    pub name: String,
+    /// 大小（字节）。
+    pub size: u64,
+    /// 添加时间（Unix 毫秒）。
+    pub added_ms: u64,
 }
 
 /// 键值对中的一项。
@@ -2168,7 +2189,7 @@ fn core_edit(edit: ItemEdit) -> Result<Edit, KeevoError> {
             match &mut field.data {
                 FieldData::Kv(entries) => *entries = kv_entries(kv),
                 FieldData::Codes(list) => *list = code_entries(codes),
-                FieldData::Text(_) => {}
+                FieldData::Text(_) | FieldData::Attachment(_) => {}
             }
             Edit::AddFieldToSection {
                 section: section_id.as_deref().map(parse_id).transpose()?,
@@ -2282,7 +2303,16 @@ fn doc_fields(doc: &ItemDoc, secrets: &SecretRegistry) -> Vec<FieldEntry> {
                             })
                             .collect(),
                     ),
-                    FieldData::Text(_) => (Vec::new(), Vec::new()),
+                    FieldData::Text(_) | FieldData::Attachment(_) => (Vec::new(), Vec::new()),
+                };
+                let attachment = match &f.data {
+                    FieldData::Attachment(a) => Some(AttachmentEntry {
+                        id: a.id.to_hex(),
+                        name: a.name.clone(),
+                        size: u64::try_from(a.size).unwrap_or(0),
+                        added_ms: u64::try_from(a.added).unwrap_or(0),
+                    }),
+                    _ => None,
                 };
                 Some((
                     (r, f.order.clone(), *id),
@@ -2296,6 +2326,7 @@ fn doc_fields(doc: &ItemDoc, secrets: &SecretRegistry) -> Vec<FieldEntry> {
                         section_id: section.map(|s| s.to_hex()),
                         kv,
                         codes,
+                        attachment,
                     },
                 ))
             }
@@ -2381,6 +2412,7 @@ fn field_text(data: &FieldData) -> Zeroizing<String> {
     let mut out = Zeroizing::new(String::new());
     match data {
         FieldData::Text(s) => out.push_str(s.expose()),
+        FieldData::Attachment(a) => out.push_str(&a.name),
         FieldData::Kv(entries) => {
             for (i, e) in entries.iter().enumerate() {
                 if i > 0 {
@@ -2435,6 +2467,7 @@ const fn field_kind_name(k: FieldKind) -> &'static str {
         FieldKind::Reference => "reference",
         FieldKind::RecoveryCodes => "recovery_codes",
         FieldKind::KvList => "kv_list",
+        FieldKind::Attachment => "attachment",
     }
 }
 
@@ -2481,6 +2514,7 @@ fn purpose_from(name: &str) -> Option<Purpose> {
     .find(|p| purpose_name(*p) == name)
 }
 
+mod attachment;
 mod backup;
 mod developer;
 mod import;

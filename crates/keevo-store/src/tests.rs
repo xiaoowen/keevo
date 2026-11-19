@@ -520,3 +520,39 @@ fn backup_and_restore() {
         Some(StoreError::UnsupportedSchema(SCHEMA_VERSION + 1))
     );
 }
+
+#[test]
+fn attachments_round_trip_and_checks() {
+    let mut store = Store::open_in_memory().unwrap();
+    let row = AttachmentRow {
+        id: id(70),
+        item_id: id(50),
+        wrapped_key_ct: vec![1; 80],
+        meta_ct: vec![2; 300],
+        chunk_count: 2,
+    };
+    assert_eq!(
+        store.insert_attachment(&row, &[vec![3; 10]]),
+        Err(StoreError::TooLarge),
+        "块数必须与 chunk_count 一致"
+    );
+    store
+        .insert_attachment(&row, &[vec![3; 10], vec![4; 5]])
+        .unwrap();
+    let (got, chunks) = store.attachment(&id(70)).unwrap().unwrap();
+    assert_eq!(got, row);
+    assert_eq!(chunks, [vec![3; 10], vec![4; 5]]);
+    assert_eq!(store.attachments_of(&id(50)).unwrap(), [id(70)]);
+    assert_eq!(store.attachment(&id(71)).unwrap(), None);
+    // 少了一块：读取时发现
+    store
+        .execute_for_tests_internal("DELETE FROM attachment_chunk WHERE idx = 1")
+        .unwrap();
+    assert!(matches!(
+        store.attachment(&id(70)),
+        Err(StoreError::Corrupt(_))
+    ));
+    store.delete_attachment(&id(70)).unwrap();
+    assert_eq!(store.attachment(&id(70)).unwrap(), None);
+    assert!(store.attachments_of(&id(50)).unwrap().is_empty());
+}

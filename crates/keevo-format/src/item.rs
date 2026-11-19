@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use crate::FORMAT_VERSION;
+
+/// 含附件字段的条目详情的版本（`spec/vault-format.md` §2.5）。
+pub const ITEM_DETAILS_V2: u32 = 2;
 use crate::error::{FormatError, Result};
 use crate::hlc::Hlc;
 use crate::json::{from_canonical_json, from_json, to_json};
@@ -66,7 +69,8 @@ pub enum FieldKind {
     RecoveryCodes,
     /// 键值对列表。
     KvList,
-    // 附件不在 v1 中：附件引用与分块格式定稿后随新的文档版本加入（`spec/vault-format.md` §2.3）。
+    /// 附件（条目详情 v2，`spec/vault-format.md` §2.5）。
+    Attachment,
 }
 
 impl FieldKind {
@@ -145,7 +149,7 @@ impl ItemDoc {
     /// 序列化失败时返回 [`FormatError::Malformed`]。
     pub fn encode(&self) -> Result<Zeroizing<Vec<u8>>> {
         to_json(&ItemDocJsonRef {
-            v: FORMAT_VERSION,
+            v: self.version(),
             item_type: self.item_type,
             records: &self.records,
             concurrent: &self.concurrent,
@@ -173,9 +177,9 @@ impl ItemDoc {
     /// # Errors
     /// 结构错误、版本不支持或记录值与键不匹配时返回对应错误。
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        crate::json::check_version(bytes, FORMAT_VERSION)?;
+        crate::json::check_version_in(bytes, &[FORMAT_VERSION, ITEM_DETAILS_V2])?;
         let doc: ItemDocJson = from_json(bytes)?;
-        if doc.v != FORMAT_VERSION {
+        if doc.v != FORMAT_VERSION && doc.v != ITEM_DETAILS_V2 {
             return Err(FormatError::UnsupportedVersion(doc.v));
         }
         let doc = Self {
@@ -189,6 +193,16 @@ impl ItemDoc {
         }
         doc.validate()?;
         Ok(doc)
+    }
+
+    /// 文档的版本（`spec/vault-format.md` §2.5）：任何记录版本（含并发版本）是附件字段时为 2，否则为 1。
+    /// 没有附件的条目仍按 v1 编码，旧版本的 Keevo 照常读取。
+    #[must_use]
+    pub fn version(&self) -> u32 {
+        let is_attachment = |v: &crate::RecordVersion| matches!(&v.value, Some(crate::RecordValue::Field(f)) if f.kind == FieldKind::Attachment);
+        let any = self.records.values().any(is_attachment)
+            || self.concurrent.values().flatten().any(is_attachment);
+        if any { ITEM_DETAILS_V2 } else { FORMAT_VERSION }
     }
 
     /// 记录键的总数（当前版本与并发版本的键取并集）。
@@ -992,9 +1006,14 @@ mod tests {
             Err(FormatError::Malformed(_))
         ));
         assert_eq!(
-            ItemDoc::decode(br#"{"v":2,"type":"login","records":{}}"#),
-            Err(FormatError::UnsupportedVersion(2))
+            ItemDoc::decode(br#"{"v":3,"type":"login","records":{}}"#),
+            Err(FormatError::UnsupportedVersion(3))
         );
+        // v2 只用于含附件的文档：没有附件的 v2 不是规范编码
+        assert!(matches!(
+            ItemDoc::decode(br#"{"v":2,"type":"login","records":{}}"#),
+            Err(FormatError::Malformed(_))
+        ));
         // 键名不合法是语义错误（spec/vault-format.md §1.1 第 3 步），不是 malformed；未知的种类前缀才是结构错误
         let bad_key = br#"{"v":1,"type":"login","records":{"attr:Title":{"hlc":"0000000000000001","rev":"00000000000000000000000000000000"}}}"#;
         assert_eq!(ItemDoc::decode(bad_key), Err(FormatError::InvalidKey));

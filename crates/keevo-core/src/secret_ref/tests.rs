@@ -320,7 +320,7 @@ fn generated_references_resolve_to_the_same_value() {
                         assert_eq!(get(&f, &r).unwrap(), e.value.expose(), "{r}");
                     }
                 }
-                FieldData::Codes(_) => {}
+                FieldData::Codes(_) | FieldData::Attachment(_) => {}
             }
         }
     }

@@ -397,6 +397,8 @@ fn item_detail(id: u32, vault: &Vault, spec: &str, reveal: bool) -> Reply {
             let concealed = f.kind.is_concealed();
             let value = match &f.data {
                 FieldData::Text(t) => (reveal || !concealed).then(|| t.expose().to_owned()),
+                // 附件只显示文件名与大小；内容不经过命令行
+                FieldData::Attachment(a) => Some(format!("{}（{} 字节）", a.name, a.size)),
                 FieldData::Kv(entries) => Some(
                     entries
                         .iter()

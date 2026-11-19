@@ -6,9 +6,9 @@
 
 | 规范 | 版本 | 状态 | 测试向量 |
 |---|---|---|---|
-| [crypto.md](crypto.md)：账户密钥、KDF、2SKD、密钥集、加密信封 | 1.4 | **已冻结**（§8.7 本机密钥包裹、§8.8 本机记录是本机格式，不在冻结范围内） | [test-vectors/crypto-v1.json](test-vectors/crypto-v1.json) |
+| [crypto.md](crypto.md)：账户密钥、KDF、2SKD、密钥集、加密信封、附件 | 1.5 | **已冻结**（§8.7 本机密钥包裹、§8.8 本机记录是本机格式，不在冻结范围内；§8.9 附件是草案） | [test-vectors/crypto-v1.json](test-vectors/crypto-v1.json) |
 | [revisions.md](revisions.md)：修订图、记录、HLC、合并 | 1.1 | **已冻结** | [test-vectors/revisions-v1.json](test-vectors/revisions-v1.json)（24 个合并场景） |
-| [vault-format.md](vault-format.md)：条目与保险库的明文结构 | 1.4 | **已冻结** | [test-vectors/vault-format-v1.json](test-vectors/vault-format-v1.json)（规范编码、正向与负向解码） |
+| [vault-format.md](vault-format.md)：条目与保险库的明文结构 | 1.5 | **已冻结**（§2.5 条目详情 v2 是草案） | [test-vectors/vault-format-v1.json](test-vectors/vault-format-v1.json)（规范编码、正向与负向解码）；[vault-format-v2.json](test-vectors/vault-format-v2.json)（附件字段） |
 | [ipc.md](ipc.md)：浏览器扩展与桌面应用的本地通信 | 2.3 | **协议 v1 已冻结**；协议 v2（§5.5，保存与更新）与 v3（§5.6，搜索、打开、解锁）尚未冻结 | [test-vectors/ipc-v1.json](test-vectors/ipc-v1.json)（配对承诺、XX 与 IK 的 v1 / v2 握手、SAS 与词表映射、传输消息）；SAS 词表 v1：[sas-wordlist-v1.tsv](sas-wordlist-v1.tsv) |
 | [secret-refs.md](secret-refs.md)：`keevo://` 密钥引用的语法与解析 | 0.1 | 草案（M1.4） | 单元测试（`keevo-core` 的 `secret_ref`） |
 | [cli.md](cli.md)：命令行工具与 Vault Service 的协议、终端会话授权 | 0.2 | 草案（M1.4） | 集成测试（`keevo-service` 的 `cli`） |
@@ -40,7 +40,7 @@
 
 | 格式 | 将来的版本标识 | 计划 |
 |---|---|---|
-| 附件引用与附件分块（STREAM） | 条目详情 `"v": 2`；`part = Chunk` 的内容 | M1 期间 |
+| 附件引用与附件分块 | 条目详情 `"v": 2`；`part = Chunk` 的内容 | M1.5 已有草案（vault-format §2.5、crypto §8.9），评审后冻结 |
 | 同步日志段、快照、设备证书、Ed25519 签名 | 各自的格式版本；`object_type` 0x05–0x07 | M2 |
 | 保险库元数据改用记录映射 | 保险库元数据 `"v": 2` | M2 |
 | CLI 会话授权、更多推送事件 | 新的握手用途或 IPC 协议 v2 | M1.4 起 |

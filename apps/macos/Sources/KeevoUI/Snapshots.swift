@@ -85,6 +85,14 @@ public enum Snapshots {
             print("✗ 示例数据：\(error)")
             return 1
         }
+        // 附件：证书与架构图（内容是虚构的）
+        let files = temp.appendingPathComponent("attachments", isDirectory: true)
+        try? FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
+        let pem = files.appendingPathComponent("ca-certificate.pem")
+        let png = files.appendingPathComponent("架构图.png")
+        try? Data(String(repeating: "-----BEGIN CERTIFICATE-----\nMIIB…\n", count: 60).utf8).write(to: pem)
+        try? Data(repeating: 7, count: 248 * 1024).write(to: png)
+        _ = await model.addAttachments(itemId: ids.database, urls: [pem, png])
         model.reloadAfterBrowserWrite()
 
         let main = CGSize(width: 1200, height: 760)
@@ -165,6 +173,13 @@ public enum Snapshots {
         await shooter.shoot("export", sheet: true) { ExportSheet() }
         await shooter.shoot("export-plain", sheet: true) { ExportPlainSheet { _ in false } }
         await shooter.shoot("practice", sheet: true) { PracticeSheet() }
+        await shooter.shoot("attachment-delete", sheet: true) { DeleteAttachmentSheet(name: "架构图.png") {} }
+        await shooter.shoot("attachment-too-big", sheet: true) {
+            TooBigAttachmentSheet(file: TooBigAttachment(name: "数据库备份.sql", size: 1_288_490_189))
+        }
+        await shooter.shoot("attachment-drop", size: CGSize(width: 700, height: 300)) {
+            AttachmentDropOverlay(title: "生产数据库").frame(width: 700, height: 300).background(KV.Colors.bgCanvas)
+        }
         await shooter.shoot("settings-browser", sheet: true) { SettingsView(initialPage: .browser) }
         model.refreshDeveloper()
         await shooter.shoot("settings-developer", sheet: true) { SettingsView(initialPage: .developer) }

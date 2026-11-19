@@ -1,7 +1,7 @@
 # Keevo 加密规范
 
-- **版本**：1.4
-- **状态**：**已冻结**（2026-11-18，经四轮模型评审，[处理记录](../docs/reviews/)）。冻结范围与版本规则见 [README.md](README.md)。§8.7 本机密钥包裹与 §8.8 本机记录是本机格式，不参与同步，不在冻结范围内。
+- **版本**：1.5
+- **状态**：**已冻结**（2026-11-18，经四轮模型评审，[处理记录](../docs/reviews/)）。冻结范围与版本规则见 [README.md](README.md)。§8.7 本机密钥包裹与 §8.8 本机记录是本机格式，不参与同步，不在冻结范围内。§8.9 附件（M1.5）是草案，评审后冻结。
 - **参考实现**：`crates/keevo-crypto`（Rust）
 - **独立实现**：`spec/reference/generate_vectors.py`（Python，基于 argon2-cffi 与 libsodium），用来生成测试向量。
 - **测试向量**：`spec/test-vectors/crypto-v1.json`
@@ -18,7 +18,7 @@ v0.1 覆盖 M1 本地保险库所需的全部内容：
 - 账户密钥集的格式与封装
 - 加密信封（Envelope）：头部、AAD、长度填充、加解密流程
 
-尚未覆盖，见 §11：附件分块加密、签名、同步文件格式。
+尚未覆盖，见 §11：签名、同步文件格式。附件见 §8.9（草案）。
 
 ## 2. 约定
 
@@ -434,6 +434,33 @@ ciphertext ‖ tag = XChaCha20-Poly1305(key, nonce, plaintext, aad)
   - **提供**：没有 ASK 的进程既读不出记录，也伪造不了新记录，与条目相同。这是配对记录不放在只用 Secure Enclave 包裹的文件里的原因（`ipc.md` §4.2）。
   - **不提供**：同用户的进程可以删除记录，或把旧的密文换回来（回滚）。本机没有可信的单调计数器，任何本地状态都可以回滚，包括整个数据库。删除只会让配对或授权失效，是安全的方向；回滚可以让**已撤销**的配对或授权恢复。这归入 `docs/security.md` A7 的残余风险：能这样做的进程同样能读出扩展落盘的静态私钥。
 
+### 8.9 附件（草案，M1.5）
+
+附件是一个**不可变**的文件：替换文件即是新的附件。条目中只有附件引用（`vault-format.md` §2.5），内容按下面的方式加密，
+存放在本机数据库中（随备份一起保存；同步格式 M2 定义）。
+
+```
+AK            ← 随机对称密钥（与 IK 相同的生成方式）
+wrapped_key   = seal(VK, ctx(WrappedKey, 0, Z(32)), child_kid ‖ AK)        // §9.2 的被包裹密钥
+meta          = seal(AK, ctx(Content, 0, Z(32)), 元数据 JSON)
+chunk[i]      = seal(AK, ctx(Chunk, i, be32(n) ‖ Z(28)), 内容的第 i 块)     // i = 0 … n−1
+ctx(part, index, binding) = { object_type = Attachment (0x04), part, part_index = index,
+                              account_id, vault_id = 所属保险库 ID, object_id = 附件 ID, rev_id = Z(16), binding }
+```
+
+- **分块**：每块明文恰好 65536 字节，最后一块 1–65536 字节；`n = ⌈size / 65536⌉`，空文件 `n = 0`（没有块）。
+- **绑定**：块序号在 `part_index` 中，总块数 `n` 在 `binding` 的前 4 字节（大端）。因此块不能被调换、删去、
+  追加，也不能拼到另一个附件或另一个账户上。
+- **元数据**：UTF-8 JSON 对象，恰好有这些成员：`v`（1）、`item`（所属条目 ID，32 个小写十六进制字符）、
+  `name`（文件名）、`size`（字节数）、`chunks`（`n`）。未知成员一律拒绝。
+- **读取**：解开 AK，打开元数据，核对 `v = 1`、`item` 是请求的条目、`chunks` 与存储的块数相同、
+  `⌈size / 65536⌉ = chunks`；再依次打开每块，核对除最后一块外长度恰好 65536、最后一块非空，总长度等于 `size`。
+  任何一项不符都视为篡改。
+- **大小上限**：单个附件 50 MiB（800 块）。
+- **删除**：删除附件字段不删除内容——历史版本仍引用它；条目永久删除时删除全部附件；历史版本被清理后，
+  不再被任何留有内容的修订引用的附件随之删除（`revisions.md` §7.2）。
+- **已知限制**：重建条目（`revisions.md` §7.1）时附件引用不随之迁移，重建前请先保存附件。
+
 ## 9. 枚举
 
 ### 9.1 `object_type`
@@ -476,7 +503,6 @@ ciphertext ‖ tag = XChaCha20-Poly1305(key, nonce, plaintext, aad)
 
 | 事项 | 计划 |
 |---|---|
-| 附件分块加密（STREAM 构造）；`part = Chunk` 的内容 | 随附件一起定义，M1 期间 |
 | Ed25519 公钥派生与签名格式 | M2 |
 | 同步日志段、快照、设备证书格式；`object_type` 0x05–0x07 的内容 | M2，见 `docs/sync.md` |
 | 算法升级（新的 `alg` 取值） | 有需要时以新的 `alg` 定义 |
@@ -495,3 +521,4 @@ ciphertext ‖ tag = XChaCha20-Poly1305(key, nonce, plaintext, aad)
 | 1.2 | 2026-11-18 | 新增 §8.8 本机记录（本机格式 v1）：浏览器配对记录与站点授权的加密与保护范围。共享格式与测试向量不变 |
 | 1.3 | 2026-11-19 | §3 的适用范围新增 SSH Agent（Ed25519 签名与 SHA-256 指纹）。共享格式与测试向量不变 |
 | 1.4 | 2026-11-19 | §3 的适用范围新增导入 OpenSSH 私钥时的 bcrypt_pbkdf 与 AES-CTR（只做解密）。共享格式与测试向量不变 |
+| 1.5 | 2026-11-19 | 新增 §8.9 附件（草案）：附件密钥由 VK 包裹，元数据与内容用信封 v1 封装，内容按 64 KiB 分块，块序号与总块数进入 AAD。没有引入新的密码学构造；`object_type = Attachment`、`part = Chunk` 早已分配，现有信封向量 `attachment_chunk` 覆盖其 AAD 编码。已冻结的格式不变。另：导入 Bitwarden 有密码保护的导出（PBKDF2 / Argon2id、AES-CBC + HMAC，只做解密）与 Keevo 导出文件（`export.md`）使用的原语都在 `keevo-crypto` 中 |
