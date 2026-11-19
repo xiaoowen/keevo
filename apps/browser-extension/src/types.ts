@@ -87,8 +87,40 @@ export interface MenuResponse {
   error?: string;
 }
 
+/** 保存栏的内容（不含密码）。 */
+export interface BarInit {
+  kind: "save" | "update";
+  /** 站点的主机名。 */
+  host: string;
+  username: string;
+  /** 要更新的条目标题（update）。 */
+  title: string;
+}
+
+/** 保存栏（bar.html）发给 Service Worker 的消息。 */
+export type BarRequest =
+  | { type: "bar_init" }
+  | { type: "bar_save" }
+  | { type: "bar_dismiss" }
+  | { type: "bar_never" }
+  | { type: "bar_close" };
+
+export interface BarResponse {
+  init?: BarInit;
+  ok?: boolean;
+  error?: string;
+}
+
 /** 内容脚本发给 Service Worker 的消息。 */
-export type ContentRequest = { type: "inline_open"; kind: "login" | "otp" } | { type: "inline_close" };
+export type ContentRequest =
+  | { type: "inline_open"; kind: "login" | "otp" }
+  | { type: "inline_close" }
+  /** 用户提交了带密码的表单。`change` 表示这是修改密码的表单。 */
+  | { type: "submitted"; username: string; password: string; change: boolean }
+  /** 分步登录的第一步：只提交了用户名。 */
+  | { type: "username_step"; username: string }
+  /** 新页面加载：这个标签页是否有待显示的保存栏。 */
+  | { type: "offer_query" };
 
 /** Service Worker 发给离屏文档的消息。 */
 export interface OffscreenRequest {

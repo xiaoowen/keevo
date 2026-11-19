@@ -2,19 +2,13 @@
 //
 // 页内菜单（扩展源的 iframe，由内容脚本挂在输入框下方）：列出与这个帧的网站匹配的条目，用户选择后填充。
 //
-// 点击劫持防护（docs/security.md §12）：
-// - 用 IntersectionObserver v2（trackVisibility）判断菜单是否真的可见：被遮挡、透明、加滤镜或变形都算不可见；
-// - 连续可见满 500 毫秒后才接受点击，防止页面在用户点击的瞬间把菜单移到光标下；
-// - 只接受可信事件；持续不可见（超过 1 秒）时被点击，关闭菜单并改用工具栏中的 Keevo 弹窗（降级为弹窗内确认）。
-//   菜单改变大小或位置时可能短暂判定为不可见，这时的点击同样不填充，但不关闭菜单；
+// 点击劫持防护见 guard.ts（docs/security.md §12）。
 // - 菜单只拿到条目概要；凭据由 Service Worker 直接发给发起菜单的那个帧，不经过这里。
 
+import { createGuard } from "./guard.js";
 import type { Candidate, MenuInit, MenuRequest, MenuResponse } from "./types.js";
 
 const root = document.getElementById("app") as HTMLElement;
-const MIN_VISIBLE_MS = 500;
-/** 持续不可见超过这个时间还被点击，判定为被遮挡或透明（可能是点击劫持）。 */
-const BLOCKED_AFTER_MS = 1000;
 
 function ask(req: MenuRequest): Promise<MenuResponse> {
   return chrome.runtime.sendMessage(req) as Promise<MenuResponse>;
@@ -27,46 +21,12 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, cls?: 
   return e;
 }
 
-// ---- 可见性
+// ---- 可见性（点击劫持防护，见 guard.ts）
 
-let visibleSince: number | null = null;
-/** 最近一次变为不可见的时刻（从未可见过时为页面加载时刻）。 */
-let hiddenSince = performance.now();
-
-/** 已连续可见足够久，可以接受点击。 */
-function ready(): boolean {
-  return visibleSince !== null && performance.now() - visibleSince >= MIN_VISIBLE_MS;
-}
+const guard = createGuard(document.body, () => void ask({ type: "menu_blocked" }));
 
 function updateReady(): void {
-  document.body.classList.toggle("armed", ready());
-}
-
-const observer = new IntersectionObserver(
-  (entries) => {
-    for (const e of entries) {
-      const v = (e as IntersectionObserverEntry & { isVisible?: boolean }).isVisible === true;
-      if (v && visibleSince === null) {
-        visibleSince = performance.now();
-        setTimeout(updateReady, MIN_VISIBLE_MS + 10);
-      } else if (!v && visibleSince !== null) {
-        visibleSince = null;
-        hiddenSince = performance.now();
-      }
-      updateReady();
-    }
-  },
-  // trackVisibility 与 delay 是 v2 的选项（lib.dom 尚未收录）
-  { threshold: [1], trackVisibility: true, delay: 100 } as IntersectionObserverInit,
-);
-observer.observe(document.body);
-
-/** 点击前的检查。不通过、且菜单已持续不可见一段时间时，关闭菜单并请用户改用弹窗。 */
-function guard(e: Event): boolean {
-  if (!e.isTrusted) return false;
-  if (ready()) return true;
-  if (visibleSince === null && performance.now() - hiddenSince >= BLOCKED_AFTER_MS) void ask({ type: "menu_blocked" });
-  return false;
+  document.body.classList.toggle("armed", guard.ready());
 }
 
 // ---- 渲染
@@ -148,7 +108,7 @@ function row(c: Candidate): HTMLElement {
   b.append(text);
   if (pendingConfirm === c.item_id) b.append(el("span", "再次点击确认", "confirm"));
   b.addEventListener("click", (e) => {
-    if (!guard(e) || busy) return;
+    if (!guard.check(e) || busy) return;
     void choose(c);
   });
   return b;

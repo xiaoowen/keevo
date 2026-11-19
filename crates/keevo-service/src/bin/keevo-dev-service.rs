@@ -27,7 +27,7 @@ use keevo_core::{
     AccountSecretKey, FieldData, FieldKind, ItemType, KdfParams, NewField, Purpose, Vault,
 };
 use keevo_crypto::StaticKeypair;
-use keevo_ipc::service::FillRequest;
+use keevo_ipc::service::{FillRequest, WriteOp, WriteRequest};
 use keevo_service::{PairingPrompt, PeerPolicy, VaultService, bind};
 use zeroize::Zeroizing;
 
@@ -90,6 +90,47 @@ impl PairingPrompt for TerminalPrompt {
     fn fill_paused(&self, _: &[u8; 32], name: &str, _: &str) {
         eprintln!("\n「{name}」短时间内取用了太多条目，已暂停它的填充。");
     }
+
+    fn confirm_update(
+        &self,
+        r: &WriteRequest,
+        changed: bool,
+        deadline: std::time::Instant,
+    ) -> bool {
+        let WriteOp::Update {
+            title, username, ..
+        } = &r.op
+        else {
+            return false;
+        };
+        eprintln!(
+            "\n「{}」（{}）请求更新「{title}」（{username}）在 {} 上的密码{}。",
+            r.pairing_name,
+            r.browser,
+            r.site,
+            if changed {
+                ""
+            } else {
+                "（与保存的相同）"
+            }
+        );
+        eprint!("允许吗？[y/N] ");
+        let _ = std::io::stderr().flush();
+        let ok = ask(deadline);
+        eprintln!(
+            "{}",
+            if ok {
+                "已更新。"
+            } else {
+                "已拒绝（或超时）。"
+            }
+        );
+        ok
+    }
+
+    fn saved(&self, name: &str, _: &str, title: &str) {
+        eprintln!("\n「{name}」保存了新的登录「{title}」。");
+    }
 }
 
 /// 在另一个线程读终端，到截止时间仍未回答即按拒绝处理。
@@ -119,6 +160,15 @@ impl PairingPrompt for AutoConfirm {
             r.site, r.title
         );
         true
+    }
+
+    fn confirm_update(&self, r: &WriteRequest, _: bool, _: std::time::Instant) -> bool {
+        eprintln!("[auto-confirm] 已自动允许更新 {} 上的密码", r.site);
+        true
+    }
+
+    fn saved(&self, name: &str, _: &str, title: &str) {
+        eprintln!("[auto-confirm] 「{name}」保存了新的登录「{title}」");
     }
 }
 

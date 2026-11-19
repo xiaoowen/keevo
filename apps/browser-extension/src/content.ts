@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later（附加 App Store 许可，见仓库根目录 LICENSE）
 //
-// 内容脚本（隔离环境，所有帧）：识别登录字段、在输入框旁显示 Keevo 图标、打开页内菜单、执行填充。
+// 内容脚本（隔离环境，所有帧）：识别登录字段、在输入框旁显示 Keevo 图标、打开页内菜单、执行填充；
+// 检测登录表单的提交，在顶层帧显示保存栏（协议 v2，spec/ipc.md §5.5）。
 //
 // - 只在可信的用户手势后打开菜单（event.isTrusted），从不在页面加载时自动填充（docs/security.md §12）；
 // - 图标与菜单挂在封闭的 shadow root 中，并用 popover 置于顶层；菜单本身是扩展源的 iframe（menu.html），
@@ -32,7 +33,9 @@
     | FillMessage
     | { type: "close_menu" }
     | { type: "menu_size"; height: number }
-    | { type: "open_menu" };
+    | { type: "open_menu" }
+    | { type: "show_bar" }
+    | { type: "close_bar" };
 
   const ICON_SIZE = 20;
   const MENU_WIDTH = 320;
@@ -41,6 +44,7 @@
   let anchorKind: Kind = "login";
   let icon: { host: HTMLElement; button: HTMLButtonElement } | null = null;
   let menu: { host: HTMLElement; frame: HTMLIFrameElement; above: boolean | null; raises: number } | null = null;
+  let bar: { host: HTMLElement; raises: number } | null = null;
   /** 页面在菜单之后打开顶层元素时，最多把菜单重新放到最上面几次（防止与页面无休止地互相抢）。 */
   const MAX_RAISES = 3;
 
@@ -277,6 +281,133 @@
     return "filled";
   }
 
+  // ---- 保存：检测登录表单的提交（只在标准模式下有内容脚本时工作）
+
+  /** 提交时表单中的凭据。修改密码的表单取新密码。 */
+  function captured(root: ParentNode): { username: string; password: string; change: boolean } | null {
+    const all = Array.from(root.querySelectorAll<HTMLInputElement>('input[type="password"]')).filter(
+      (el) => el.value !== "",
+    );
+    if (all.length === 0) return null;
+    const fresh = all.filter((el) => autocomplete(el).includes("new-password"));
+    const change = fresh.length > 0 || all.length >= 2;
+    // 注册表单常有"确认密码"，修改密码表单是"当前 / 新 / 确认"：取新密码
+    let password = all[0];
+    if (fresh.length > 0) password = fresh[0];
+    else if (all.length >= 3) password = all[1];
+    else if (all.length === 2) password = all[all.length - 1];
+    if (!password) return null;
+    const first = all[0] as HTMLInputElement;
+    const named = Array.from(root.querySelectorAll<HTMLInputElement>("input")).find(
+      (el) => autocomplete(el).includes("username") && el.value !== "",
+    );
+    const user = named ?? usernameBefore(first);
+    return { username: user?.value.trim() ?? "", password: password.value, change };
+  }
+
+  let lastSubmit = "";
+  function submitted(root: ParentNode): void {
+    const creds = captured(root);
+    if (!creds) {
+      // 分步登录的第一步：只有用户名
+      const user = Array.from(root.querySelectorAll<HTMLInputElement>("input")).find(
+        (el) =>
+          TEXTUAL.has(el.type) &&
+          (autocomplete(el).includes("username") || autocomplete(el).includes("email") || el.type === "email") &&
+          el.value !== "",
+      );
+      if (user) void chrome.runtime.sendMessage({ type: "username_step", username: user.value.trim() });
+      return;
+    }
+    // 同一次提交可能同时触发点击、回车与 submit 事件
+    const key = `${creds.username}\u0000${creds.password}`;
+    if (key === lastSubmit) return;
+    lastSubmit = key;
+    setTimeout(() => {
+      if (lastSubmit === key) lastSubmit = "";
+    }, 2000);
+    void chrome.runtime.sendMessage({ type: "submitted", ...creds });
+  }
+
+  function scopeOf(el: Element): ParentNode {
+    return el.closest("form") ?? document;
+  }
+
+  document.addEventListener(
+    "submit",
+    (e) => {
+      if (e.target instanceof HTMLFormElement) submitted(e.target);
+    },
+    true,
+  );
+  // 不用 <form> 的单页应用：点击提交按钮、在密码框中按回车
+  const SUBMIT_TEXT = /登录|登入|注册|继续|下一步|提交|保存|log\s*in|sign\s*(in|up)|continue|next|submit|save/i;
+  document.addEventListener(
+    "click",
+    (e) => {
+      if (!e.isTrusted) return;
+      const target = e.composedPath()[0];
+      if (!(target instanceof Element)) return;
+      const button = target.closest<HTMLElement>('button, input[type="submit"], [role="button"]');
+      if (!button) return;
+      const isSubmit =
+        (button instanceof HTMLButtonElement && button.type === "submit" && button.form !== null) ||
+        (button instanceof HTMLInputElement && button.type === "submit") ||
+        SUBMIT_TEXT.test(button.textContent ?? (button instanceof HTMLInputElement ? button.value : ""));
+      if (isSubmit) submitted(scopeOf(button));
+    },
+    true,
+  );
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (!e.isTrusted || e.key !== "Enter" || !(e.target instanceof HTMLInputElement)) return;
+      if (e.target.type === "password" || classify(e.target) === "login") submitted(scopeOf(e.target));
+    },
+    true,
+  );
+
+  // ---- 保存栏（顶层帧）
+
+  function showBar(): void {
+    if (bar || window !== window.top) return;
+    const width = Math.min(460, innerWidth - 16);
+    const { host, root } = topLayerHost(width, 56);
+    const frame = document.createElement("iframe");
+    frame.src = chrome.runtime.getURL("bar.html");
+    frame.title = "Keevo";
+    for (const [k, v] of Object.entries({
+      all: "initial",
+      display: "block",
+      width: "100%",
+      height: "100%",
+      border: "0",
+      "border-radius": "10px",
+      "box-shadow": "0 8px 24px rgba(0,0,0,.18), 0 0 0 1px rgba(0,0,0,.08)",
+      "color-scheme": "normal",
+    })) {
+      frame.style.setProperty(k, v);
+    }
+    root.append(frame);
+    place(host, (innerWidth - width) / 2, 12);
+    bar = { host, raises: 0 };
+  }
+
+  function closeBar(): void {
+    bar?.host.remove();
+    bar = null;
+  }
+
+  // 提交后页面跳转：新页面加载时询问是否有待显示的保存栏
+  if (window === window.top) {
+    void chrome.runtime.sendMessage({ type: "offer_query" }).then(
+      (r: { show?: boolean } | undefined) => {
+        if (r?.show) showBar();
+      },
+      () => undefined,
+    );
+  }
+
   // ---- 事件
 
   document.addEventListener(
@@ -331,13 +462,15 @@
   document.addEventListener(
     "toggle",
     (e) => {
-      if (!menu || (e as ToggleEvent).newState !== "open") return;
-      if (e.target === menu.host || e.target === icon?.host || menu.raises >= MAX_RAISES) return;
-      menu.raises += 1;
-      const focused = document.activeElement === menu.host;
-      menu.host.hidePopover();
-      menu.host.showPopover();
-      if (focused) menu.frame.contentWindow?.focus();
+      if ((e as ToggleEvent).newState !== "open") return;
+      if (e.target === menu?.host || e.target === icon?.host || e.target === bar?.host) return;
+      for (const surface of [bar, menu]) {
+        if (!surface || surface.raises >= MAX_RAISES) continue;
+        surface.raises += 1;
+        surface.host.hidePopover();
+        surface.host.showPopover();
+      }
+      if (menu && document.activeElement === menu.host) menu.frame.contentWindow?.focus();
     },
     true,
   );
@@ -364,6 +497,12 @@
         return false;
       case "menu_size":
         positionMenu(Math.min(Math.max(Math.round(m.height), 60), 360));
+        return false;
+      case "show_bar":
+        showBar();
+        return false;
+      case "close_bar":
+        closeBar();
         return false;
       case "open_menu": {
         // 快捷键：用户按下快捷键时焦点所在的字段

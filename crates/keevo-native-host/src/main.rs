@@ -15,7 +15,7 @@ use std::thread;
 use keevo_ipc::frame::{
     read_native_frame, read_socket_frame, write_native_frame, write_socket_frame,
 };
-use keevo_ipc::message::{ControlFrame, ErrorCode, HostHello, PROTOCOL_VERSION};
+use keevo_ipc::message::{ControlFrame, ErrorCode, HostHello, version_supported};
 
 /// 开发构建可用：跳过父进程校验（仅 debug 构建生效）。端到端测试用它模拟浏览器启动宿主。
 const DEV_ALLOW_ANY_PARENT: &str = "KEEVO_DEV_ALLOW_ANY_PARENT";
@@ -42,16 +42,18 @@ fn run() -> Result<(), ErrorCode> {
 
     let mut stdin = BufReader::new(io::stdin().lock());
     let first = read_native_frame(&mut stdin).map_err(|_| ErrorCode::BadRequest)?;
-    match ControlFrame::from_json(&first) {
-        Ok(ControlFrame::Hello { v }) if v == PROTOCOL_VERSION => {}
+    // 扩展请求的协议版本原样转给 Vault Service，由它决定是否支持（spec/ipc.md §5.5）。
+    // 版本写在 Noise prologue 中，host 改动版本只会让握手失败
+    let version = match ControlFrame::from_json(&first) {
+        Ok(ControlFrame::Hello { v }) if version_supported(v) => v,
         Ok(ControlFrame::Hello { .. }) => return Err(ErrorCode::UnsupportedVersion),
         _ => return Err(ErrorCode::BadRequest),
-    }
+    };
 
     let path = keevo_ipc::paths::socket_path().map_err(|_| ErrorCode::ServiceUnavailable)?;
     let mut socket = UnixStream::connect(path).map_err(|_| ErrorCode::ServiceUnavailable)?;
     let hello = HostHello {
-        v: PROTOCOL_VERSION,
+        v: version,
         client: "native-host".into(),
         extension_origin: origin,
         browser: browser.into(),

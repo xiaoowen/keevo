@@ -678,6 +678,17 @@ fn browser_service_pairs_lists_and_revokes() {
         fn fill_paused(&self, _: String, name: String, _: String) {
             self.0.lock().unwrap().push(format!("paused {name}"));
         }
+        fn confirm_update(&self, r: BrowserUpdateRequest, changed: bool, timeout_ms: u64) -> bool {
+            assert!(timeout_ms > 0 && timeout_ms <= 60_000);
+            self.0.lock().unwrap().push(format!(
+                "update {} {} {} {changed}",
+                r.title, r.username, r.site
+            ));
+            self.1.lock().unwrap().pop_front().unwrap_or(false)
+        }
+        fn login_saved(&self, name: String, _: String, title: String) {
+            self.0.lock().unwrap().push(format!("saved {name} {title}"));
+        }
     }
 
     let f = Fixture::new();
@@ -704,7 +715,7 @@ fn browser_service_pairs_lists_and_revokes() {
     let connect = || {
         let mut stream = UnixStream::connect(&socket).unwrap();
         let hello = serde_json::to_vec(&HostHello {
-            v: 1,
+            v: keevo_ipc::message::PROTOCOL_VERSION,
             client: "native-host".into(),
             extension_origin: origin.into(),
             browser: "com.google.Chrome".into(),
@@ -824,6 +835,87 @@ fn browser_service_pairs_lists_and_revokes() {
     );
     assert_eq!(asked(&prompt), 2);
     assert!(!f.vault.browser_pairings()[0].paused);
+
+    // 协议 v2（§5.5）：保存新登录不需要确认，保存后可以直接填充（凭据本来就是扩展提供的）；
+    // 更新每次都要确认，拒绝时不改动，确认后填充得到新密码
+    let call = |client: &mut ExtensionClient, stream: &mut UnixStream, c| {
+        let (_, frame) = client.request(c).unwrap();
+        write_socket_frame(stream, &frame).unwrap();
+        let frame = read_socket_frame(stream).unwrap();
+        let (_, mut events) = client.on_frame(&frame).unwrap();
+        match events.remove(0) {
+            ClientEvent::Message(m) => m,
+            other => panic!("{other:?}"),
+        }
+    };
+    let written = |m: &keevo_ipc::message::ServerMessage| match m {
+        keevo_ipc::message::ServerMessage::Ok {
+            result: keevo_ipc::message::CallResult::Written { item_id },
+            ..
+        } => Some(item_id.clone()),
+        _ => None,
+    };
+    let secret = |s: &str| keevo_ipc::message::SecretText::new(s);
+    let saved = call(
+        &mut client,
+        &mut stream,
+        keevo_ipc::message::Call::Save {
+            url: "https://news.example/login".into(),
+            username: "reader".into(),
+            password: secret("saved-pass"),
+        },
+    );
+    let new_id = written(&saved).expect("保存成功");
+    assert!(
+        prompt
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l == "saved 测试扩展 news.example")
+    );
+    let fill_new = call(
+        &mut client,
+        &mut stream,
+        keevo_ipc::message::Call::Fill {
+            item_id: new_id.clone(),
+            url: "https://news.example/".into(),
+        },
+    );
+    assert!(
+        matches!(&fill_new, keevo_ipc::message::ServerMessage::Ok { result: keevo_ipc::message::CallResult::Fill(d), .. } if d.password == "saved-pass"),
+        "{fill_new:?}"
+    );
+    assert_eq!(asked(&prompt), 2, "保存的条目不再询问授权");
+    let update = |pw: &str| keevo_ipc::message::Call::Update {
+        item_id: gh.clone(),
+        url: "https://github.com/settings".into(),
+        password: secret(pw),
+    };
+    prompt.1.lock().unwrap().push_back(false);
+    assert!(
+        is_denied(&call(&mut client, &mut stream, update("rotated"))),
+        "拒绝更新"
+    );
+    prompt.1.lock().unwrap().push_back(true);
+    assert_eq!(
+        written(&call(&mut client, &mut stream, update("rotated"))),
+        Some(gh.clone())
+    );
+    assert!(
+        prompt
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l == "update GitHub octocat https://github.com true")
+    );
+    prompt.1.lock().unwrap().push_back(true);
+    let after = fill(&mut client, &mut stream);
+    assert!(
+        matches!(&after, keevo_ipc::message::ServerMessage::Ok { result: keevo_ipc::message::CallResult::Fill(d), .. } if d.password == "rotated"),
+        "{after:?}"
+    );
 
     assert!(
         f.vault

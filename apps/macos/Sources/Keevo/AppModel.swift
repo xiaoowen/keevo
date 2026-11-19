@@ -32,6 +32,8 @@ final class AppModel {
 
     /// 有浏览器正在请求配对（spec/ipc.md §4.2 第 8 步：每次尝试都对用户可见）。值为浏览器标识。
     var pairingNotice: String?
+    /// 浏览器写入保险库的提示（spec/ipc.md §5.5：每次保存都对用户可见）。
+    var browserNotice: String?
     /// 当前显示的浏览器确认界面（配对或填充授权）。
     var browserDialog: BrowserPromptItem?
     /// 因频率限制被暂停、等待用户处理的配对（spec/ipc.md §5.2 第 3 条）。
@@ -256,6 +258,13 @@ final class AppModel {
         } catch {
             browserServiceError = Self.describe(error)
         }
+    }
+
+    /// 浏览器保存或更新了条目：刷新列表与授权。
+    func reloadAfterBrowserWrite() {
+        guard phase == .unlocked else { return }
+        try? reload()
+        refreshBrowserPairings()
     }
 
     func refreshBrowserPairings() {

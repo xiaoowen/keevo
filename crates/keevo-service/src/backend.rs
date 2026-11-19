@@ -17,7 +17,7 @@ impl<'a> CoreBackend<'a> {
     }
 }
 
-fn parse_id(hex: &str) -> Option<Id128> {
+pub(crate) fn parse_id(hex: &str) -> Option<Id128> {
     if hex.len() != 32 {
         return None;
     }

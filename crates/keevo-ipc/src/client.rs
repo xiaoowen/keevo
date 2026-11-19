@@ -7,7 +7,7 @@ use keevo_crypto::{Handshake, StaticKeypair, Transport, pairing_commitment, pair
 use crate::error::IpcError;
 use crate::message::{
     Call, ControlFrame, ErrorCode, Event, MAX_NAME_BYTES, PROTOCOL_VERSION, Request, ServerMessage,
-    b64, sanitize_display_name, unb64,
+    b64, sanitize_display_name, unb64, version_supported,
 };
 
 /// 客户端事件。
@@ -43,6 +43,7 @@ pub struct ExtensionClient {
     key: StaticKeypair,
     origin: String,
     name: String,
+    version: u32,
     state: State,
     next_id: u32,
 }
@@ -55,9 +56,29 @@ impl ExtensionClient {
             key,
             origin: origin.to_owned(),
             name: truncate_utf8(name, MAX_NAME_BYTES).to_owned(),
+            version: PROTOCOL_VERSION,
             state: State::Idle,
             next_id: 1,
         }
+    }
+
+    /// 使用指定的协议版本（默认是最新的 [`PROTOCOL_VERSION`]）。服务返回 `unsupported_version` 时，
+    /// 扩展用 v1 重新连接（§5.5）。
+    ///
+    /// # Errors
+    /// 不支持的版本返回 [`IpcError::InvalidState`]。
+    pub fn with_version(mut self, version: u32) -> Result<Self, IpcError> {
+        if !version_supported(version) {
+            return Err(IpcError::InvalidState);
+        }
+        self.version = version;
+        Ok(self)
+    }
+
+    /// 这条连接使用的协议版本。
+    #[must_use]
+    pub const fn version(&self) -> u32 {
+        self.version
     }
 
     /// 扩展的静态公钥。
@@ -76,11 +97,8 @@ impl ExtensionClient {
     ///
     /// # Errors
     /// 序列化失败时返回 [`IpcError::BadMessage`]。
-    pub fn hello() -> Result<Vec<u8>, IpcError> {
-        ControlFrame::Hello {
-            v: PROTOCOL_VERSION,
-        }
-        .to_json()
+    pub fn hello(&self) -> Result<Vec<u8>, IpcError> {
+        ControlFrame::Hello { v: self.version }.to_json()
     }
 
     /// 清洗后的显示名，与 Keevo.app 中显示的一致（`spec/ipc.md` §4.2）。
@@ -97,7 +115,7 @@ impl ExtensionClient {
         if !matches!(self.state, State::Idle) {
             return Err(IpcError::InvalidState);
         }
-        let mut hs = Handshake::pair_initiator(&self.key, &self.origin)?;
+        let mut hs = Handshake::pair_initiator(&self.key, &self.origin, self.version)?;
         // 第 3 条消息的负载 = nonce ‖ 显示名的 UTF-8 字节；第 1 条消息承诺它的原始字节（spec/ipc.md §4.2）
         let mut third = pairing_nonce()?.to_vec();
         third.extend_from_slice(self.name.as_bytes());
@@ -115,7 +133,8 @@ impl ExtensionClient {
         if !matches!(self.state, State::Idle) {
             return Err(IpcError::InvalidState);
         }
-        let mut hs = Handshake::session_initiator(&self.key, service_public, &self.origin)?;
+        let mut hs =
+            Handshake::session_initiator(&self.key, service_public, &self.origin, self.version)?;
         let msg = hs.write(&[])?;
         self.state = State::Session(Box::new(hs));
         ControlFrame::Session { d: b64(&msg) }.to_json()
@@ -126,6 +145,20 @@ impl ExtensionClient {
     /// # Errors
     /// 会话未建立时返回 [`IpcError::InvalidState`]。
     pub fn request(&mut self, call: Call) -> Result<(u32, Vec<u8>), IpcError> {
+        self.request_checked(call, true)
+    }
+
+    /// 测试用：不检查方法所属的版本，用来验证服务拒绝越界的请求。
+    #[cfg(test)]
+    pub(crate) fn request_unchecked(&mut self, call: Call) -> Result<(u32, Vec<u8>), IpcError> {
+        self.request_checked(call, false)
+    }
+
+    fn request_checked(&mut self, call: Call, check: bool) -> Result<(u32, Vec<u8>), IpcError> {
+        // 这条连接协商的版本里没有这个方法（例如 v1 会话中的 save）
+        if check && call.since_version() > self.version {
+            return Err(IpcError::InvalidState);
+        }
         let State::Established(transport) = &mut self.state else {
             return Err(IpcError::InvalidState);
         };

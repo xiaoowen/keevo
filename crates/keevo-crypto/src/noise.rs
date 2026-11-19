@@ -99,9 +99,11 @@ impl StaticKeypair {
     }
 }
 
-fn prologue(purpose: HandshakePurpose, extension_origin: &str) -> Vec<u8> {
+/// prologue（`spec/ipc.md` §4.1）：`"keevo/v<协议版本>/ipc" ‖ 0x00 ‖ 用途 ‖ 0x00 ‖ 扩展来源`。
+/// 协议版本写进 prologue，由握手认证：中间人改动协商出的版本，握手必然失败（防降级）。v1 的字节与冻结时相同。
+fn prologue(version: u32, purpose: HandshakePurpose, extension_origin: &str) -> Vec<u8> {
     let mut p = Vec::with_capacity(32usize.saturating_add(extension_origin.len()));
-    p.extend_from_slice(b"keevo/v1/ipc\0");
+    p.extend_from_slice(format!("keevo/v{version}/ipc\0").as_bytes());
     p.extend_from_slice(purpose.label());
     p.push(0);
     p.extend_from_slice(extension_origin.as_bytes());
@@ -122,13 +124,18 @@ impl Handshake {
     ///
     /// # Errors
     /// 参数无效时返回 [`CryptoError::Malformed`]。
-    pub fn pair_initiator(local: &StaticKeypair, extension_origin: &str) -> Result<Self> {
+    pub fn pair_initiator(
+        local: &StaticKeypair,
+        extension_origin: &str,
+        version: u32,
+    ) -> Result<Self> {
         Self::build(
             PATTERN_XX,
             local,
             None,
             HandshakePurpose::Pair,
             extension_origin,
+            version,
             true,
         )
     }
@@ -137,13 +144,18 @@ impl Handshake {
     ///
     /// # Errors
     /// 参数无效时返回 [`CryptoError::Malformed`]。
-    pub fn pair_responder(local: &StaticKeypair, extension_origin: &str) -> Result<Self> {
+    pub fn pair_responder(
+        local: &StaticKeypair,
+        extension_origin: &str,
+        version: u32,
+    ) -> Result<Self> {
         Self::build(
             PATTERN_XX,
             local,
             None,
             HandshakePurpose::Pair,
             extension_origin,
+            version,
             false,
         )
     }
@@ -156,6 +168,7 @@ impl Handshake {
         local: &StaticKeypair,
         responder_public: &[u8; 32],
         extension_origin: &str,
+        version: u32,
     ) -> Result<Self> {
         Self::build(
             PATTERN_IK,
@@ -163,6 +176,7 @@ impl Handshake {
             Some(responder_public),
             HandshakePurpose::Session,
             extension_origin,
+            version,
             true,
         )
     }
@@ -172,13 +186,18 @@ impl Handshake {
     ///
     /// # Errors
     /// 参数无效时返回 [`CryptoError::Malformed`]。
-    pub fn session_responder(local: &StaticKeypair, extension_origin: &str) -> Result<Self> {
+    pub fn session_responder(
+        local: &StaticKeypair,
+        extension_origin: &str,
+        version: u32,
+    ) -> Result<Self> {
         Self::build(
             PATTERN_IK,
             local,
             None,
             HandshakePurpose::Session,
             extension_origin,
+            version,
             false,
         )
     }
@@ -189,10 +208,11 @@ impl Handshake {
         remote: Option<&[u8; 32]>,
         purpose: HandshakePurpose,
         extension_origin: &str,
+        version: u32,
         initiator: bool,
     ) -> Result<Self> {
         let params = pattern.parse().map_err(builder_error)?;
-        let prologue = prologue(purpose, extension_origin);
+        let prologue = prologue(version, purpose, extension_origin);
         let mut builder = snow::Builder::new(params)
             .local_private_key(local.private.as_ref())
             .map_err(builder_error)?
@@ -347,8 +367,8 @@ mod tests {
     const ORIGIN: &str = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
 
     fn pair(ext: &StaticKeypair, svc: &StaticKeypair) -> (Handshake, Handshake) {
-        let mut i = Handshake::pair_initiator(ext, ORIGIN).unwrap();
-        let mut r = Handshake::pair_responder(svc, ORIGIN).unwrap();
+        let mut i = Handshake::pair_initiator(ext, ORIGIN, 1).unwrap();
+        let mut r = Handshake::pair_responder(svc, ORIGIN, 1).unwrap();
         r.read(&i.write(&[]).unwrap()).unwrap();
         i.read(&r.write(&[]).unwrap()).unwrap();
         let name = r.read(&i.write(br#"{"name":"Chrome"}"#).unwrap()).unwrap();
@@ -374,12 +394,32 @@ mod tests {
         assert_eq!(ti.decrypt(&c).unwrap().as_slice(), b"pong");
     }
 
+    /// 协议版本写在 prologue 中：一方按 v2、另一方按 v1 握手（例如中间人改动了 hello 中的版本），握手失败（防降级）。
+    #[test]
+    fn protocol_version_is_bound_by_the_prologue() {
+        let ext = StaticKeypair::generate().unwrap();
+        let svc = StaticKeypair::generate().unwrap();
+        let mut i = Handshake::pair_initiator(&ext, ORIGIN, 2).unwrap();
+        let mut r = Handshake::pair_responder(&svc, ORIGIN, 1).unwrap();
+        r.read(&i.write(&[0; 32]).unwrap()).unwrap();
+        assert!(i.read(&r.write(&[]).unwrap()).is_err());
+        assert_eq!(
+            prologue(1, HandshakePurpose::Pair, "o"),
+            b"keevo/v1/ipc\0pair\0o",
+            "v1 的字节不变"
+        );
+        assert_eq!(
+            prologue(2, HandshakePurpose::Session, "o"),
+            b"keevo/v2/ipc\0session\0o"
+        );
+    }
+
     #[test]
     fn different_extension_origin_breaks_the_handshake() {
         let ext = StaticKeypair::generate().unwrap();
         let svc = StaticKeypair::generate().unwrap();
-        let mut i = Handshake::pair_initiator(&ext, ORIGIN).unwrap();
-        let mut r = Handshake::pair_responder(&svc, "chrome-extension://evil/").unwrap();
+        let mut i = Handshake::pair_initiator(&ext, ORIGIN, 1).unwrap();
+        let mut r = Handshake::pair_responder(&svc, "chrome-extension://evil/", 1).unwrap();
         r.read(&i.write(&[]).unwrap()).unwrap();
         // 第二条消息开始带认证，prologue 不同必然失败
         assert_eq!(
@@ -392,8 +432,8 @@ mod tests {
     fn ik_session_with_paired_keys() {
         let ext = StaticKeypair::generate().unwrap();
         let svc = StaticKeypair::generate().unwrap();
-        let mut i = Handshake::session_initiator(&ext, &svc.public_key(), ORIGIN).unwrap();
-        let mut r = Handshake::session_responder(&svc, ORIGIN).unwrap();
+        let mut i = Handshake::session_initiator(&ext, &svc.public_key(), ORIGIN, 1).unwrap();
+        let mut r = Handshake::session_responder(&svc, ORIGIN, 1).unwrap();
         r.read(&i.write(&[]).unwrap()).unwrap();
         // 响应方读完第一条消息即可核对扩展是否已配对
         assert_eq!(r.remote_static(), Some(ext.public_key()));
@@ -412,8 +452,8 @@ mod tests {
         let ext = StaticKeypair::generate().unwrap();
         let svc = StaticKeypair::generate().unwrap();
         let impostor = StaticKeypair::generate().unwrap();
-        let mut i = Handshake::session_initiator(&ext, &impostor.public_key(), ORIGIN).unwrap();
-        let mut r = Handshake::session_responder(&svc, ORIGIN).unwrap();
+        let mut i = Handshake::session_initiator(&ext, &impostor.public_key(), ORIGIN, 1).unwrap();
+        let mut r = Handshake::session_responder(&svc, ORIGIN, 1).unwrap();
         assert_eq!(
             r.read(&i.write(&[]).unwrap()).err(),
             Some(CryptoError::DecryptionFailed)
@@ -459,7 +499,7 @@ mod tests {
         let restored = StaticKeypair::from_private(kp.export_private());
         assert_eq!(restored.public_key(), kp.public_key());
 
-        let mut i = Handshake::pair_initiator(&kp, ORIGIN).unwrap();
+        let mut i = Handshake::pair_initiator(&kp, ORIGIN, 1).unwrap();
         assert_eq!(
             i.read(&[0u8; 32]).err(),
             Some(CryptoError::InvalidContext),

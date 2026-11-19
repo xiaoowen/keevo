@@ -21,6 +21,8 @@ pub const AUTHORIZATION_KIND: &str = "authorization";
 pub const FILL_WINDOW: Duration = Duration::from_secs(10 * 60);
 /// 时间窗内允许取用的不同条目数；第 6 个不同条目触发暂停。
 pub const FILL_DISTINCT_LIMIT: usize = 5;
+/// 协议 v2 `save` 的频率限制（`spec/ipc.md` §5.5）：同一配对在任意 10 分钟内最多保存这么多条目。
+pub const SAVE_LIMIT: usize = 5;
 
 /// 一项站点授权：某个配对可以为某个条目在某个站点取用凭据（`spec/ipc.md` §5.2）。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -60,6 +62,7 @@ pub struct PairingCache {
     authorizations: BTreeMap<[u8; 32], BTreeSet<Authorization>>,
     usage: HashMap<[u8; 32], VecDeque<(Instant, String)>>,
     paused: HashSet<[u8; 32]>,
+    saves: HashMap<[u8; 32], VecDeque<Instant>>,
 }
 
 /// 读入时的情况。
@@ -211,6 +214,22 @@ impl PairingCache {
         window.push_back((now, item_id.to_owned()));
         FillGate::Allowed
     }
+
+    /// `save` 的频率限制：任意 10 分钟内最多 [`SAVE_LIMIT`] 次。允许时记下这次保存。计数只在内存中。
+    fn save_gate(&mut self, pk: &[u8; 32], now: Instant) -> bool {
+        let window = self.saves.entry(*pk).or_default();
+        while window
+            .front()
+            .is_some_and(|t| now.saturating_duration_since(*t) > FILL_WINDOW)
+        {
+            window.pop_front();
+        }
+        if window.len() >= SAVE_LIMIT {
+            return false;
+        }
+        window.push_back(now);
+        true
+    }
 }
 
 /// 可写但不接触保险库的视图：协议状态机处理普通帧时使用（查找与频率限制只改内存）。
@@ -235,6 +254,10 @@ impl PairingStore for Live<'_> {
 
     fn fill_gate(&mut self, pk: &[u8; 32], item_id: &str, site: &str, now: Instant) -> FillGate {
         self.0.gate(pk, item_id, site, now)
+    }
+
+    fn save_gate(&mut self, pk: &[u8; 32], now: Instant) -> bool {
+        self.0.save_gate(pk, now)
     }
 }
 
@@ -390,6 +413,7 @@ impl PairingStore for Bound<'_> {
         self.cache.authorizations.remove(extension_public);
         self.cache.usage.remove(extension_public);
         self.cache.paused.remove(extension_public);
+        self.cache.saves.remove(extension_public);
         let _ = self
             .vault
             .delete_local_record(AUTHORIZATION_KIND, extension_public);
@@ -653,5 +677,22 @@ mod tests {
         let mut after = PairingCache::default();
         after.load(&mut vault).unwrap();
         assert!(after.authorizations(&pk).is_empty(), "孤立的授权记录不复活");
+    }
+
+    #[test]
+    fn saves_are_rate_limited() {
+        let mut cache = PairingCache::default();
+        let pk = [7u8; 32];
+        let t0 = Instant::now();
+        for _ in 0..SAVE_LIMIT {
+            assert!(Live(&mut cache).save_gate(&pk, t0));
+        }
+        assert!(
+            !Live(&mut cache).save_gate(&pk, t0),
+            "10 分钟内第 6 次保存被拒"
+        );
+        assert!(Live(&mut cache).save_gate(&[8; 32], t0), "按配对分别计数");
+        let later = t0 + FILL_WINDOW + Duration::from_secs(1);
+        assert!(Live(&mut cache).save_gate(&pk, later), "时间窗过后恢复");
     }
 }

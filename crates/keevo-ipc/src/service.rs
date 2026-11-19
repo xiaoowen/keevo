@@ -12,14 +12,17 @@ use keevo_crypto::{Handshake, PAIR_NONCE_LEN, StaticKeypair, Transport, pairing_
 use crate::error::IpcError;
 use crate::message::{
     Call, CallResult, ControlFrame, ErrorBody, ErrorCode, Event, HostHello, MAX_APP_MESSAGE,
-    MAX_CANDIDATE_TEXT, MAX_CANDIDATES, MAX_NAME_BYTES, PROTOCOL_VERSION, Request, ServerMessage,
-    b64, decode_canonical, sanitize_display_name, unb64,
+    MAX_CANDIDATE_TEXT, MAX_CANDIDATES, MAX_NAME_BYTES, MAX_PASSWORD_BYTES, MAX_USERNAME_BYTES,
+    Request, SecretText, ServerMessage, b64, decode_canonical, sanitize_display_name, unb64,
+    version_supported,
 };
 
 /// 配对的时限（`spec/ipc.md` §4.2）：从收到第 1 条消息起算，覆盖握手与用户确认，超时视为拒绝。
 pub const PAIRING_TIMEOUT: Duration = Duration::from_secs(60);
 /// `fill` 首次授权的等待时间：到期按拒绝处理（§5.2 第 1 条）。
 pub const FILL_AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(60);
+/// v2 `update` 的确认等待时间：到期按拒绝处理（§5.5）。
+pub const UPDATE_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(60);
 /// 每小时最多开始的配对次数（§4.2）。
 pub const MAX_PAIRING_STARTS_PER_HOUR: usize = 10;
 
@@ -122,6 +125,11 @@ pub trait PairingStore {
         let _ = (extension_public, item_id, site, now);
         FillGate::NeedsAuthorization
     }
+    /// v2 `save` 的频率限制（§5.5）：允许时记下这次保存。默认拒绝（失败安全的方向）；正式实现见 `keevo-service`。
+    fn save_gate(&mut self, extension_public: &[u8; 32], now: Instant) -> bool {
+        let _ = (extension_public, now);
+        false
+    }
 }
 
 /// 内存中的配对存储，用于测试与开发服务。
@@ -168,6 +176,11 @@ impl PairingStore for MemoryPairingStore {
     /// 测试用：不做按站点授权。
     fn fill_gate(&mut self, _: &[u8; 32], _: &str, _: &str, _: Instant) -> FillGate {
         FillGate::Allowed
+    }
+
+    /// 测试用：不限制保存次数。
+    fn save_gate(&mut self, _: &[u8; 32], _: Instant) -> bool {
+        true
     }
 }
 
@@ -232,11 +245,64 @@ pub struct FillRequest {
     pub site: String,
 }
 
-/// 等待授权的请求在连接中的状态。
-struct PendingFill {
-    id: u32,
-    item_id: String,
-    url: String,
+/// v2 的写操作（§5.5），由调用方在持有保险库锁的情况下执行。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteOp {
+    /// 保存为新的登录条目。
+    Save {
+        /// 条目标题（站点的主机名，去掉 `www.`）。
+        title: String,
+        /// 用户名。
+        username: String,
+        /// 密码。
+        password: SecretText,
+    },
+    /// 更新已有登录的密码。
+    Update {
+        /// 条目 ID。
+        item_id: String,
+        /// 条目标题，只用于确认界面。
+        title: String,
+        /// 条目的用户名，只用于确认界面。
+        username: String,
+        /// 新密码。
+        password: SecretText,
+    },
+}
+
+/// 一次等待执行的写操作。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteRequest {
+    /// 发起请求的配对（扩展静态公钥）。
+    pub extension_public: [u8; 32],
+    /// 配对的显示名。
+    pub pairing_name: String,
+    /// 浏览器标识。
+    pub browser: String,
+    /// 规范化后的站点 `scheme://host[:port]`。保存时条目的网址就是它（不保存路径与查询）。
+    pub site: String,
+    /// 操作。
+    pub op: WriteOp,
+}
+
+impl WriteRequest {
+    /// 是否需要用户在 Keevo.app 中确认：更新会覆盖已有数据，每次都要确认；保存只新增条目，不需要（§5.5）。
+    #[must_use]
+    pub const fn needs_confirmation(&self) -> bool {
+        matches!(self.op, WriteOp::Update { .. })
+    }
+}
+
+/// 在连接中等待外部处理的请求：同一时刻最多一个。
+enum Pending {
+    /// 等待用户确认站点授权的 `fill`。
+    Fill {
+        id: u32,
+        item_id: String,
+        url: String,
+    },
+    /// 等待执行（以及可能的确认）的写操作。
+    Write { id: u32 },
 }
 
 /// 状态机的输出。
@@ -263,6 +329,10 @@ pub enum Output {
     /// 某个配对第一次为某个条目在某个站点取用凭据：请用户在原生界面确认（§5.2），60 秒内未确认按拒绝处理；
     /// 确认后先记下授权，再调用 [`ServiceConnection::resolve_fill`]。等待期间不得持有任何锁。
     AuthorizeFill(FillRequest),
+    /// v2 的写操作（§5.5）：需要时先请用户在原生界面确认（[`WriteRequest::needs_confirmation`]，60 秒内未确认
+    /// 按拒绝处理，等待期间不得持有任何锁），再在持有保险库锁的情况下执行，最后调用
+    /// [`ServiceConnection::resolve_write`]。
+    Write(WriteRequest),
     /// 这个配对因频率限制被暂停（§5.2 第 3 条）：在 Keevo.app 中提示，用户确认后恢复。
     FillPaused {
         /// 配对（扩展静态公钥）。
@@ -298,7 +368,8 @@ enum State {
     Established {
         transport: Box<Transport>,
         origin: String,
-        pending: Option<PendingFill>,
+        version: u32,
+        pending: Option<Pending>,
     },
     Closed,
 }
@@ -425,6 +496,7 @@ impl ServiceConnection {
         }
         self.release_gate();
         let origin = hello.extension_origin.clone();
+        let version = hello.v;
         let saved = store.save(PairingRecord {
             extension_public: transport.remote_static(),
             extension_origin: hello.extension_origin,
@@ -448,6 +520,7 @@ impl ServiceConnection {
                 self.state = State::Established {
                     transport,
                     origin,
+                    version,
                     pending: None,
                 };
                 vec![Output::Send(frame)]
@@ -490,7 +563,7 @@ impl ServiceConnection {
             State::AwaitHostHello => {
                 let hello: HostHello =
                     decode_canonical(frame).map_err(|_| ErrorCode::BadRequest)?;
-                if hello.v != PROTOCOL_VERSION {
+                if !version_supported(hello.v) {
                     return Err(ErrorCode::UnsupportedVersion);
                 }
                 if hello.client != "native-host" || hello.extension_origin.is_empty() {
@@ -512,8 +585,9 @@ impl ServiceConnection {
                         return Err(ErrorCode::PairingLimited);
                     }
                     self.holds_gate = true;
-                    let mut hs = Handshake::pair_responder(&self.key, &hello.extension_origin)
-                        .map_err(|_| ErrorCode::BadRequest)?;
+                    let mut hs =
+                        Handshake::pair_responder(&self.key, &hello.extension_origin, hello.v)
+                            .map_err(|_| ErrorCode::BadRequest)?;
                     let payload = hs
                         .read(&unb64(&d).map_err(|_| ErrorCode::BadRequest)?)
                         .map_err(|_| ErrorCode::BadRequest)?;
@@ -535,8 +609,9 @@ impl ServiceConnection {
                     ])
                 }
                 ControlFrame::Session { d } => {
-                    let mut hs = Handshake::session_responder(&self.key, &hello.extension_origin)
-                        .map_err(|_| ErrorCode::BadRequest)?;
+                    let mut hs =
+                        Handshake::session_responder(&self.key, &hello.extension_origin, hello.v)
+                            .map_err(|_| ErrorCode::BadRequest)?;
                     let payload = hs
                         .read(&unb64(&d).map_err(|_| ErrorCode::BadRequest)?)
                         .map_err(|_| ErrorCode::NotPaired)?;
@@ -559,6 +634,7 @@ impl ServiceConnection {
                     self.state = State::Established {
                         transport: Box::new(transport),
                         origin: hello.extension_origin,
+                        version: hello.v,
                         pending: None,
                     };
                     Ok(vec![send_noise(&reply)?])
@@ -614,6 +690,7 @@ impl ServiceConnection {
             State::Established {
                 mut transport,
                 origin,
+                version,
                 mut pending,
             } => {
                 // 每个请求都重新核对配对记录：撤销立即生效，不存在撤销与请求之间的竞态（评审 F1）
@@ -629,6 +706,10 @@ impl ServiceConnection {
                     .map_err(|_| ErrorCode::BadRequest)?;
                 let request: Request =
                     decode_canonical(&plaintext).map_err(|_| ErrorCode::BadRequest)?;
+                // 每个版本的消息集合都是封闭的：协商出的版本里没有的方法按 bad_request 处理（§5）
+                if request.call.since_version() > version {
+                    return Err(ErrorCode::BadRequest);
+                }
                 let mut extra = Vec::new();
                 let reply = match &request.call {
                     Call::Fill { item_id, url } if !backend.is_locked() => {
@@ -648,7 +729,7 @@ impl ServiceConnection {
                                 }
                             }
                             Gated::NeedsAuthorization(req) => {
-                                pending = Some(PendingFill {
+                                pending = Some(Pending::Fill {
                                     id: request.id,
                                     item_id: item_id.clone(),
                                     url: url.clone(),
@@ -656,9 +737,34 @@ impl ServiceConnection {
                                 self.state = State::Established {
                                     transport,
                                     origin,
+                                    version,
                                     pending,
                                 };
                                 return Ok(vec![Output::AuthorizeFill(req)]);
+                            }
+                        }
+                    }
+                    Call::Save { .. } | Call::Update { .. } if !backend.is_locked() => {
+                        match prepare_write(&request.call, &record, store, backend) {
+                            Err(code) => ServerMessage::Err {
+                                id: request.id,
+                                error: ErrorBody { code },
+                            },
+                            // 同一连接上已有请求在等待时，新的写操作直接拒绝
+                            Ok(_) if pending.is_some() => ServerMessage::Err {
+                                id: request.id,
+                                error: ErrorBody {
+                                    code: ErrorCode::NotAuthorized,
+                                },
+                            },
+                            Ok(write) => {
+                                self.state = State::Established {
+                                    transport,
+                                    origin,
+                                    version,
+                                    pending: Some(Pending::Write { id: request.id }),
+                                };
+                                return Ok(vec![Output::Write(write)]);
                             }
                         }
                     }
@@ -681,6 +787,7 @@ impl ServiceConnection {
                 self.state = State::Established {
                     transport,
                     origin,
+                    version,
                     pending,
                 };
                 let mut out = vec![Output::Send(frame)];
@@ -701,16 +808,18 @@ impl ServiceConnection {
         let State::Established {
             mut transport,
             origin,
+            version,
             pending,
         } = std::mem::replace(&mut self.state, State::Closed)
         else {
             return Vec::new();
         };
-        let Some(p) = pending else {
+        let Some(Pending::Fill { id, item_id, url }) = pending else {
             self.state = State::Established {
                 transport,
                 origin,
-                pending: None,
+                version,
+                pending,
             };
             return Vec::new();
         };
@@ -719,7 +828,7 @@ impl ServiceConnection {
             _ => return self.fail(ErrorCode::NotPaired),
         };
         let err = |code| ServerMessage::Err {
-            id: p.id,
+            id,
             error: ErrorBody { code },
         };
         let mut extra = Vec::new();
@@ -728,7 +837,7 @@ impl ServiceConnection {
         } else if backend.is_locked() {
             err(ErrorCode::Locked)
         } else {
-            match gated_fill(p.id, &p.item_id, &p.url, &record, store, backend) {
+            match gated_fill(id, &item_id, &url, &record, store, backend) {
                 Gated::Reply(reply) => reply,
                 Gated::Paused(reply) => {
                     extra.push(paused(&record));
@@ -747,11 +856,137 @@ impl ServiceConnection {
         self.state = State::Established {
             transport,
             origin,
+            version,
             pending: None,
         };
         let mut out = vec![Output::Send(frame)];
         out.append(&mut extra);
         out
+    }
+
+    /// 写操作（[`Output::Write`]）的结果：成功时为条目 ID，否则为返回给扩展的错误码（用户拒绝或超时为
+    /// `not_authorized`，等待期间锁定为 `locked`）。这里只重新核对配对记录，写入本身由调用方完成。
+    pub fn resolve_write(
+        &mut self,
+        result: Result<String, ErrorCode>,
+        store: &mut dyn PairingStore,
+    ) -> Vec<Output> {
+        let State::Established {
+            mut transport,
+            origin,
+            version,
+            pending,
+        } = std::mem::replace(&mut self.state, State::Closed)
+        else {
+            return Vec::new();
+        };
+        let Some(Pending::Write { id }) = pending else {
+            self.state = State::Established {
+                transport,
+                origin,
+                version,
+                pending,
+            };
+            return Vec::new();
+        };
+        match store.find(&transport.remote_static()) {
+            Some(r) if r.extension_origin == origin => {}
+            _ => return self.fail(ErrorCode::NotPaired),
+        }
+        let reply = match result {
+            Ok(item_id) => ServerMessage::Ok {
+                id,
+                result: CallResult::Written { item_id },
+            },
+            Err(code) => ServerMessage::Err {
+                id,
+                error: ErrorBody { code },
+            },
+        };
+        let Ok(frame) = encrypt(&mut transport, &reply) else {
+            return self.fail(ErrorCode::BadRequest);
+        };
+        self.state = State::Established {
+            transport,
+            origin,
+            version,
+            pending: None,
+        };
+        vec![Output::Send(frame)]
+    }
+}
+
+/// 保存时的条目标题：站点的主机名（含端口），去掉开头的 `www.`。
+fn title_for(site: &str) -> String {
+    let host = site.split_once("://").map_or(site, |(_, h)| h);
+    host.strip_prefix("www.").unwrap_or(host).to_owned()
+}
+
+/// v2 写操作的检查（§5.5）：参数上限、网址，`save` 的频率限制，`update` 的条目匹配。通过后交给调用方执行。
+fn prepare_write(
+    call: &Call,
+    record: &PairingRecord,
+    store: &mut dyn PairingStore,
+    backend: &dyn VaultBackend,
+) -> Result<WriteRequest, ErrorCode> {
+    let password_ok =
+        |p: &SecretText| !p.expose().is_empty() && p.expose().len() <= MAX_PASSWORD_BYTES;
+    let request = |site: String, op| WriteRequest {
+        extension_public: record.extension_public,
+        pairing_name: record.name.clone(),
+        browser: record.browser.clone(),
+        site,
+        op,
+    };
+    match call {
+        Call::Save {
+            url,
+            username,
+            password,
+        } => {
+            if username.len() > MAX_USERNAME_BYTES || !password_ok(password) {
+                return Err(ErrorCode::BadRequest);
+            }
+            let site = backend.site(url).ok_or(ErrorCode::BadRequest)?;
+            if !store.save_gate(&record.extension_public, Instant::now()) {
+                return Err(ErrorCode::NotAuthorized);
+            }
+            let title = title_for(&site);
+            Ok(request(
+                site,
+                WriteOp::Save {
+                    title,
+                    username: username.clone(),
+                    password: password.clone(),
+                },
+            ))
+        }
+        Call::Update {
+            item_id,
+            url,
+            password,
+        } => {
+            if !password_ok(password) {
+                return Err(ErrorCode::BadRequest);
+            }
+            match backend.item_matches(item_id, url) {
+                None => return Err(ErrorCode::NotFound),
+                Some(false) => return Err(ErrorCode::UrlMismatch),
+                Some(true) => {}
+            }
+            let site = backend.site(url).ok_or(ErrorCode::UrlMismatch)?;
+            let (title, username) = backend.describe(item_id).unwrap_or_default();
+            Ok(request(
+                site,
+                WriteOp::Update {
+                    item_id: item_id.clone(),
+                    title,
+                    username,
+                    password: password.clone(),
+                },
+            ))
+        }
+        Call::Status | Call::Candidates { .. } | Call::Fill { .. } => Err(ErrorCode::BadRequest),
     }
 }
 
@@ -847,8 +1082,11 @@ fn handle(request: &Request, backend: &dyn VaultBackend) -> ServerMessage {
                     .collect(),
             },
         },
-        // fill 一律经由 gated_fill（按站点授权与频率限制）；走到这里说明调用方绕过了它，拒绝
-        Call::Fill { .. } => err(ErrorCode::NotAuthorized),
+        // fill 一律经由 gated_fill（按站点授权与频率限制），写操作一律经由 prepare_write；
+        // 走到这里说明调用方绕过了它们，拒绝
+        Call::Fill { .. } | Call::Save { .. } | Call::Update { .. } => {
+            err(ErrorCode::NotAuthorized)
+        }
     }
 }
 

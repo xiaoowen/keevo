@@ -43,19 +43,34 @@ pub struct KeevoClient {
 
 #[wasm_bindgen]
 impl KeevoClient {
-    /// 新客户端。`private_key_hex` 为空时生成新的静态密钥（首次配对）。
+    /// 新客户端。`private_key_hex` 为空时生成新的静态密钥（首次配对）。`version` 为空时使用最新的协议版本；
+    /// 服务返回 `unsupported_version` 时，用 1 重新连接（`spec/ipc.md` §5.5）。
     ///
     /// # Errors
-    /// 私钥格式错误或随机数不可用时返回错误。
+    /// 私钥格式错误、版本不支持或随机数不可用时返回错误。
     #[wasm_bindgen(constructor)]
-    pub fn new(private_key_hex: Option<String>, origin: &str, name: &str) -> Result<Self, JsError> {
+    pub fn new(
+        private_key_hex: Option<String>,
+        origin: &str,
+        name: &str,
+        version: Option<u32>,
+    ) -> Result<Self, JsError> {
         let key = match private_key_hex {
             Some(h) => StaticKeypair::from_private(Zeroizing::new(unhex32(&h)?)),
             None => StaticKeypair::generate().map_err(js_err)?,
         };
-        Ok(Self {
-            inner: ExtensionClient::new(key, origin, name),
-        })
+        let inner = ExtensionClient::new(key, origin, name);
+        let inner = match version {
+            Some(v) => inner.with_version(v).map_err(js_err)?,
+            None => inner,
+        };
+        Ok(Self { inner })
+    }
+
+    /// 这条连接使用的协议版本。
+    #[must_use]
+    pub fn version(&self) -> u32 {
+        self.inner.version()
     }
 
     /// 静态私钥（十六进制），用于写入 `chrome.storage.local`。
@@ -76,8 +91,8 @@ impl KeevoClient {
     ///
     /// # Errors
     /// 序列化失败时返回错误。
-    pub fn hello() -> Result<String, JsError> {
-        frame_string(ExtensionClient::hello().map_err(js_err)?)
+    pub fn hello(&self) -> Result<String, JsError> {
+        frame_string(self.inner.hello().map_err(js_err)?)
     }
 
     /// 开始配对，返回要发送的帧。

@@ -1723,6 +1723,31 @@ pub trait BrowserPrompt: Send + Sync {
     /// 这个配对因频率限制被暂停（§5.2 第 3 条）：提示用户，用户确认后调用
     /// [`KeevoVault::resume_browser_pairing`]。
     fn fill_paused(&self, pairing_id: String, name: String, browser: String);
+    /// 协议 v2：扩展请求更新已有登录的密码（§5.5）。显示站点、条目与配对，请用户确认；`changed` 为 `false`
+    /// 表示新密码与保存的相同（只告诉用户）。必须在 `timeout_ms` 毫秒内返回，超时按拒绝处理。
+    fn confirm_update(&self, request: BrowserUpdateRequest, changed: bool, timeout_ms: u64)
+    -> bool;
+    /// 协议 v2：扩展保存了新的登录（§5.5）。提示用户，不需要确认。
+    fn login_saved(&self, pairing_name: String, browser: String, title: String);
+}
+
+/// 一次等待确认的密码更新（`spec/ipc.md` §5.5）。不含密码本身。
+#[derive(uniffi::Record)]
+pub struct BrowserUpdateRequest {
+    /// 发起请求的配对。
+    pub pairing_id: String,
+    /// 配对的显示名。
+    pub pairing_name: String,
+    /// 浏览器标识。
+    pub browser: String,
+    /// 条目 ID。
+    pub item_id: String,
+    /// 条目标题。
+    pub title: String,
+    /// 条目的用户名。
+    pub username: String,
+    /// 规范化后的站点。
+    pub site: String,
 }
 
 /// 短认证串的一个词：同一个字节的中文词与英文词互为翻译，两端都同时显示（`spec/ipc.md` §4.2）。
@@ -1822,6 +1847,46 @@ impl keevo_service::PairingPrompt for PromptAdapter {
     fn fill_paused(&self, extension_public: &[u8; 32], name: &str, browser: &str) {
         self.0
             .fill_paused(hex(extension_public), name.to_owned(), browser.to_owned());
+    }
+
+    fn confirm_update(
+        &self,
+        r: &keevo_ipc::service::WriteRequest,
+        changed: bool,
+        deadline: std::time::Instant,
+    ) -> bool {
+        let keevo_ipc::service::WriteOp::Update {
+            item_id,
+            title,
+            username,
+            ..
+        } = &r.op
+        else {
+            return false;
+        };
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        let ms = u64::try_from(left.as_millis()).unwrap_or(u64::MAX);
+        let request = BrowserUpdateRequest {
+            pairing_id: hex(&r.extension_public),
+            pairing_name: r.pairing_name.clone(),
+            browser: r.browser.clone(),
+            item_id: item_id.clone(),
+            title: title.clone(),
+            username: username.clone(),
+            site: r.site.clone(),
+        };
+        self.0.confirm_update(request, changed, ms) && std::time::Instant::now() <= deadline
+    }
+
+    fn saved(&self, pairing_name: &str, browser: &str, title: &str) {
+        self.0.login_saved(
+            pairing_name.to_owned(),
+            browser.to_owned(),
+            title.to_owned(),
+        );
     }
 }
 

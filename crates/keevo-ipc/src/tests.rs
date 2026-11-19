@@ -73,11 +73,16 @@ impl Service {
         }
     }
 
-    /// 模拟 native host：先发 HostHello，再原样转发扩展的帧。
+    /// 模拟 native host：先发 HostHello，再原样转发扩展的帧。按最新的协议版本。
     fn connect(&self, origin: &str) -> ServiceConnection {
+        self.connect_v(origin, crate::message::PROTOCOL_VERSION)
+    }
+
+    /// 按指定的协议版本连接（host 把扩展 hello 中的版本原样转进 HostHello）。
+    fn connect_v(&self, origin: &str, v: u32) -> ServiceConnection {
         let mut conn = ServiceConnection::new(self.key.clone());
         let hello = serde_json::to_vec(&HostHello {
-            v: 1,
+            v,
             client: "native-host".into(),
             extension_origin: origin.into(),
             browser: "com.google.Chrome".into(),
@@ -98,6 +103,7 @@ struct Delivered {
     closed: bool,
     started: bool,
     authorize: Option<crate::service::FillRequest>,
+    write: Option<crate::service::WriteRequest>,
     paused: bool,
 }
 
@@ -113,6 +119,7 @@ fn collect(outputs: Vec<Output>) -> Delivered {
             Output::ConfirmPairing { sas, .. } => d.confirm = Some(sas),
             Output::PairingStarted { .. } => d.started = true,
             Output::AuthorizeFill(req) => d.authorize = Some(req),
+            Output::Write(req) => d.write = Some(req),
             Output::FillPaused { .. } => d.paused = true,
             Output::Close => d.closed = true,
         }
@@ -480,9 +487,9 @@ fn manual_pairing(
             );
             c
         }
-        None => svc.connect(ORIGIN),
+        None => svc.connect_v(ORIGIN, 1),
     };
-    let mut hs = keevo_crypto::Handshake::pair_initiator(&ext, ORIGIN).unwrap();
+    let mut hs = keevo_crypto::Handshake::pair_initiator(&ext, ORIGIN, 1).unwrap();
     let msg1 = hs.write(&msg1_payload(&ext)).unwrap();
     let d = deliver(
         &svc,
@@ -569,7 +576,9 @@ fn pairing_deadline_starts_at_first_message() {
 fn late_confirmation_is_treated_as_rejection() {
     let svc = Service::new();
     let mut client =
-        ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "Chrome · 个人");
+        ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "Chrome · 个人")
+            .with_version(1)
+            .unwrap();
     let mut conn = ServiceConnection::new(svc.key.clone())
         .with_pairing_timeout(std::time::Duration::from_millis(200));
     let hello = serde_json::to_vec(&HostHello {
@@ -624,9 +633,9 @@ fn session_first_message_payload_must_be_empty() {
 
     let ext = StaticKeypair::from_private(ext_private);
     let mut hs =
-        keevo_crypto::Handshake::session_initiator(&ext, &svc.key.public_key(), ORIGIN).unwrap();
+        keevo_crypto::Handshake::session_initiator(&ext, &svc.key.public_key(), ORIGIN, 1).unwrap();
     let msg1 = hs.write(b"smuggled").unwrap();
-    let mut conn = svc.connect(ORIGIN);
+    let mut conn = svc.connect_v(ORIGIN, 1);
     let d = deliver(
         &svc,
         &mut conn,
@@ -688,7 +697,9 @@ fn review2_g1_pairing_attempts_are_limited() {
             conn.on_frame(&hello, &mut *svc.store.borrow_mut(), &svc.backend)
                 .is_empty()
         );
-        let mut client = ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "x");
+        let mut client = ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "x")
+            .with_version(1)
+            .unwrap();
         let d = deliver(&svc, &mut conn, &client.start_pairing().unwrap());
         (conn, client, d)
     };
@@ -1151,5 +1162,244 @@ fn sites_are_normalized() {
         "javascript:alert(1)",
     ] {
         assert_eq!(site_of(bad), None, "{bad}");
+    }
+}
+
+// ---- 协议 v2（spec/ipc.md §5.5）
+
+fn secret(s: &str) -> crate::message::SecretText {
+    crate::message::SecretText::new(s)
+}
+
+/// 版本协商：服务同时支持 v1 与 v2；不支持的版本返回 unsupported_version；版本写在 prologue 中，
+/// 扩展按 v2、host 转来 v1（中间人改动版本）时握手失败。
+#[test]
+fn v2_negotiation_and_downgrade_protection() {
+    use crate::message::ErrorCode;
+    let svc = Service::new();
+    // v1 扩展照常配对
+    let mut v1 = ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "v1")
+        .with_version(1)
+        .unwrap();
+    assert_eq!(v1.hello().unwrap(), br#"{"t":"hello","v":1}"#);
+    let mut conn = svc.connect_v(ORIGIN, 1);
+    let d = deliver(&svc, &mut conn, &v1.start_pairing().unwrap());
+    let (frames, _) = v1.on_frame(&d.to_client[0]).unwrap();
+    assert!(deliver(&svc, &mut conn, &frames[0]).confirm.is_some());
+
+    // 不支持的版本
+    let mut conn = ServiceConnection::new(svc.key.clone());
+    let hello = br#"{"v":3,"client":"native-host","extension_origin":"chrome-extension://abcdefghijklmnopabcdefghijklmnop/","browser":"x"}"#;
+    let d = collect(conn.on_frame(hello, &mut *svc.store.borrow_mut(), &svc.backend));
+    assert!(d.closed);
+    assert_eq!(
+        control_error(&d.to_client[0]),
+        Some(ErrorCode::UnsupportedVersion)
+    );
+
+    // 降级：扩展按 v2，服务看到 v1
+    let mut v2 = ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "v2");
+    assert_eq!(v2.version(), 2);
+    let mut conn = svc.connect_v(ORIGIN, 1);
+    let d = deliver(&svc, &mut conn, &v2.start_pairing().unwrap());
+    assert!(
+        v2.on_frame(&d.to_client[0]).is_err(),
+        "prologue 不同，第 2 条消息认证失败"
+    );
+    assert!(
+        ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "x")
+            .with_version(3)
+            .is_err()
+    );
+}
+
+fn control_error(frame: &[u8]) -> Option<crate::message::ErrorCode> {
+    match ControlFrame::from_json(frame).ok()? {
+        ControlFrame::Error { code } => Some(code),
+        _ => None,
+    }
+}
+
+/// v1 的消息集合是封闭的：v1 会话中客户端不发送 save；手工构造的 save 被服务按 bad_request 拒绝并断开。
+#[test]
+fn v1_sessions_reject_v2_methods() {
+    let mut svc = Service::new();
+    let (client, service_public, _) = pair(&mut svc, true);
+    let key = StaticKeypair::from_private(client.export_private_key());
+    let mut v1 = ExtensionClient::new(key, ORIGIN, "x")
+        .with_version(1)
+        .unwrap();
+    let mut conn = svc.connect_v(ORIGIN, 1);
+    let d = deliver(
+        &svc,
+        &mut conn,
+        &v1.start_session(&service_public.unwrap()).unwrap(),
+    );
+    v1.on_frame(&d.to_client[0]).unwrap();
+    let save = Call::Save {
+        url: "https://github.com/".into(),
+        username: "u".into(),
+        password: secret("p"),
+    };
+    assert!(
+        v1.request(save.clone()).is_err(),
+        "客户端不发送 v1 中没有的方法"
+    );
+    // 绕过客户端：用 v2 客户端的加密层构造同样的请求，发到 v1 会话里
+    let key = StaticKeypair::from_private(client.export_private_key());
+    let mut forged = ExtensionClient::new(key, ORIGIN, "x")
+        .with_version(1)
+        .unwrap();
+    let mut conn = svc.connect_v(ORIGIN, 1);
+    let d = deliver(
+        &svc,
+        &mut conn,
+        &forged.start_session(&service_public.unwrap()).unwrap(),
+    );
+    forged.on_frame(&d.to_client[0]).unwrap();
+    let (_, frame) = forged.request_unchecked(save).unwrap();
+    let d = deliver(&svc, &mut conn, &frame);
+    assert!(d.closed);
+    assert_eq!(
+        control_error(&d.to_client[0]),
+        Some(crate::message::ErrorCode::BadRequest)
+    );
+}
+
+/// save：通过检查后交给调用方执行（不需要确认），条目标题取站点主机名；结果只含条目 ID。
+/// 等待期间同一连接上的写操作被拒；参数越界、非 http(s) 网址按 bad_request；频率限制按 not_authorized。
+#[test]
+fn v2_save_flow() {
+    use crate::message::{CallResult, ErrorCode};
+    use crate::service::WriteOp;
+    let mut svc = Service::new();
+    let (mut client, _, mut conn) = pair(&mut svc, true);
+    let save = |url: &str, user: &str, pw: &str| Call::Save {
+        url: url.into(),
+        username: user.into(),
+        password: secret(pw),
+    };
+
+    let (_, frame) = client
+        .request(save(
+            "https://www.GitHub.com/login?next=/",
+            "octocat",
+            "new-pass",
+        ))
+        .unwrap();
+    let d = deliver(&svc, &mut conn, &frame);
+    let w = d.write.expect("交给调用方执行");
+    assert!(d.to_client.is_empty() && !w.needs_confirmation());
+    assert_eq!(w.site, "https://www.github.com");
+    match &w.op {
+        WriteOp::Save {
+            title,
+            username,
+            password,
+        } => {
+            assert_eq!(
+                (title.as_str(), username.as_str(), password.expose()),
+                ("github.com", "octocat", "new-pass")
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(!format!("{w:?}").contains("new-pass"), "调试输出不含密码");
+    // 等待期间的第二个写操作
+    let (_, frame) = client
+        .request(save("https://github.com/", "x", "y"))
+        .unwrap();
+    let d = deliver(&svc, &mut conn, &frame);
+    assert_eq!(
+        error_code(&reply_of(&mut client, &d)),
+        Some(ErrorCode::NotAuthorized)
+    );
+    let d = collect(conn.resolve_write(Ok("new-item".into()), &mut *svc.store.borrow_mut()));
+    match reply_of(&mut client, &d) {
+        ServerMessage::Ok {
+            result: CallResult::Written { item_id },
+            ..
+        } => assert_eq!(item_id, "new-item"),
+        other => panic!("{other:?}"),
+    }
+
+    for (call, code) in [
+        (save("https://github.com/", "u", ""), ErrorCode::BadRequest),
+        (
+            save("https://github.com/", "u", &"x".repeat(4097)),
+            ErrorCode::BadRequest,
+        ),
+        (
+            save("https://github.com/", &"u".repeat(1025), "p"),
+            ErrorCode::BadRequest,
+        ),
+        (save("ftp://github.com/", "u", "p"), ErrorCode::BadRequest),
+    ] {
+        let (_, frame) = client.request(call).unwrap();
+        let d = deliver(&svc, &mut conn, &frame);
+        assert!(d.write.is_none());
+        assert_eq!(error_code(&reply_of(&mut client, &d)), Some(code));
+    }
+    // 锁定时
+    svc.backend.locked.set(true);
+    let (_, frame) = client
+        .request(save("https://github.com/", "u", "p"))
+        .unwrap();
+    let d = deliver(&svc, &mut conn, &frame);
+    assert_eq!(
+        error_code(&reply_of(&mut client, &d)),
+        Some(ErrorCode::Locked)
+    );
+}
+
+/// update：网址必须与条目匹配，每次都要求确认；用户拒绝时返回 not_authorized。
+#[test]
+fn v2_update_flow() {
+    use crate::message::ErrorCode;
+    use crate::service::WriteOp;
+    let mut svc = Service::new();
+    let (mut client, _, mut conn) = pair(&mut svc, true);
+    let update = |item: &str, url: &str| Call::Update {
+        item_id: item.into(),
+        url: url.into(),
+        password: secret("changed"),
+    };
+    for (call, code) in [
+        (
+            update("gh", "https://evil.example/"),
+            ErrorCode::UrlMismatch,
+        ),
+        (
+            update("missing", "https://github.com/"),
+            ErrorCode::NotFound,
+        ),
+    ] {
+        let (_, frame) = client.request(call).unwrap();
+        let d = deliver(&svc, &mut conn, &frame);
+        assert!(d.write.is_none());
+        assert_eq!(error_code(&reply_of(&mut client, &d)), Some(code));
+    }
+    let (_, frame) = client
+        .request(update("gh", "https://github.com/settings"))
+        .unwrap();
+    let d = deliver(&svc, &mut conn, &frame);
+    let w = d.write.expect("交给调用方确认并执行");
+    assert!(w.needs_confirmation());
+    assert!(
+        matches!(&w.op, WriteOp::Update { item_id, password, .. } if item_id == "gh" && password.expose() == "changed")
+    );
+    let d =
+        collect(conn.resolve_write(Err(ErrorCode::NotAuthorized), &mut *svc.store.borrow_mut()));
+    assert_eq!(
+        error_code(&reply_of(&mut client, &d)),
+        Some(ErrorCode::NotAuthorized)
+    );
+}
+
+fn reply_of(client: &mut ExtensionClient, d: &Delivered) -> ServerMessage {
+    let (_, mut events) = client.on_frame(&d.to_client[0]).unwrap();
+    match events.remove(0) {
+        ClientEvent::Message(m) => m,
+        other => panic!("{other:?}"),
     }
 }

@@ -71,6 +71,9 @@ const BENIGN = {
   // 页面自己的固定定位元素（不在顶层），远离菜单
   fixed: `<div style="position:fixed;right:16px;bottom:16px;width:200px;height:40px;background:#333;color:#fff;z-index:2147483647">在线客服</div>`,
 };
+// 会提交的表单（POST 到 /done），用于保存与更新
+const POST_LOGIN = `<form method="post" action="/done"><p><input id="u" name="username" autocomplete="username" style="width:280px;height:32px"></p><p><input id="p" name="password" type="password" autocomplete="current-password" style="width:280px;height:32px"></p><button id="go" type="submit">登录</button></form>`;
+const CHANGE = `<form method="post" action="/done"><input id="u" name="username" autocomplete="username" value="admin" hidden><p><input id="cur" type="password" autocomplete="current-password" style="width:280px;height:32px"></p><p><input id="p" type="password" autocomplete="new-password" style="width:280px;height:32px"></p><p><input id="p2" type="password" autocomplete="new-password" style="width:280px;height:32px"></p><button id="go" type="submit">修改密码</button></form>`;
 const html = (body) => `<!doctype html><meta charset="utf-8"><title>测试</title><body style="margin:40px;font:16px sans-serif">${body}</body>`;
 
 const server = createServer((req, res) => {
@@ -83,6 +86,9 @@ const server = createServer((req, res) => {
     "/toast": html(FORM + BENIGN.toast),
     "/cover-once": html(FORM + BENIGN["cover-once"]),
     "/fixed": html(FORM + BENIGN.fixed),
+    "/post": html(POST_LOGIN),
+    "/change": html(CHANGE),
+    "/done": html("<p>已提交。</p>"),
     "/frame": html(
       `<p>嵌入的登录框：</p><iframe id="fr" src="http://localhost:${port}/login" style="width:600px;height:460px;border:0"></iframe>`,
     ),
@@ -184,7 +190,7 @@ async function menuFrame() {
 }
 
 /** 在 `frame`（页面或其中的 iframe）中聚焦用户名，点击图标，返回菜单及其在页面中的位置。 */
-async function openMenu(page, frame = page, offset = { x: 0, y: 0 }) {
+async function openMenu(page, frame = page, offset = { x: 0, y: 0 }, subtitle = "admin") {
   const input = await waitFor(async () => {
     await frame.eval(`document.getElementById("u").focus()`);
     return frame.eval(
@@ -210,8 +216,13 @@ async function openMenu(page, frame = page, offset = { x: 0, y: 0 }) {
     "菜单宿主",
   );
   await waitFor(() => menu.eval(`!!document.querySelector("button.item")`), "菜单条目");
-  const button = await menu.eval(
-    `(() => { const r = document.querySelector("button.item").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`,
+  // 按用户名选择条目（保存测试之后，同一网站会有多个条目）
+  const button = await waitFor(
+    () =>
+      menu.eval(
+        `(() => { const b = [...document.querySelectorAll("button.item")].find((b) => b.querySelector(".subtitle")?.textContent === ${JSON.stringify(subtitle)}); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`,
+      ),
+    `菜单中的「${subtitle}」`,
   );
   return { menu, at: { x: offset.x + host.x + button.x, y: offset.y + host.y + button.y } };
 }
@@ -316,6 +327,101 @@ for (const [path, what] of [
   ok("跨域 iframe：菜单写明嵌入关系，第一次点击只要求确认，确认后填入");
 }
 
+// 6. 保存与更新（协议 v2）：提交后的页面顶部出现保存栏（扩展源 iframe，同样的点击劫持防护）
+
+/** 保存栏（等它出现并可用），返回按钮在页面中的位置。 */
+async function saveBar(page) {
+  const target = await waitFor(async () => {
+    const { targetInfos } = await browser.send("Target.getTargets");
+    return targetInfos.find((t) => t.type === "iframe" && t.url.endsWith("/bar.html") && !used.has(t.targetId));
+  }, "保存栏");
+  used.add(target.targetId);
+  const bar = await attach(browser, target.targetId);
+  await waitFor(() => bar.eval(`document.body.classList.contains("armed") && !!document.querySelector("button")`), "保存栏可用");
+  const host = await page.eval(
+    `(() => { const r = [...document.querySelectorAll("div[popover]")].at(-1).getBoundingClientRect(); return { x: r.left, y: r.top }; })()`,
+  );
+  const button = async (text) => {
+    const r = await bar.eval(
+      `(() => { const b = [...document.querySelectorAll("button")].find((b) => b.textContent === ${JSON.stringify(text)}); const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`,
+    );
+    return { x: host.x + r.x, y: host.y + r.y };
+  };
+  return { bar, button };
+}
+
+/** 填写并用可信点击提交表单，等跳转完成。 */
+async function submit(page, values) {
+  await page.eval(`(() => { for (const [id, v] of Object.entries(${JSON.stringify(values)})) { const el = document.getElementById(id); el.focus(); el.value = v; el.dispatchEvent(new Event("input", { bubbles: true })); } })()`);
+  const go = await page.eval(`(() => { const r = document.getElementById("go").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+  await click(page, go.x, go.y);
+  await waitFor(() => page.eval(`location.pathname === "/done" && document.readyState === "complete"`), "提交后跳转");
+}
+
+const noBar = async (what) => {
+  await sleep(1500);
+  const { targetInfos } = await browser.send("Target.getTargets");
+  assert.equal(targetInfos.some((t) => t.url.endsWith("/bar.html") && !used.has(t.targetId)), false, what);
+};
+
+/** 经弹窗页（当前标签页是 page）查询这个网站的候选与某个条目的密码。 */
+async function lookup(username) {
+  return popup.eval(`(async () => {
+    const c = await chrome.runtime.sendMessage({ type: "candidates" });
+    const item = c.candidates.find((x) => x.subtitle === ${JSON.stringify(username)});
+    if (!item) return null;
+    const s = await chrome.runtime.sendMessage({ type: "secret", itemId: item.item_id });
+    return { title: item.title, password: s.secret?.password };
+  })()`);
+}
+
+{
+  // 新登录：提示保存
+  const page = await open(`${LOCAL}/post`);
+  await waitFor(() => page.eval(`document.readyState === "complete"`), "登录页加载");
+  await submit(page, { u: "newuser", p: "fresh-pass" });
+  const { bar, button } = await saveBar(page);
+  assert.match(await bar.eval(`document.body.innerText`), new RegExp(`保存这个登录到 Keevo？[\\s\\S]*localhost:${PORT} · newuser`));
+  await shot(page, "save-bar");
+  const save = await button("保存");
+  await click(page, save.x, save.y);
+  await waitFor(() => bar.eval(`document.body.innerText.includes("已保存到 Keevo")`), "保存成功");
+  assert.deepEqual(await lookup("newuser"), { title: `localhost:${PORT}`, password: "fresh-pass" });
+  ok("提交新的登录后，跳转后的页面出现保存栏；可信点击保存后，Keevo 中有这条登录");
+}
+
+{
+  // 由 Keevo 填入、没有改动就提交：不提示
+  const page = await open(`${LOCAL}/post`);
+  const { menu, at } = await openMenu(page);
+  await waitFor(() => menu.eval(`document.body.classList.contains("armed")`), "菜单可用");
+  await click(page, at.x, at.y);
+  await waitFor(async () => JSON.stringify(await values(page)) === JSON.stringify(filled), "填入");
+  await submit(page, {});
+  await noBar("Keevo 填入的密码没有改动：不提示保存");
+  // 普通登录表单、同一用户名、不同密码：扩展无从知道密码是否改过，不提示更新
+  const again = await open(`${LOCAL}/post`);
+  await waitFor(() => again.eval(`document.readyState === "complete"`), "登录页加载");
+  await submit(again, { u: "admin", p: "typed-by-hand" });
+  await noBar("普通登录表单不提示更新");
+  ok("Keevo 填入后直接提交、普通登录表单上的已有用户名：都不出现保存栏");
+}
+
+{
+  // 修改密码的表单：提示更新，Keevo 确认（开发服务自动确认）后生效
+  const page = await open(`${LOCAL}/change`);
+  await waitFor(() => page.eval(`document.readyState === "complete"`), "修改密码页加载");
+  await submit(page, { cur: "demo-local-password", p: "rotated-pass", p2: "rotated-pass" });
+  const { bar, button } = await saveBar(page);
+  assert.match(await bar.eval(`document.body.innerText`), /更新 Keevo 中「本地开发（演示）」的密码？/);
+  await shot(page, "update-bar");
+  const update = await button("更新");
+  await click(page, update.x, update.y);
+  await waitFor(() => bar.eval(`document.body.innerText.includes("密码已更新")`), "更新成功");
+  assert.equal((await lookup("admin")).password, "rotated-pass");
+  ok("修改密码的表单提示更新；确认后 Keevo 中的密码随之更新");
+}
+
 // 5. 弹窗填充：与页内菜单共用内容脚本中的同一份填充实现（填入当前标签页中第一个可见的登录表单）
 {
   const page = await open(`${LOCAL}/login`);
@@ -327,8 +433,9 @@ for (const [path, what] of [
     return chrome.runtime.sendMessage({ type: "fill", itemId: item.item_id });
   })()`);
   assert.equal(result.fill, "filled");
-  assert.deepEqual(await values(page), filled);
-  ok("弹窗填充经内容脚本填入当前标签页的登录表单");
+  // 前面的更新测试已把演示条目的密码改为 rotated-pass
+  assert.deepEqual(await values(page), ["admin", "rotated-pass"]);
+  ok("弹窗填充经内容脚本填入当前标签页的登录表单（得到更新后的密码）");
 }
 
 console.log(`全部通过（${checks} 项）`);

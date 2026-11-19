@@ -129,7 +129,7 @@ fn start() -> World {
 
 /// 完成一次配对，返回服务公钥。
 fn pair(browser: &mut Browser, client: &mut ExtensionClient) -> [u8; 32] {
-    browser.send(&ExtensionClient::hello().unwrap());
+    browser.send(&client.hello().unwrap());
     browser.send(&client.start_pairing().unwrap());
     let (frames, _) = client.on_frame(&browser.recv()).unwrap();
     browser.send(&frames[0]);
@@ -213,7 +213,7 @@ fn pair_then_fill_through_real_native_host_and_socket() {
         ORIGIN,
         "Chrome · 测试",
     );
-    browser.send(&ExtensionClient::hello().unwrap());
+    browser.send(&client.hello().unwrap());
     browser.send(&client.start_pairing().unwrap());
     let (frames, events) = client.on_frame(&browser.recv()).unwrap();
     let ClientEvent::ShowSas(sas) = events[0] else {
@@ -327,7 +327,7 @@ fn pair_then_fill_through_real_native_host_and_socket() {
         ORIGIN,
         "Chrome · 测试",
     );
-    browser.send(&ExtensionClient::hello().unwrap());
+    browser.send(&client.hello().unwrap());
     browser.send(&client.start_session(&service_public).unwrap());
     let (_, events) = client.on_frame(&browser.recv()).unwrap();
     assert!(matches!(events[0], ClientEvent::Established));
@@ -368,7 +368,11 @@ fn host_reports_when_service_is_not_running() {
         svc: world.svc.clone(),
     };
     let mut browser = Browser::launch(&missing, true);
-    browser.send(&ExtensionClient::hello().unwrap());
+    browser.send(
+        &ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "x")
+            .hello()
+            .unwrap(),
+    );
     let frame = browser.recv();
     assert_eq!(
         ControlFrame::from_json(&frame).unwrap(),
@@ -383,7 +387,7 @@ fn unpaired_extension_is_rejected_end_to_end() {
     let world = start();
     let mut browser = Browser::launch(&world, true);
     let mut stranger = ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "x");
-    browser.send(&ExtensionClient::hello().unwrap());
+    browser.send(&stranger.hello().unwrap());
     // 攻击者知道服务公钥也没用：它的静态密钥不在配对记录中
     let fake_service = StaticKeypair::generate().unwrap().public_key();
     browser.send(&stranger.start_session(&fake_service).unwrap());
@@ -423,7 +427,7 @@ fn revoking_a_pairing_disconnects_live_sessions_end_to_end() {
         ORIGIN,
         "Chrome · 测试",
     );
-    browser.send(&ExtensionClient::hello().unwrap());
+    browser.send(&client.hello().unwrap());
     browser.send(&client.start_session(&service_public).unwrap());
     let (_, events) = client.on_frame(&browser.recv()).unwrap();
     assert!(

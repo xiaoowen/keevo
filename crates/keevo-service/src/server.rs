@@ -14,7 +14,7 @@ use keevo_crypto::StaticKeypair;
 use keevo_ipc::frame::{read_socket_frame, write_socket_frame};
 use keevo_ipc::service::{
     FILL_AUTHORIZATION_TIMEOUT, FillRequest, Output, PairingGate, PairingRecord, PairingStore,
-    ServiceConnection,
+    ServiceConnection, UPDATE_CONFIRMATION_TIMEOUT, VaultBackend, WriteOp, WriteRequest,
 };
 
 use crate::backend::CoreBackend;
@@ -54,6 +54,22 @@ pub trait PairingPrompt: Send + Sync {
     /// 这个配对因频率限制被暂停（§5.2 第 3 条）：在 Keevo.app 中提示，用户确认后调用 [`VaultService::resume`]。
     fn fill_paused(&self, extension_public: &[u8; 32], name: &str, browser: &str) {
         let _ = (extension_public, name, browser);
+    }
+    /// 协议 v2：扩展请求更新已有登录的密码（`spec/ipc.md` §5.5）。在原生界面显示站点、条目与配对，请用户确认；
+    /// `changed` 表示新密码与原来不同（只显示给用户，不告诉扩展）。必须在 `deadline` 到达时关闭界面并返回
+    /// `false`。默认拒绝。
+    fn confirm_update(
+        &self,
+        request: &WriteRequest,
+        changed: bool,
+        deadline: std::time::Instant,
+    ) -> bool {
+        let _ = (request, changed, deadline);
+        false
+    }
+    /// 协议 v2：扩展保存了新的登录。在 Keevo.app 中提示，让每次写入都对用户可见（`spec/ipc.md` §5.5）。
+    fn saved(&self, pairing_name: &str, browser: &str, title: &str) {
+        let _ = (pairing_name, browser, title);
     }
 }
 
@@ -355,10 +371,64 @@ impl VaultService {
                 } => self
                     .prompt
                     .fill_paused(&extension_public, &pairing_name, &browser),
+                Output::Write(request) => {
+                    let result = self.write(&request);
+                    let more = {
+                        let mut cache = lock(&self.pairings);
+                        conn.resolve_write(result.clone(), &mut Live(&mut cache))
+                    };
+                    if let (Ok(_), WriteOp::Save { title, .. }) = (&result, &request.op) {
+                        self.prompt
+                            .saved(&request.pairing_name, &request.browser, title);
+                    }
+                    if !self.emit(id, stream, conn, more) {
+                        return false;
+                    }
+                }
                 Output::Close => return false,
             }
         }
         true
+    }
+}
+
+impl VaultService {
+    /// 执行协议 v2 的写操作（`spec/ipc.md` §5.5）。更新先请用户确认，等待期间不持有任何锁；
+    /// 保存成功后为这个配对记下该条目在该站点的授权（凭据本来就是扩展提供的）。
+    fn write(&self, request: &WriteRequest) -> Result<String, keevo_ipc::message::ErrorCode> {
+        use keevo_ipc::message::ErrorCode;
+        if request.needs_confirmation() {
+            let changed = match &request.op {
+                WriteOp::Update {
+                    item_id, password, ..
+                } => {
+                    let vault = lock(&self.vault);
+                    CoreBackend::new(&vault)
+                        .fill(item_id)
+                        .is_none_or(|d| d.password != password.expose())
+                }
+                WriteOp::Save { .. } => true,
+            };
+            let now = std::time::Instant::now();
+            let deadline = now.checked_add(UPDATE_CONFIRMATION_TIMEOUT).unwrap_or(now);
+            if !(self.prompt.confirm_update(request, changed, deadline)
+                && std::time::Instant::now() <= deadline)
+            {
+                return Err(ErrorCode::NotAuthorized);
+            }
+        }
+        let mut vault = lock(&self.vault);
+        let item_id = crate::write::apply(&mut vault, request)?;
+        if matches!(request.op, WriteOp::Save { .. }) {
+            let mut cache = lock(&self.pairings);
+            // 授权写入失败不影响保存本身：之后第一次填充时再请用户确认
+            let _ = Bound {
+                cache: &mut cache,
+                vault: &mut vault,
+            }
+            .authorize(&request.extension_public, &item_id, &request.site);
+        }
+        Ok(item_id)
     }
 }
 
@@ -486,7 +556,7 @@ mod tests {
         let mut conn = ServiceConnection::new(Arc::clone(&svc.key));
         let origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
         let hello = serde_json::to_vec(&HostHello {
-            v: 1,
+            v: keevo_ipc::message::PROTOCOL_VERSION,
             client: "native-host".into(),
             extension_origin: origin.into(),
             browser: "dev".into(),

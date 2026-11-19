@@ -6,8 +6,48 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::IpcError;
 
-/// 协议版本。
-pub const PROTOCOL_VERSION: u32 = 1;
+/// 最新的协议版本：扩展默认按它发起，服务不支持时退回 v1（§5.5）。
+pub const PROTOCOL_VERSION: u32 = 2;
+/// 支持的协议版本。v2 = v1 的全部内容 + `save` 与 `update`（§5.5）。
+pub const SUPPORTED_VERSIONS: [u32; 2] = [1, 2];
+
+/// 是否支持这个协议版本。
+#[must_use]
+pub fn version_supported(v: u32) -> bool {
+    SUPPORTED_VERSIONS.contains(&v)
+}
+
+/// 会话内传递的秘密文本（`save` 与 `update` 中的密码）：调试输出不显示内容，释放时清零。
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SecretText(String);
+
+impl SecretText {
+    /// 包装。
+    #[must_use]
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+
+    /// 明文。
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl core::fmt::Debug for SecretText {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("SecretText(…)")
+    }
+}
+
+impl Drop for SecretText {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.0.zeroize();
+    }
+}
 
 /// 控制层帧：扩展 ↔ native host ↔ Vault Service 之间的明文 JSON（§5.1）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,6 +202,35 @@ pub enum Call {
         /// 当前帧的网址，Vault Service 会再次校验是否与条目匹配。
         url: String,
     },
+    /// v2：把用户在网页上提交的登录保存为新条目（§5.5）。
+    Save {
+        /// 提交表单的帧的网址；条目只保存规范化后的站点。
+        url: String,
+        /// 用户名（可为空）。
+        username: String,
+        /// 密码。
+        password: SecretText,
+    },
+    /// v2：更新已有登录的密码（§5.5）。每次都要求用户在 Keevo.app 中确认，旧密码留在修订历史中。
+    Update {
+        /// 条目 ID（十六进制），来自 `candidates`。
+        item_id: String,
+        /// 提交表单的帧的网址，必须与条目匹配。
+        url: String,
+        /// 新密码。
+        password: SecretText,
+    },
+}
+
+impl Call {
+    /// 引入这个方法的协议版本。会话协商出的版本低于它时，按 `bad_request` 处理（v1 的消息集合是封闭的）。
+    #[must_use]
+    pub const fn since_version(&self) -> u32 {
+        match self {
+            Self::Status | Self::Candidates { .. } | Self::Fill { .. } => 1,
+            Self::Save { .. } | Self::Update { .. } => 2,
+        }
+    }
 }
 
 /// 候选条目：只含概要，不含任何秘密。
@@ -222,6 +291,11 @@ pub enum CallResult {
     },
     /// `fill` 的结果。
     Fill(FillData),
+    /// v2：`save` 与 `update` 的结果，只含条目 ID（§5.5）。
+    Written {
+        /// 条目 ID（十六进制）。
+        item_id: String,
+    },
 }
 
 /// 错误体。
@@ -268,6 +342,11 @@ pub enum Event {
     /// Vault Service 已解锁。
     Unlocked,
 }
+
+/// `save` 与 `update` 中密码的字节上限（§5.5）。
+pub const MAX_PASSWORD_BYTES: usize = 4096;
+/// `save` 中用户名的字节上限（§5.5）。
+pub const MAX_USERNAME_BYTES: usize = 1024;
 
 /// 配对显示名原始字节的上限。
 pub const MAX_NAME_BYTES: usize = 256;

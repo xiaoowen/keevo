@@ -24,15 +24,27 @@ struct FillAuthorizationRequest: Identifiable {
     let answer: (Bool) -> Void
 }
 
-/// 当前显示的浏览器确认界面。配对与填充授权共用一个 sheet，逐个显示。
+/// 一次等待确认的密码更新（spec/ipc.md §5.5）。
+struct UpdateConfirmationRequest: Identifiable {
+    let id = UUID()
+    let request: BrowserUpdateRequest
+    /// 新密码与保存的不同。
+    let changed: Bool
+    let deadline: Date
+    let answer: (Bool) -> Void
+}
+
+/// 当前显示的浏览器确认界面。配对、填充授权与密码更新共用一个 sheet，逐个显示。
 enum BrowserPromptItem: Identifiable {
     case pairing(PairingRequest)
     case fill(FillAuthorizationRequest)
+    case update(UpdateConfirmationRequest)
 
     var id: UUID {
         switch self {
         case .pairing(let r): r.id
         case .fill(let r): r.id
+        case .update(let r): r.id
         }
     }
 }
@@ -79,6 +91,25 @@ final class BrowserPromptBridge: BrowserPrompt, @unchecked Sendable {
             }
         }
         return accepted
+    }
+
+    func confirmUpdate(request: BrowserUpdateRequest, changed: Bool, timeoutMs: UInt64) -> Bool {
+        let accepted = ask(timeoutMs: timeoutMs) { deadline, answer in
+            .update(UpdateConfirmationRequest(request: request, changed: changed, deadline: deadline, answer: answer))
+        }
+        if accepted {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.model?.reloadAfterBrowserWrite()
+            }
+        }
+        return accepted
+    }
+
+    func loginSaved(pairingName: String, browser: String, title: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.model?.browserNotice = "「\(pairingName)」（\(browserName(browser))）保存了新的登录「\(title)」。"
+            self?.model?.reloadAfterBrowserWrite()
+        }
     }
 
     func fillPaused(pairingId: String, name: String, browser: String) {
@@ -207,6 +238,61 @@ struct FillAuthorizationSheet: View {
                     Button("拒绝") { answer(false) }
                         .keyboardShortcut(.cancelAction)
                     Button("允许") { answer(true) }
+                }
+            }
+            .padding(24)
+            .frame(width: 480)
+            .onChange(of: left) { if left == 0, model.browserDialog?.id == request.id { model.browserDialog = nil } }
+        }
+    }
+
+    private func answer(_ accepted: Bool) {
+        request.answer(accepted && Date() < request.deadline)
+        model.browserDialog = nil
+    }
+}
+
+/// 密码更新：扩展请求覆盖已有登录的密码（spec/ipc.md §5.5）。每次都要确认；旧密码留在条目的历史中。
+struct UpdateConfirmationSheet: View {
+    @Environment(AppModel.self) private var model
+    let request: UpdateConfirmationRequest
+
+    private var r: BrowserUpdateRequest { request.request }
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let left = max(0, Int(request.deadline.timeIntervalSince(context.date).rounded(.up)))
+            VStack(alignment: .leading, spacing: 16) {
+                Label("更新这个登录的密码？", systemImage: "key.horizontal")
+                    .font(.title3.weight(.semibold))
+                Text("「\(r.pairingName)」（\(browserName(r.browser))）在 \(r.site) 上提交了新密码，请求更新：")
+                    .fixedSize(horizontal: false, vertical: true)
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(r.title.isEmpty ? "（无标题）" : r.title)
+                        if !r.username.isEmpty {
+                            Text(r.username).font(.callout).foregroundStyle(KV.Colors.fgSecondary)
+                        }
+                    }
+                } icon: {
+                    Image(systemName: "person.badge.key")
+                }
+                .padding(KV.Space.s3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: KV.Radius.md))
+                if !request.changed {
+                    Banner(kind: .info, message: "新密码与保存的相同，确认后不会有任何改动。")
+                }
+                Text("旧密码会保留在这个条目的历史中，可以随时恢复。如果你没有在这个网站上修改密码，请选择「不更新」。")
+                    .font(KV.Typography.footnote)
+                    .foregroundStyle(KV.Colors.fgSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Text("\(left) 秒后自动拒绝").font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgTertiary)
+                    Spacer()
+                    Button("不更新") { answer(false) }
+                        .keyboardShortcut(.cancelAction)
+                    Button("更新密码") { answer(true) }
                 }
             }
             .padding(24)

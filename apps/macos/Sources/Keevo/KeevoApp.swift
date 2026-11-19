@@ -56,20 +56,31 @@ struct RootView: View {
         }
         // 浏览器配对：每次尝试都对用户可见；确认界面只出现在 Keevo.app 中（spec/ipc.md §4.2、§5.2）
         .overlay(alignment: .top) {
-            if let browser = model.pairingNotice {
-                Banner(kind: .info, message: "\(browserName(browser)) 中的扩展正在请求与 Keevo 配对……")
-                    .frame(maxWidth: 440)
-                    .padding(.top, KV.Space.s3)
-                    .task {
-                        try? await Task.sleep(for: .seconds(60))
-                        model.pairingNotice = nil
-                    }
+            VStack(spacing: KV.Space.s2) {
+                if let browser = model.pairingNotice {
+                    Banner(kind: .info, message: "\(browserName(browser)) 中的扩展正在请求与 Keevo 配对……")
+                        .task {
+                            try? await Task.sleep(for: .seconds(60))
+                            model.pairingNotice = nil
+                        }
+                }
+                // 浏览器保存了新登录（spec/ipc.md §5.5）：每次写入都对用户可见
+                if let notice = model.browserNotice {
+                    Banner(kind: .success, message: notice)
+                        .task(id: notice) {
+                            try? await Task.sleep(for: .seconds(8))
+                            model.browserNotice = nil
+                        }
+                }
             }
+            .frame(maxWidth: 440)
+            .padding(.top, KV.Space.s3)
         }
         .sheet(item: $model.browserDialog) { item in
             switch item {
             case .pairing(let request): PairingConfirmSheet(request: request).interactiveDismissDisabled()
             case .fill(let request): FillAuthorizationSheet(request: request).interactiveDismissDisabled()
+            case .update(let request): UpdateConfirmationSheet(request: request).interactiveDismissDisabled()
             }
         }
         // 频率限制触发的暂停（spec/ipc.md §5.2 第 3 条）：用户确认后才恢复

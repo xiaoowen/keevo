@@ -7,10 +7,14 @@
 // - 填充与复制时，页面与帧的网址取自 Chrome（tabs API 与消息的 sender），不采信页面或弹窗的自述；
 // - 凭据只发给发起填充的那个帧（frameId），由内容脚本（content.js）核对来源后填入；
 // - 复制的秘密在 90 秒后清除，且只在剪贴板仍是 Keevo 写入的值时才清除（docs/ux.md §5）；
-// - 页内菜单（menu.html）只拿到条目概要。
+// - 页内菜单（menu.html）只拿到条目概要；
+// - 协议 v2（spec/ipc.md §5.5）：用户提交登录表单后，在保存栏（bar.html）中询问保存或更新。
+//   提交的密码只留在这里的内存中（不写入 chrome.storage），3 分钟后丢弃；Keevo 不支持 v2 时退回 v1。
 
 import init, { KeevoClient } from "./wasm/keevo_wasm.js";
 import type {
+  BarRequest,
+  BarResponse,
   Candidate,
   ContentRequest,
   MenuInit,
@@ -47,6 +51,8 @@ interface Stored {
 let state: ViewState = { status: "idle" };
 let port: chrome.runtime.Port | null = null;
 let client: KeevoClient | null = null;
+/** 协商用的协议版本：默认最新；Keevo 回答 unsupported_version 时退回 1（Service Worker 重启后重新尝试）。 */
+let protocolVersion: number | undefined;
 const pending = new Map<number, (m: ServerMessage | null) => void>();
 const ready = init({ module_or_path: chrome.runtime.getURL("wasm/keevo_wasm_bg.wasm") });
 
@@ -76,7 +82,7 @@ async function connect(mode: "pair" | "session"): Promise<void> {
     state = { status: "unpaired" };
     return;
   }
-  const c = new KeevoClient(extKey, `chrome-extension://${chrome.runtime.id}/`, name ?? DEFAULT_NAME);
+  const c = new KeevoClient(extKey, `chrome-extension://${chrome.runtime.id}/`, name ?? DEFAULT_NAME, protocolVersion);
   if (!extKey) await chrome.storage.local.set({ extKey: c.privateKeyHex() });
   client = c;
 
@@ -93,7 +99,7 @@ async function connect(mode: "pair" | "session"): Promise<void> {
     );
   });
 
-  send(KeevoClient.hello());
+  send(c.hello());
   if (mode === "pair") {
     state = { status: "pairing" };
     send(c.startPairing());
@@ -145,11 +151,22 @@ async function onEvent(e: ClientEventJson): Promise<void> {
       }
       break;
     }
-    case "error":
+    case "error": {
+      // 旧版 Keevo 不支持 v2：退回 v1 重新连接（spec/ipc.md §5.5）。v1 中没有保存与更新
+      const mode = state.status === "pairing" ? "pair" : "session";
+      if (e.code === "unsupported_version" && protocolVersion === undefined && client && client.version() > 1) {
+        protocolVersion = 1;
+        teardown({ status: "connecting" });
+        // 配对需要用户重新发起（扩展不得自动重试配对，§4.2 第 8 步）
+        if (mode === "session") await connect("session");
+        else state = { status: "unpaired" };
+        break;
+      }
       // 配对记录已被撤销或服务换了密钥：清除服务公钥，让用户重新配对
       if (e.code === "not_paired") await chrome.storage.local.remove("servicePublic");
       teardown({ status: "error", error: e.code });
       break;
+    }
   }
 }
 
@@ -220,13 +237,22 @@ async function deliver(
     anchored: message.anchored,
     kind: message.kind,
   };
+  let outcome: FillOutcome | "failed";
   try {
-    return (await chrome.tabs.sendMessage(tabId, payload, { frameId })) as FillOutcome;
+    outcome = (await chrome.tabs.sendMessage(tabId, payload, { frameId })) as FillOutcome;
   } catch {
     if (frameId !== 0) return "failed";
     await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ["content.js"] });
-    return (await chrome.tabs.sendMessage(tabId, payload, { frameId: 0 })) as FillOutcome;
+    outcome = (await chrome.tabs.sendMessage(tabId, payload, { frameId: 0 })) as FillOutcome;
   }
+  // 记下刚填入的密码（只存哈希）：用户随后提交同一个密码时，不提示保存或更新
+  if (outcome === "filled") filled.set(tabId, { hash: await sha256Hex(message.secret.password), at: Date.now() });
+  return outcome;
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 async function displayName(raw: string): Promise<string> {
@@ -347,12 +373,130 @@ function originOf(url: string | undefined): string | null {
   }
 }
 
+// ---- 保存与更新（协议 v2，spec/ipc.md §5.5）
+
+/** 一次待用户决定的保存或更新。密码只在这里的内存中（Service Worker 被回收时随之丢弃）。 */
+interface Offer {
+  kind: "save" | "update";
+  url: string;
+  host: string;
+  username: string;
+  password: string;
+  itemId?: string;
+  title: string;
+  at: number;
+}
+
+const OFFER_TTL_MS = 3 * 60_000;
+const offers = new Map<number, Offer>();
+const filled = new Map<number, { hash: string; at: number }>();
+const usernames = new Map<number, { username: string; at: number }>();
+
+function liveOffer(tabId: number): Offer | undefined {
+  const o = offers.get(tabId);
+  if (o && Date.now() - o.at > OFFER_TTL_MS) {
+    offers.delete(tabId);
+    return undefined;
+  }
+  return o;
+}
+
+async function neverSaveSites(): Promise<string[]> {
+  return ((await chrome.storage.local.get("neverSave")) as { neverSave?: string[] }).neverSave ?? [];
+}
+
+/**
+ * 用户提交了登录表单：决定是否提示保存或更新。
+ * - 刚由 Keevo 填入、没有改动的密码：不提示；
+ * - 当前网站没有同一用户名的条目：提示保存；
+ * - 修改密码的表单，且有同一用户名的条目：提示更新。普通登录表单不提示更新——扩展拿不到已保存的密码，
+ *   无从判断是否改过；也不为此向 Keevo 询问"密码对不对"，那会成为冒充者的猜测接口。
+ */
+async function onSubmitted(tabId: number, url: string, username: string, password: string, change: boolean): Promise<void> {
+  if (!/^https?:/.test(url) || password === "") return;
+  const host = new URL(url).host;
+  if ((await neverSaveSites()).includes(new URL(url).origin)) return;
+  const f = filled.get(tabId);
+  if (f && Date.now() - f.at < OFFER_TTL_MS && f.hash === (await sha256Hex(password))) return;
+  const step = usernames.get(tabId);
+  if (!username && step && Date.now() - step.at < OFFER_TTL_MS) username = step.username;
+  await ensureConnected();
+  await settled();
+  if (state.status !== "connected" || state.locked || !client || client.version() < 2) return;
+  const m = await request({ method: "candidates", params: { url } });
+  const candidates: Candidate[] = m && "result" in m && "items" in m.result ? m.result.items : [];
+  const same = candidates.find((c) => username !== "" && c.subtitle.toLocaleLowerCase() === username.toLocaleLowerCase());
+  const target = same ?? (username === "" && candidates.length === 1 ? candidates[0] : undefined);
+  let offer: Offer;
+  if (target) {
+    if (!change) return;
+    offer = { kind: "update", url, host, username: target.subtitle, password, itemId: target.item_id, title: target.title, at: Date.now() };
+  } else {
+    offer = { kind: "save", url, host, username, password, title: host.replace(/^www\./, ""), at: Date.now() };
+  }
+  offers.set(tabId, offer);
+  // 单页应用不跳转：立即显示；跳转的页面在加载时会来询问（offer_query）
+  await chrome.tabs.sendMessage(tabId, { type: "show_bar" }, { frameId: 0 }).catch(() => undefined);
+}
+
+async function handleBar(req: BarRequest, sender: chrome.runtime.MessageSender): Promise<BarResponse> {
+  const tabId = sender.tab?.id;
+  if (tabId === undefined) return { error: "failed" };
+  const offer = liveOffer(tabId);
+  const close = async (): Promise<void> => {
+    offers.delete(tabId);
+    await chrome.tabs.sendMessage(tabId, { type: "close_bar" }, { frameId: 0 }).catch(() => undefined);
+  };
+  switch (req.type) {
+    case "bar_init":
+      return offer ? { init: { kind: offer.kind, host: offer.host, username: offer.username, title: offer.title } } : {};
+    case "bar_save": {
+      if (!offer) return { error: "expired" };
+      if (!client || client.version() < 2) return { error: "unsupported" };
+      const call =
+        offer.kind === "update" && offer.itemId
+          ? { method: "update", params: { item_id: offer.itemId, url: offer.url, password: offer.password } }
+          : { method: "save", params: { url: offer.url, username: offer.username, password: offer.password } };
+      // 更新要等用户在 Keevo 中确认（最长 60 秒）
+      const m = await request(call, FILL_TIMEOUT_MS);
+      if (m && "result" in m && "item_id" in m.result) {
+        offers.delete(tabId);
+        return { ok: true };
+      }
+      return { error: m && "error" in m ? m.error.code : "failed" };
+    }
+    case "bar_never":
+      if (offer) {
+        const sites = await neverSaveSites();
+        const origin = new URL(offer.url).origin;
+        if (!sites.includes(origin)) await chrome.storage.local.set({ neverSave: [...sites, origin] });
+      }
+      await close();
+      return {};
+    case "bar_dismiss":
+    case "bar_close":
+      await close();
+      return {};
+  }
+}
+
 async function handleContent(req: ContentRequest, sender: chrome.runtime.MessageSender): Promise<unknown> {
   const tabId = sender.tab?.id;
   const frameId = sender.frameId;
   const url = sender.url;
   if (tabId === undefined || frameId === undefined || !url) return { ok: false };
   switch (req.type) {
+    case "submitted":
+      if (typeof req.password !== "string" || typeof req.username !== "string") return {};
+      await onSubmitted(tabId, url, req.username.slice(0, 1024), req.password.slice(0, 4096), req.change === true);
+      return {};
+    case "username_step":
+      if (typeof req.username === "string" && req.username) {
+        usernames.set(tabId, { username: req.username.slice(0, 1024), at: Date.now() });
+      }
+      return {};
+    case "offer_query":
+      return { show: frameId === 0 && liveOffer(tabId) !== undefined };
     case "inline_open": {
       const origin = originOf(url);
       if (!origin || !/^https?:$/.test(new URL(url).protocol)) return { ok: false };
@@ -443,6 +587,9 @@ async function clearBlocked(tabId: number): Promise<void> {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   void chrome.storage.session.remove([`inline:${tabId}`, `blocked:${tabId}`]);
+  offers.delete(tabId);
+  filled.delete(tabId);
+  usernames.delete(tabId);
 });
 
 // ---- 标准模式：有网站权限时注册内容脚本（所有帧），权限撤销时注销
@@ -482,7 +629,8 @@ chrome.commands.onCommand.addListener((command, tab) => {
 
 const POPUP_TYPES = new Set(["state", "display_name", "pair", "candidates", "fill", "secret", "copied"]);
 const MENU_TYPES = new Set(["menu_init", "menu_fill", "menu_close", "menu_size", "menu_blocked"]);
-const CONTENT_TYPES = new Set(["inline_open", "inline_close"]);
+const CONTENT_TYPES = new Set(["inline_open", "inline_close", "submitted", "username_step", "offer_query"]);
+const BAR_TYPES = new Set(["bar_init", "bar_save", "bar_dismiss", "bar_never", "bar_close"]);
 
 chrome.runtime.onMessage.addListener((req: { type?: string; target?: string }, sender, sendResponse) => {
   // 网页无法给扩展发消息（没有 externally_connectable）；这里再核对发送方是本扩展。发给离屏文档的消息不在这里处理
@@ -494,6 +642,8 @@ chrome.runtime.onMessage.addListener((req: { type?: string; target?: string }, s
     work = handle(req as PopupRequest).catch(() => ({ state: { status: "error", error: "internal" } }));
   } else if (sender.tab && url.startsWith("chrome-extension://") && new URL(url).pathname === "/menu.html" && MENU_TYPES.has(req.type)) {
     work = handleMenu(req as MenuRequest, sender).catch(() => ({ error: "failed" }));
+  } else if (sender.tab && url.startsWith("chrome-extension://") && new URL(url).pathname === "/bar.html" && BAR_TYPES.has(req.type)) {
+    work = handleBar(req as BarRequest, sender).catch(() => ({ error: "failed" }));
   } else if (sender.tab && /^https?:/.test(url) && CONTENT_TYPES.has(req.type)) {
     work = handleContent(req as ContentRequest, sender).catch(() => ({ ok: false }));
   }

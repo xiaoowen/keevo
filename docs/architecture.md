@@ -147,12 +147,12 @@ flowchart LR
 |---|---|---|
 | Service Worker | 消息路由；维持与 native host 的连接；保存配对后的会话 | 否。只存本扩展的配对静态密钥 |
 | 内容脚本（isolated world，所有帧） | 表单识别、字段分类（用户名 / 当前密码 / 新密码 / 验证码）、输入框旁的图标、执行填充、提交检测（M1.3 之后） | 只在填充瞬间持有 |
-| 内联菜单 / 保存栏 | 扩展源 iframe，挂在 closed shadow root 中，并置于顶层（popover）；保存栏待协议 v2 | 只有条目概要 |
+| 内联菜单 / 保存栏 | 扩展源 iframe，挂在 closed shadow root 中，并置于顶层（popover）；保存栏用协议 v2 的 `save` 与 `update` | 只有条目概要；保存栏只有站点、用户名与条目标题 |
 | 弹窗 | 搜索、浏览、复制、生成器 | 按需短暂持有 |
 
 约束：不加载远程代码；CSP 为 `script-src 'self' 'wasm-unsafe-eval'`（只为加载扩展包内自带的 WASM）；不使用 `eval`；`externally_connectable` 不开放。
 
-**权限**：安装时只申请 `nativeMessaging`、`storage`、`activeTab`、`scripting`、`alarms`、`offscreen`，没有任何网站权限（最小权限模式）：用户点开弹窗或按快捷键时，才通过 `activeTab` 把内容脚本注入顶层帧。用户在弹窗中开启"在输入框旁显示 Keevo 图标"后，扩展申请 http/https 网站权限（可选权限），并用 `chrome.scripting.registerContentScripts` 把内容脚本注册到所有帧；关闭时注销。保存检测在协议 v2 之后加入。
+**权限**：安装时只申请 `nativeMessaging`、`storage`、`activeTab`、`scripting`、`alarms`、`offscreen`，没有任何网站权限（最小权限模式）：用户点开弹窗或按快捷键时，才通过 `activeTab` 把内容脚本注入顶层帧。用户在弹窗中开启"在输入框旁显示 Keevo 图标"后，扩展申请 http/https 网站权限（可选权限），并用 `chrome.scripting.registerContentScripts` 把内容脚本注册到所有帧；关闭时注销。保存检测只在标准模式下工作（需要内容脚本观察表单提交）。
 
 ### 5.2 填充时序
 
