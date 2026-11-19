@@ -58,7 +58,7 @@ impl VaultBackend for Backend {
 /// Vault Service 一侧的世界：服务密钥、配对存储、后端。
 struct Service {
     key: Arc<StaticKeypair>,
-    store: MemoryPairingStore,
+    store: std::cell::RefCell<MemoryPairingStore>,
     backend: Backend,
 }
 
@@ -66,7 +66,7 @@ impl Service {
     fn new() -> Self {
         Self {
             key: Arc::new(StaticKeypair::generate().unwrap()),
-            store: MemoryPairingStore::default(),
+            store: std::cell::RefCell::default(),
             backend: Backend {
                 locked: Cell::new(false),
             },
@@ -83,7 +83,10 @@ impl Service {
             browser: "com.google.Chrome".into(),
         })
         .unwrap();
-        assert!(conn.on_frame(&hello, &self.store, &self.backend).is_empty());
+        assert!(
+            conn.on_frame(&hello, &mut *self.store.borrow_mut(), &self.backend)
+                .is_empty()
+        );
         conn
     }
 }
@@ -94,10 +97,12 @@ struct Delivered {
     confirm: Option<[u8; 6]>,
     closed: bool,
     started: bool,
+    authorize: Option<crate::service::FillRequest>,
+    paused: bool,
 }
 
 fn deliver(svc: &Service, conn: &mut ServiceConnection, frame: &[u8]) -> Delivered {
-    collect(conn.on_frame(frame, &svc.store, &svc.backend))
+    collect(conn.on_frame(frame, &mut *svc.store.borrow_mut(), &svc.backend))
 }
 
 fn collect(outputs: Vec<Output>) -> Delivered {
@@ -107,6 +112,8 @@ fn collect(outputs: Vec<Output>) -> Delivered {
             Output::Send(f) => d.to_client.push(f),
             Output::ConfirmPairing { sas, .. } => d.confirm = Some(sas),
             Output::PairingStarted { .. } => d.started = true,
+            Output::AuthorizeFill(req) => d.authorize = Some(req),
+            Output::FillPaused { .. } => d.paused = true,
             Output::Close => d.closed = true,
         }
     }
@@ -128,7 +135,11 @@ fn pair(svc: &mut Service, accept: bool) -> (ExtensionClient, Option<[u8; 32]>, 
     let d = deliver(svc, &mut conn, &frames[0]);
     assert_eq!(d.confirm, Some(client_sas), "两端的 SAS 必须一致");
 
-    let d = collect(conn.confirm_pairing(accept, &mut svc.store, svc.backend.unlock_epoch()));
+    let d = collect(conn.confirm_pairing(
+        accept,
+        &mut *svc.store.borrow_mut(),
+        svc.backend.unlock_epoch(),
+    ));
     let (_, events) = client.on_frame(&d.to_client[0]).unwrap();
     match &events[0] {
         ClientEvent::Paired { service_public } => {
@@ -176,7 +187,7 @@ fn pairing_then_requests_with_minimal_disclosure() {
     let mut svc = Service::new();
     let (mut client, service_public, mut conn) = pair(&mut svc, true);
     assert!(service_public.is_some());
-    assert_eq!(svc.store.len(), 1);
+    assert_eq!(svc.store.borrow_mut().len(), 1);
     assert!(conn.is_established());
 
     let status = call(&svc, &mut conn, &mut client, Call::Status);
@@ -356,7 +367,7 @@ fn rejected_pairing_saves_nothing() {
     let mut svc = Service::new();
     let (_, service_public, conn) = pair(&mut svc, false);
     assert!(service_public.is_none());
-    assert!(svc.store.is_empty());
+    assert!(svc.store.borrow_mut().is_empty());
     assert!(conn.is_closed());
 }
 
@@ -395,8 +406,8 @@ fn requests_before_confirmation_and_garbage_close_the_connection() {
 fn revoked_pairing_blocks_new_sessions() {
     let mut svc = Service::new();
     let (client, service_public, _) = pair(&mut svc, true);
-    svc.store.revoke(&client.public_key()).unwrap();
-    assert!(svc.store.find(&client.public_key()).is_none());
+    svc.store.borrow_mut().revoke(&client.public_key()).unwrap();
+    assert!(svc.store.borrow_mut().find(&client.public_key()).is_none());
     let mut client = client_with_same_key(client);
     let mut conn = svc.connect(ORIGIN);
     let d = deliver(
@@ -424,7 +435,7 @@ fn review_f1_revoking_a_pairing_cuts_off_established_sessions() {
     );
     assert!(matches!(before, ServerMessage::Ok { .. }));
 
-    svc.store.revoke(&client.public_key()).unwrap();
+    svc.store.borrow_mut().revoke(&client.public_key()).unwrap();
 
     // 撤销之后，已建立的会话也不能再取得任何数据，且连接被关闭
     let (_, frame) = client
@@ -463,7 +474,10 @@ fn manual_pairing(
                 browser: "com.google.Chrome".into(),
             })
             .unwrap();
-            assert!(c.on_frame(&hello, &svc.store, &svc.backend).is_empty());
+            assert!(
+                c.on_frame(&hello, &mut *svc.store.borrow_mut(), &svc.backend)
+                    .is_empty()
+            );
             c
         }
         None => svc.connect(ORIGIN),
@@ -553,7 +567,7 @@ fn pairing_deadline_starts_at_first_message() {
 /// 用户确认超过时限时视为拒绝，不保存配对。
 #[test]
 fn late_confirmation_is_treated_as_rejection() {
-    let mut svc = Service::new();
+    let svc = Service::new();
     let mut client =
         ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "Chrome · 个人");
     let mut conn = ServiceConnection::new(svc.key.clone())
@@ -565,16 +579,23 @@ fn late_confirmation_is_treated_as_rejection() {
         browser: "com.google.Chrome".into(),
     })
     .unwrap();
-    assert!(conn.on_frame(&hello, &svc.store, &svc.backend).is_empty());
+    assert!(
+        conn.on_frame(&hello, &mut *svc.store.borrow_mut(), &svc.backend)
+            .is_empty()
+    );
     let d = deliver(&svc, &mut conn, &client.start_pairing().unwrap());
     let (frames, _) = client.on_frame(&d.to_client[0]).unwrap();
     let d = deliver(&svc, &mut conn, &frames[0]);
     assert!(d.confirm.is_some());
     std::thread::sleep(std::time::Duration::from_millis(250));
-    let d = collect(conn.confirm_pairing(true, &mut svc.store, svc.backend.unlock_epoch()));
+    let d = collect(conn.confirm_pairing(
+        true,
+        &mut *svc.store.borrow_mut(),
+        svc.backend.unlock_epoch(),
+    ));
     assert!(d.closed);
     assert!(
-        svc.store.find(&client.public_key()).is_none(),
+        svc.store.borrow_mut().find(&client.public_key()).is_none(),
         "超时后不得保存配对"
     );
 }
@@ -583,7 +604,7 @@ fn late_confirmation_is_treated_as_rejection() {
 #[test]
 fn session_first_message_payload_must_be_empty() {
     use crate::message::b64;
-    let mut svc = Service::new();
+    let svc = Service::new();
     let ext_private = StaticKeypair::generate().unwrap().export_private();
     let mut client = ExtensionClient::new(
         StaticKeypair::from_private(ext_private.clone()),
@@ -594,8 +615,12 @@ fn session_first_message_payload_must_be_empty() {
     let d = deliver(&svc, &mut conn, &client.start_pairing().unwrap());
     let (frames, _) = client.on_frame(&d.to_client[0]).unwrap();
     deliver(&svc, &mut conn, &frames[0]);
-    collect(conn.confirm_pairing(true, &mut svc.store, svc.backend.unlock_epoch()));
-    assert!(svc.store.find(&client.public_key()).is_some());
+    collect(conn.confirm_pairing(
+        true,
+        &mut *svc.store.borrow_mut(),
+        svc.backend.unlock_epoch(),
+    ));
+    assert!(svc.store.borrow_mut().find(&client.public_key()).is_some());
 
     let ext = StaticKeypair::from_private(ext_private);
     let mut hs =
@@ -659,7 +684,10 @@ fn review2_g1_pairing_attempts_are_limited() {
             browser: "com.google.Chrome".into(),
         })
         .unwrap();
-        assert!(conn.on_frame(&hello, &svc.store, &svc.backend).is_empty());
+        assert!(
+            conn.on_frame(&hello, &mut *svc.store.borrow_mut(), &svc.backend)
+                .is_empty()
+        );
         let mut client = ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "x");
         let d = deliver(&svc, &mut conn, &client.start_pairing().unwrap());
         (conn, client, d)
@@ -753,7 +781,7 @@ fn review3_pairing_requires_unlocked_vault() {
 /// 第四轮 J5：配对开始后保险库被锁定（或锁定后又解锁），确认时按拒绝处理，不保存配对。
 #[test]
 fn review4_j5_lock_during_pairing_prevents_save() {
-    let mut svc = Service::new();
+    let svc = Service::new();
     let mut client = ExtensionClient::new(StaticKeypair::generate().unwrap(), ORIGIN, "x");
     let mut conn = svc.connect(ORIGIN);
     let d = deliver(&svc, &mut conn, &client.start_pairing().unwrap());
@@ -761,10 +789,14 @@ fn review4_j5_lock_during_pairing_prevents_save() {
     svc.backend.locked.set(true);
     let d = deliver(&svc, &mut conn, &frames[0]);
     assert!(d.confirm.is_some());
-    let d = collect(conn.confirm_pairing(true, &mut svc.store, svc.backend.unlock_epoch()));
+    let d = collect(conn.confirm_pairing(
+        true,
+        &mut *svc.store.borrow_mut(),
+        svc.backend.unlock_epoch(),
+    ));
     assert!(d.closed);
     assert!(
-        svc.store.find(&client.public_key()).is_none(),
+        svc.store.borrow_mut().find(&client.public_key()).is_none(),
         "锁定时不得保存配对"
     );
     // 锁定后又解锁：代次已变，旧的确认同样无效
@@ -779,10 +811,10 @@ fn review4_j5_lock_during_pairing_prevents_save() {
     let d = deliver(&svc, &mut conn, &client.start_pairing().unwrap());
     let (frames, _) = client.on_frame(&d.to_client[0]).unwrap();
     deliver(&svc, &mut conn, &frames[0]);
-    let d = collect(conn.confirm_pairing(true, &mut svc.store, Some(99)));
+    let d = collect(conn.confirm_pairing(true, &mut *svc.store.borrow_mut(), Some(99)));
     assert!(d.closed);
     assert!(
-        svc.store.find(&client.public_key()).is_none(),
+        svc.store.borrow_mut().find(&client.public_key()).is_none(),
         "不是同一次解锁"
     );
 }
@@ -846,7 +878,7 @@ fn review4_j4_responses_are_bounded() {
     let (mut client, _, mut conn) = pair(&mut svc, true);
     let mut send = |conn: &mut ServiceConnection, c: Call| {
         let (_, frame) = client.request(c).unwrap();
-        let d = collect(conn.on_frame(&frame, &svc.store, &Big));
+        let d = collect(conn.on_frame(&frame, &mut *svc.store.borrow_mut(), &Big));
         assert!(!d.closed, "超大响应不应断开连接");
         let (_, mut events) = client.on_frame(&d.to_client[0]).unwrap();
         match events.remove(0) {
@@ -917,7 +949,7 @@ fn ik_before_pairings_are_loaded_returns_locked() {
     let mut client = client_with_same_key(client);
     let mut conn = svc.connect(ORIGIN);
     let frame = client.start_session(&service_public.unwrap()).unwrap();
-    let out = collect(conn.on_frame(&frame, &NotLoaded(&svc.store), &svc.backend));
+    let out = collect(conn.on_frame(&frame, &mut NotLoaded(&svc.store.borrow()), &svc.backend));
     assert!(out.closed);
     let err: ControlFrame = ControlFrame::from_json(&out.to_client[0]).unwrap();
     assert!(
@@ -929,4 +961,195 @@ fn ik_before_pairings_are_loaded_returns_locked() {
         ),
         "{err:?}"
     );
+}
+
+/// fill 的按站点授权（spec/ipc.md §5.2）：未授权时挂起请求并请用户确认，确认前不返回任何秘密；
+/// 挂起期间的第二个 fill 被拒；确认后返回凭据；拒绝、等待期间锁定都不返回秘密；暂停时拒绝并通知应用。
+#[test]
+fn fill_requires_site_authorization() {
+    use crate::service::{FillGate, PairingRecord};
+    use std::collections::VecDeque;
+
+    struct Gated<'a> {
+        inner: &'a mut MemoryPairingStore,
+        decisions: &'a mut VecDeque<FillGate>,
+    }
+    impl PairingStore for Gated<'_> {
+        fn find(&self, pk: &[u8; 32]) -> Option<PairingRecord> {
+            self.inner.find(pk)
+        }
+        fn save(&mut self, r: PairingRecord) -> std::io::Result<()> {
+            self.inner.save(r)
+        }
+        fn revoke(&mut self, pk: &[u8; 32]) -> std::io::Result<()> {
+            self.inner.revoke(pk)
+        }
+        fn fill_gate(
+            &mut self,
+            _: &[u8; 32],
+            item: &str,
+            site: &str,
+            _: std::time::Instant,
+        ) -> FillGate {
+            assert_eq!(
+                (item, site),
+                ("gh", "https://github.com"),
+                "站点规范化为 scheme://host"
+            );
+            self.decisions.pop_front().unwrap_or(FillGate::Allowed)
+        }
+    }
+
+    let mut svc = Service::new();
+    let (mut client, _, mut conn) = pair(&mut svc, true);
+    let mut decisions = VecDeque::new();
+    let fill = Call::Fill {
+        item_id: "gh".into(),
+        url: "https://github.com/login?x=1#y".into(),
+    };
+    let send = |svc: &Service,
+                conn: &mut ServiceConnection,
+                client: &mut ExtensionClient,
+                decisions: &mut VecDeque<FillGate>,
+                c: Call| {
+        let (_, frame) = client.request(c).unwrap();
+        collect(conn.on_frame(
+            &frame,
+            &mut Gated {
+                inner: &mut svc.store.borrow_mut(),
+                decisions,
+            },
+            &svc.backend,
+        ))
+    };
+    let reply = |client: &mut ExtensionClient, d: &Delivered, i: usize| {
+        let (_, mut events) = client.on_frame(&d.to_client[i]).unwrap();
+        match events.remove(0) {
+            ClientEvent::Message(m) => m,
+            other => panic!("{other:?}"),
+        }
+    };
+
+    // 1. 未授权：挂起，不回复
+    decisions.push_back(FillGate::NeedsAuthorization);
+    let d = send(&svc, &mut conn, &mut client, &mut decisions, fill.clone());
+    let req = d.authorize.expect("应请求授权");
+    assert!(d.to_client.is_empty(), "确认前不返回任何东西");
+    assert_eq!(
+        (
+            req.title.as_str(),
+            req.site.as_str(),
+            req.pairing_name.as_str()
+        ),
+        ("", "https://github.com", "Chrome · 个人")
+    );
+    // 挂起期间的第二个 fill 直接拒绝；其他请求照常
+    decisions.push_back(FillGate::NeedsAuthorization);
+    let d = send(&svc, &mut conn, &mut client, &mut decisions, fill.clone());
+    assert_eq!(
+        error_code(&reply(&mut client, &d, 0)),
+        Some(ErrorCode::NotAuthorized)
+    );
+    let d = send(&svc, &mut conn, &mut client, &mut decisions, Call::Status);
+    assert!(matches!(
+        reply(&mut client, &d, 0),
+        ServerMessage::Ok { .. }
+    ));
+    // 用户确认：返回凭据
+    let d = collect(conn.resolve_fill(
+        true,
+        &mut Gated {
+            inner: &mut svc.store.borrow_mut(),
+            decisions: &mut decisions,
+        },
+        &svc.backend,
+    ));
+    assert!(matches!(
+        reply(&mut client, &d, 0),
+        ServerMessage::Ok {
+            result: CallResult::Fill(_),
+            ..
+        }
+    ));
+
+    // 2. 用户拒绝
+    decisions.push_back(FillGate::NeedsAuthorization);
+    send(&svc, &mut conn, &mut client, &mut decisions, fill.clone());
+    let d = collect(conn.resolve_fill(
+        false,
+        &mut Gated {
+            inner: &mut svc.store.borrow_mut(),
+            decisions: &mut decisions,
+        },
+        &svc.backend,
+    ));
+    assert_eq!(
+        error_code(&reply(&mut client, &d, 0)),
+        Some(ErrorCode::NotAuthorized)
+    );
+
+    // 3. 等待期间锁定
+    decisions.push_back(FillGate::NeedsAuthorization);
+    send(&svc, &mut conn, &mut client, &mut decisions, fill.clone());
+    svc.backend.locked.set(true);
+    let d = collect(conn.resolve_fill(
+        true,
+        &mut Gated {
+            inner: &mut svc.store.borrow_mut(),
+            decisions: &mut decisions,
+        },
+        &svc.backend,
+    ));
+    assert_eq!(
+        error_code(&reply(&mut client, &d, 0)),
+        Some(ErrorCode::Locked)
+    );
+    svc.backend.locked.set(false);
+
+    // 4. 频率限制暂停
+    decisions.push_back(FillGate::Paused);
+    let d = send(&svc, &mut conn, &mut client, &mut decisions, fill.clone());
+    assert!(d.paused, "通知应用");
+    assert_eq!(
+        error_code(&reply(&mut client, &d, 0)),
+        Some(ErrorCode::NotAuthorized)
+    );
+
+    // 5. 网址不匹配时不做授权检查
+    let d = send(
+        &svc,
+        &mut conn,
+        &mut client,
+        &mut decisions,
+        Call::Fill {
+            item_id: "gh".into(),
+            url: "https://evil.example/".into(),
+        },
+    );
+    assert!(d.authorize.is_none());
+    assert_eq!(
+        error_code(&reply(&mut client, &d, 0)),
+        Some(ErrorCode::UrlMismatch)
+    );
+}
+
+#[test]
+fn sites_are_normalized() {
+    use crate::service::site_of;
+    assert_eq!(
+        site_of("https://GitHub.com/login").as_deref(),
+        Some("https://github.com")
+    );
+    assert_eq!(
+        site_of("http://user:pw@example.com:8080/a?b#c").as_deref(),
+        Some("http://example.com:8080")
+    );
+    for bad in [
+        "ftp://example.com",
+        "github.com",
+        "https://",
+        "javascript:alert(1)",
+    ] {
+        assert_eq!(site_of(bad), None, "{bad}");
+    }
 }

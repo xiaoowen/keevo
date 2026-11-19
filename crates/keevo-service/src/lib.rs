@@ -12,5 +12,8 @@ mod pairing;
 mod server;
 
 pub use backend::CoreBackend;
-pub use pairing::{LoadReport, PAIRING_KIND, PairingCache};
+pub use pairing::{
+    AUTHORIZATION_KIND, Authorization, FILL_DISTINCT_LIMIT, FILL_WINDOW, LoadReport, PAIRING_KIND,
+    PairingCache,
+};
 pub use server::{PairingPrompt, PeerPolicy, VaultService, bind};

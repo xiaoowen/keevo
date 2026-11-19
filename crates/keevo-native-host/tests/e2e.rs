@@ -36,6 +36,20 @@ impl PairingPrompt for AutoConfirm {
         self.0.lock().unwrap().push(sas);
         true
     }
+
+    /// 首次取用的授权（spec/ipc.md §5.2）：界面收到规范化后的站点与条目概要。
+    fn authorize_fill(&self, r: &keevo_ipc::service::FillRequest, _: std::time::Instant) -> bool {
+        assert_eq!(
+            (
+                r.site.as_str(),
+                r.title.as_str(),
+                r.username.as_str(),
+                r.pairing_name.as_str()
+            ),
+            ("https://github.com", "GitHub", "octocat", "Chrome · 测试")
+        );
+        true
+    }
 }
 
 struct World {

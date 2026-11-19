@@ -106,6 +106,9 @@ function render(state: ViewState, candidates: Candidate[] = [], origin = "", not
         text.append(el("div", c.title, "title"), el("div", c.subtitle, "subtitle"));
         const b = el("button", "填充");
         b.onclick = async () => {
+          b.disabled = true;
+          b.textContent = "等待中…";
+          root.append(el("div", "第一次在这个网站上使用这个条目时，需要在 Keevo 中确认。", "banner"));
           const r = await ask({ type: "fill", itemId: c.item_id });
           const done: Record<string, string> = {
             filled: "已填充。",

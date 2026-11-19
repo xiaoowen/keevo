@@ -66,8 +66,22 @@ struct RootView: View {
                     }
             }
         }
-        .sheet(item: $model.pairingRequest) { request in
-            PairingConfirmSheet(request: request).interactiveDismissDisabled()
+        .sheet(item: $model.browserDialog) { item in
+            switch item {
+            case .pairing(let request): PairingConfirmSheet(request: request).interactiveDismissDisabled()
+            case .fill(let request): FillAuthorizationSheet(request: request).interactiveDismissDisabled()
+            }
+        }
+        // 频率限制触发的暂停（spec/ipc.md §5.2 第 3 条）：用户确认后才恢复
+        .alert(
+            "已暂停「\(model.pausedPairing?.name ?? "")」的填充",
+            isPresented: Binding(get: { model.pausedPairing != nil }, set: { if !$0 { model.pausedPairing = nil } }),
+            presenting: model.pausedPairing
+        ) { paused in
+            Button("保持暂停", role: .cancel) { model.pausedPairing = nil }
+            Button("恢复") { model.resumeBrowserPairing(id: paused.id) }
+        } message: { paused in
+            Text("\(browserName(paused.browser)) 中的这个扩展在 10 分钟内为太多不同的条目取用了凭据，可能已被冒用。确认是你本人在操作后再恢复；也可以在「设置 → 浏览器」中解除配对。")
         }
     }
 }

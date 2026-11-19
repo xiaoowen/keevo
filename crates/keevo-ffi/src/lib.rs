@@ -1493,6 +1493,7 @@ impl KeevoVault {
                     id: hex(&r.extension_public),
                     name: r.name,
                     browser: r.browser,
+                    paused: svc.is_paused(&r.extension_public),
                     extension_origin: r.extension_origin,
                     paired_at_ms: r.paired_at_ms,
                 })
@@ -1507,13 +1508,75 @@ impl KeevoVault {
     /// # Errors
     /// 服务未启动或 ID 不合法时返回错误。
     pub fn revoke_browser_pairing(&self, id: String) -> Result<bool, KeevoError> {
-        let pk: [u8; 32] = unhex(&id)
-            .and_then(|b| b.try_into().ok())
-            .ok_or_else(|| invalid("pairing id"))?;
+        let pk = pairing_key(&id)?;
         self.with_service(|svc| svc.revoke(&pk).is_ok())
-            .ok_or_else(|| KeevoError::BrowserServiceUnavailable {
-                reason: "not started".into(),
+            .ok_or_else(service_not_started)
+    }
+
+    /// 某个配对的站点授权（"设置 → 浏览器"，`spec/ipc.md` §5.2 第 2 条），附条目标题。
+    ///
+    /// # Errors
+    /// 服务未启动、ID 不合法或已锁定时返回错误。
+    pub fn browser_authorizations(
+        &self,
+        pairing_id: String,
+    ) -> Result<Vec<BrowserAuthorization>, KeevoError> {
+        let pk = pairing_key(&pairing_id)?;
+        let list = self
+            .with_service(|svc| svc.authorizations(&pk))
+            .ok_or_else(service_not_started)?;
+        let titles: std::collections::HashMap<String, String> = self
+            .vault()
+            .items()?
+            .into_iter()
+            .map(|i| (i.id.to_hex(), i.overview.title))
+            .collect();
+        Ok(list
+            .into_iter()
+            .map(|a| BrowserAuthorization {
+                title: titles.get(&a.item_id).cloned(),
+                item_id: a.item_id,
+                site: a.site,
+                granted_at_ms: a.granted_at_ms,
             })
+            .collect())
+    }
+
+    /// 撤销一项站点授权。返回 `false` 表示写入数据库失败：内存中已撤销，但重启后可能恢复。
+    ///
+    /// # Errors
+    /// 服务未启动或 ID 不合法时返回错误。
+    pub fn revoke_browser_authorization(
+        &self,
+        pairing_id: String,
+        item_id: String,
+        site: String,
+    ) -> Result<bool, KeevoError> {
+        let pk = pairing_key(&pairing_id)?;
+        self.with_service(|svc| svc.revoke_authorization(&pk, &item_id, &site).is_ok())
+            .ok_or_else(service_not_started)
+    }
+
+    /// 恢复因频率限制被暂停的配对（`spec/ipc.md` §5.2 第 3 条）。
+    ///
+    /// # Errors
+    /// 服务未启动或 ID 不合法时返回错误。
+    pub fn resume_browser_pairing(&self, pairing_id: String) -> Result<(), KeevoError> {
+        let pk = pairing_key(&pairing_id)?;
+        self.with_service(|svc| svc.resume(&pk))
+            .ok_or_else(service_not_started)
+    }
+}
+
+fn pairing_key(id: &str) -> Result<[u8; 32], KeevoError> {
+    unhex(id)
+        .and_then(|b| b.try_into().ok())
+        .ok_or_else(|| invalid("pairing id"))
+}
+
+fn service_not_started() -> KeevoError {
+    KeevoError::BrowserServiceUnavailable {
+        reason: "not started".into(),
     }
 }
 
@@ -1647,6 +1710,44 @@ pub trait BrowserPrompt: Send + Sync {
     fn pairing_started(&self, browser: String);
     /// 请用户确认两边的短认证串一致。必须在 `timeout_ms` 毫秒内返回，超时按拒绝处理。
     fn confirm_pairing(&self, sas: String, name: String, browser: String, timeout_ms: u64) -> bool;
+    /// 某个配对第一次为某个条目在某个站点取用凭据（`spec/ipc.md` §5.2）：显示站点、条目与配对，请用户确认。
+    /// 必须在 `timeout_ms` 毫秒内返回，超时按拒绝处理。
+    fn authorize_fill(&self, request: BrowserFillRequest, timeout_ms: u64) -> bool;
+    /// 这个配对因频率限制被暂停（§5.2 第 3 条）：提示用户，用户确认后调用
+    /// [`KeevoVault::resume_browser_pairing`]。
+    fn fill_paused(&self, pairing_id: String, name: String, browser: String);
+}
+
+/// 一次等待授权的 `fill`（`spec/ipc.md` §5.2）。
+#[derive(uniffi::Record)]
+pub struct BrowserFillRequest {
+    /// 发起请求的配对。
+    pub pairing_id: String,
+    /// 配对的显示名。
+    pub pairing_name: String,
+    /// 浏览器标识。
+    pub browser: String,
+    /// 条目 ID。
+    pub item_id: String,
+    /// 条目标题。
+    pub title: String,
+    /// 用户名（条目副标题）。
+    pub username: String,
+    /// 规范化后的站点 `scheme://host[:port]`。
+    pub site: String,
+}
+
+/// 一项站点授权：某个配对可以为某个条目在某个站点取用凭据。
+#[derive(uniffi::Record)]
+pub struct BrowserAuthorization {
+    /// 条目 ID。
+    pub item_id: String,
+    /// 条目标题；条目已不存在时为 `None`。
+    pub title: Option<String>,
+    /// 规范化后的站点。
+    pub site: String,
+    /// 授权时间（Unix 毫秒）。
+    pub granted_at_ms: u64,
 }
 
 struct PromptAdapter(Arc<dyn BrowserPrompt>);
@@ -1678,6 +1779,33 @@ impl keevo_service::PairingPrompt for PromptAdapter {
             .confirm_pairing(code, name.to_owned(), browser.to_owned(), ms)
             && std::time::Instant::now() <= deadline
     }
+
+    fn authorize_fill(
+        &self,
+        r: &keevo_ipc::service::FillRequest,
+        deadline: std::time::Instant,
+    ) -> bool {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        let ms = u64::try_from(left.as_millis()).unwrap_or(u64::MAX);
+        let request = BrowserFillRequest {
+            pairing_id: hex(&r.extension_public),
+            pairing_name: r.pairing_name.clone(),
+            browser: r.browser.clone(),
+            item_id: r.item_id.clone(),
+            title: r.title.clone(),
+            username: r.username.clone(),
+            site: r.site.clone(),
+        };
+        self.0.authorize_fill(request, ms) && std::time::Instant::now() <= deadline
+    }
+
+    fn fill_paused(&self, extension_public: &[u8; 32], name: &str, browser: &str) {
+        self.0
+            .fill_paused(hex(extension_public), name.to_owned(), browser.to_owned());
+    }
 }
 
 /// 启动结果。
@@ -1700,6 +1828,8 @@ pub struct BrowserPairing {
     pub extension_origin: String,
     /// 配对时间（Unix 毫秒）。
     pub paired_at_ms: u64,
+    /// 因频率限制被暂停（`spec/ipc.md` §5.2 第 3 条）。
+    pub paused: bool,
 }
 
 const fn kdf_info(p: &KdfParams) -> KdfInfo {

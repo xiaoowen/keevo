@@ -12,10 +12,13 @@ use std::thread;
 use keevo_core::Vault;
 use keevo_crypto::StaticKeypair;
 use keevo_ipc::frame::{read_socket_frame, write_socket_frame};
-use keevo_ipc::service::{Output, PairingGate, PairingRecord, PairingStore, ServiceConnection};
+use keevo_ipc::service::{
+    FILL_AUTHORIZATION_TIMEOUT, FillRequest, Output, PairingGate, PairingRecord, PairingStore,
+    ServiceConnection,
+};
 
 use crate::backend::CoreBackend;
-use crate::pairing::{Bound, LoadReport, PairingCache, ReadOnly};
+use crate::pairing::{Authorization, Bound, Live, LoadReport, PairingCache, ReadOnly};
 
 /// socket 对端的校验策略（`spec/ipc.md` §3.1）。
 #[derive(Debug, Clone)]
@@ -42,6 +45,16 @@ pub trait PairingPrompt: Send + Sync {
         browser: &str,
         deadline: std::time::Instant,
     ) -> bool;
+    /// 某个配对第一次为某个条目在某个站点取用凭据：在原生界面显示站点、条目与配对，请用户确认
+    /// （`spec/ipc.md` §5.2）。必须在 `deadline` 到达时关闭界面并返回 `false`。默认拒绝。
+    fn authorize_fill(&self, request: &FillRequest, deadline: std::time::Instant) -> bool {
+        let _ = (request, deadline);
+        false
+    }
+    /// 这个配对因频率限制被暂停（§5.2 第 3 条）：在 Keevo.app 中提示，用户确认后调用 [`VaultService::resume`]。
+    fn fill_paused(&self, extension_public: &[u8; 32], name: &str, browser: &str) {
+        let _ = (extension_public, name, browser);
+    }
 }
 
 /// 已建立会话的登记表：连接编号 → (扩展公钥, 用于主动断开的 socket 句柄)。
@@ -149,6 +162,42 @@ impl VaultService {
         lock(&self.pairings).pending_revocations()
     }
 
+    /// 某个配对的全部站点授权（"设置 → 浏览器"）。
+    #[must_use]
+    pub fn authorizations(&self, extension_public: &[u8; 32]) -> Vec<Authorization> {
+        lock(&self.pairings).authorizations(extension_public)
+    }
+
+    /// 撤销一项站点授权（§5.2 第 2 条）。之后这个配对再为该条目在该站点取用凭据，需要重新确认。
+    ///
+    /// # Errors
+    /// 写入数据库失败时返回错误；此时内存中已撤销，但重启后可能恢复。
+    pub fn revoke_authorization(
+        &self,
+        extension_public: &[u8; 32],
+        item_id: &str,
+        site: &str,
+    ) -> std::io::Result<()> {
+        let mut vault = lock(&self.vault);
+        let mut cache = lock(&self.pairings);
+        Bound {
+            cache: &mut cache,
+            vault: &mut vault,
+        }
+        .revoke_authorization(extension_public, item_id, site)
+    }
+
+    /// 这个配对是否因频率限制被暂停。
+    #[must_use]
+    pub fn is_paused(&self, extension_public: &[u8; 32]) -> bool {
+        lock(&self.pairings).is_paused(extension_public)
+    }
+
+    /// 用户确认后恢复被暂停的配对（§5.2 第 3 条）。
+    pub fn resume(&self, extension_public: &[u8; 32]) {
+        lock(&self.pairings).resume(extension_public);
+    }
+
     /// 服务的静态公钥。
     #[must_use]
     pub fn public_key(&self) -> [u8; 32] {
@@ -185,8 +234,8 @@ impl VaultService {
             };
             let outputs = {
                 let vault = lock(&self.vault);
-                let pairings = lock(&self.pairings);
-                conn.on_frame(&frame, &ReadOnly(&pairings), &CoreBackend::new(&vault))
+                let mut pairings = lock(&self.pairings);
+                conn.on_frame(&frame, &mut Live(&mut pairings), &CoreBackend::new(&vault))
             };
             // 会话一建立就登记，早于任何可能阻塞的发送（第二轮评审 G7）；
             // 配对确认发生在 emit 内，那里同样先登记再发送（第三轮评审 H6）
@@ -276,6 +325,36 @@ impl VaultService {
                         return false;
                     }
                 }
+                Output::AuthorizeFill(request) => {
+                    // 等待用户确认期间不持有任何锁（§5.2）
+                    let now = std::time::Instant::now();
+                    let deadline = now.checked_add(FILL_AUTHORIZATION_TIMEOUT).unwrap_or(now);
+                    let accepted = self.prompt.authorize_fill(&request, deadline)
+                        && std::time::Instant::now() <= deadline;
+                    let more = {
+                        let mut vault = lock(&self.vault);
+                        let mut cache = lock(&self.pairings);
+                        // 先写入授权，成功后才放行；写入失败（如等待期间已锁定）按拒绝处理
+                        let granted = accepted
+                            && Bound {
+                                cache: &mut cache,
+                                vault: &mut vault,
+                            }
+                            .authorize(&request.extension_public, &request.item_id, &request.site)
+                            .is_ok();
+                        conn.resolve_fill(granted, &mut Live(&mut cache), &CoreBackend::new(&vault))
+                    };
+                    if !self.emit(id, stream, conn, more) {
+                        return false;
+                    }
+                }
+                Output::FillPaused {
+                    extension_public,
+                    pairing_name,
+                    browser,
+                } => self
+                    .prompt
+                    .fill_paused(&extension_public, &pairing_name, &browser),
                 Output::Close => return false,
             }
         }
@@ -346,6 +425,9 @@ mod tests {
         fn confirm(&self, _: [u8; 6], _: &str, _: &str, _: Instant) -> bool {
             true
         }
+        fn authorize_fill(&self, _: &FillRequest, _: Instant) -> bool {
+            true
+        }
     }
 
     fn service() -> (VaultService, std::path::PathBuf) {
@@ -413,8 +495,8 @@ mod tests {
         let mut client = ExtensionClient::new(StaticKeypair::generate().unwrap(), origin, "x");
         let step = |conn: &mut ServiceConnection, frame: &[u8]| {
             let vault = lock(&svc.vault);
-            let pairings = lock(&svc.pairings);
-            conn.on_frame(frame, &ReadOnly(&pairings), &CoreBackend::new(&vault))
+            let mut pairings = lock(&svc.pairings);
+            conn.on_frame(frame, &mut Live(&mut pairings), &CoreBackend::new(&vault))
         };
         assert!(step(&mut conn, &hello).is_empty());
         let out = step(&mut conn, &client.start_pairing().unwrap());

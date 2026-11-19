@@ -16,10 +16,40 @@ struct PairingRequest: Identifiable {
     let answer: (Bool) -> Void
 }
 
+/// 一次等待授权的填充（spec/ipc.md §5.2 第 1 条）。
+struct FillAuthorizationRequest: Identifiable {
+    let id = UUID()
+    let request: BrowserFillRequest
+    let deadline: Date
+    let answer: (Bool) -> Void
+}
+
+/// 当前显示的浏览器确认界面。配对与填充授权共用一个 sheet，逐个显示。
+enum BrowserPromptItem: Identifiable {
+    case pairing(PairingRequest)
+    case fill(FillAuthorizationRequest)
+
+    var id: UUID {
+        switch self {
+        case .pairing(let r): r.id
+        case .fill(let r): r.id
+        }
+    }
+}
+
+/// 因频率限制被暂停的配对（spec/ipc.md §5.2 第 3 条）。
+struct PausedPairing: Identifiable {
+    let id: String
+    let name: String
+    let browser: String
+}
+
 /// Rust 服务调用的原生确认界面。这些方法在服务的工作线程中调用，阻塞到用户回答或超时为止；
 /// 界面只出现在 Keevo.app 中，扩展与网页无法伪造（spec/ipc.md §5.2 第 4 条）。
 final class BrowserPromptBridge: BrowserPrompt, @unchecked Sendable {
     private weak var model: AppModel?
+    /// 一次只显示一个确认界面：后到的请求排队，到截止时间仍未轮到即按拒绝处理。
+    private let slot = DispatchSemaphore(value: 1)
 
     init(model: AppModel) {
         self.model = model
@@ -33,24 +63,53 @@ final class BrowserPromptBridge: BrowserPrompt, @unchecked Sendable {
     }
 
     func confirmPairing(sas: String, name: String, browser: String, timeoutMs: UInt64) -> Bool {
-        let semaphore = DispatchSemaphore(value: 0)
+        ask(timeoutMs: timeoutMs) { deadline, answer in
+            .pairing(PairingRequest(sas: sas, name: name, browser: browser, deadline: deadline, answer: answer))
+        }
+    }
+
+    func authorizeFill(request: BrowserFillRequest, timeoutMs: UInt64) -> Bool {
+        let accepted = ask(timeoutMs: timeoutMs) { deadline, answer in
+            .fill(FillAuthorizationRequest(request: request, deadline: deadline, answer: answer))
+        }
+        if accepted {
+            // 授权由 Rust 在这里返回之后写入；稍后刷新"设置 → 浏览器"的列表
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.model?.refreshBrowserPairings()
+            }
+        }
+        return accepted
+    }
+
+    func fillPaused(pairingId: String, name: String, browser: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.model?.pausedPairing = PausedPairing(id: pairingId, name: name, browser: browser)
+            self?.model?.refreshBrowserPairings()
+            NSApp.requestUserAttention(.criticalRequest)
+        }
+    }
+
+    /// 显示一个确认界面并等待回答。截止时间到：关闭界面并按拒绝处理（spec/ipc.md §4.2 第 7 步、§5.2 第 1 条）。
+    private func ask(timeoutMs: UInt64, make: (Date, @escaping (Bool) -> Void) -> BrowserPromptItem) -> Bool {
+        let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000)
+        let until = DispatchTime.now() + .milliseconds(Int(min(timeoutMs, 60_000)))
+        guard slot.wait(timeout: until) == .success else { return false }
+        defer { slot.signal() }
+        let answered = DispatchSemaphore(value: 0)
         let lock = NSLock()
         var result = false
-        let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000)
-        let request = PairingRequest(sas: sas, name: name, browser: browser, deadline: deadline) { accepted in
+        let item = make(deadline) { accepted in
             lock.withLock { result = accepted }
-            semaphore.signal()
+            answered.signal()
         }
         DispatchQueue.main.async { [weak self] in
-            self?.model?.pairingNotice = nil
-            self?.model?.pairingRequest = request
+            if case .pairing = item { self?.model?.pairingNotice = nil }
+            self?.model?.browserDialog = item
             NSApp.activate()
         }
-        let answered = semaphore.wait(timeout: .now() + .milliseconds(Int(min(timeoutMs, 60_000)))) == .success
-        if !answered {
-            // 截止时间到：关闭界面并按拒绝处理（spec/ipc.md §4.2 第 7 步）
+        guard answered.wait(timeout: until) == .success else {
             DispatchQueue.main.async { [weak self] in
-                if self?.model?.pairingRequest?.id == request.id { self?.model?.pairingRequest = nil }
+                if self?.model?.browserDialog?.id == item.id { self?.model?.browserDialog = nil }
             }
             return false
         }
@@ -90,15 +149,84 @@ struct PairingConfirmSheet: View {
             }
             .padding(24)
             .frame(width: 480)
-            .onChange(of: left) { if left == 0 { model.pairingRequest = nil } }
+            .onChange(of: left) { if left == 0, model.browserDialog?.id == request.id { model.browserDialog = nil } }
         }
     }
 
     private func answer(_ accepted: Bool) {
         // 截止时间之后的确认一律按拒绝处理（Rust 端也会再检查一次）
         request.answer(accepted && Date() < request.deadline)
-        model.pairingRequest = nil
+        model.browserDialog = nil
     }
+}
+
+/// 填充授权：某个配对第一次为某个条目在某个站点取用凭据（spec/ipc.md §5.2 第 1 条）。
+/// 显示规范化后的站点、条目标题与用户名、发起请求的配对。默认按钮不是"允许"，回车不会误放行。
+struct FillAuthorizationSheet: View {
+    @Environment(AppModel.self) private var model
+    let request: FillAuthorizationRequest
+
+    private var r: BrowserFillRequest { request.request }
+
+    /// 站点的主机部分，作为最醒目的一行：用户据此判断是不是自己正在访问的网站。
+    private var host: String {
+        let rest = r.site.split(separator: "://", maxSplits: 1).last.map(String.init) ?? r.site
+        return rest
+    }
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let left = max(0, Int(request.deadline.timeIntervalSince(context.date).rounded(.up)))
+            VStack(alignment: .leading, spacing: 16) {
+                Label("允许扩展在这个网站上填充？", systemImage: "key.viewfinder")
+                    .font(.title3.weight(.semibold))
+                Text("「\(r.pairingName)」（\(browserName(r.browser))）请求在下面这个网站上填充登录信息：")
+                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(host).font(.title2.weight(.semibold)).textSelection(.enabled)
+                    Text(r.site).font(.callout.monospaced()).foregroundStyle(KV.Colors.fgSecondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(KV.Space.s4)
+                .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: KV.Radius.md))
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("网站 \(r.site)")
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(r.title.isEmpty ? "（无标题）" : r.title)
+                        if !r.username.isEmpty {
+                            Text(r.username).font(.callout).foregroundStyle(KV.Colors.fgSecondary)
+                        }
+                    }
+                } icon: {
+                    Image(systemName: "person.badge.key")
+                }
+                Text("这是这个扩展第一次在这个网站上使用这个条目。允许后不再询问，可在「设置 → 浏览器」中撤销。如果你没有在浏览器中点击填充，或者网站不是你正在访问的那个，请选择「拒绝」。")
+                    .font(KV.Typography.footnote)
+                    .foregroundStyle(KV.Colors.fgSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Text("\(left) 秒后自动拒绝").font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgTertiary)
+                    Spacer()
+                    Button("拒绝") { answer(false) }
+                        .keyboardShortcut(.cancelAction)
+                    Button("允许") { answer(true) }
+                }
+            }
+            .padding(24)
+            .frame(width: 480)
+            .onChange(of: left) { if left == 0, model.browserDialog?.id == request.id { model.browserDialog = nil } }
+        }
+    }
+
+    private func answer(_ accepted: Bool) {
+        request.answer(accepted && Date() < request.deadline)
+        model.browserDialog = nil
+    }
+}
+
+extension BrowserAuthorization {
+    var key: String { itemId + "\n" + site }
 }
 
 func browserName(_ id: String) -> String {
@@ -197,19 +325,30 @@ struct BrowserSettings: View {
                     Text("还没有配对的扩展。").foregroundStyle(.secondary)
                 } else {
                     ForEach(model.browserPairings, id: \.id) { p in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(p.name.isEmpty ? "（未命名）" : p.name)
-                                Text("\(browserName(p.browser)) · 配对于 \(Date(timeIntervalSince1970: TimeInterval(p.pairedAtMs) / 1000).formatted(date: .abbreviated, time: .shortened))")
-                                    .font(.caption).foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: KV.Space.s2) {
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(p.name.isEmpty ? "（未命名）" : p.name)
+                                    Text("\(browserName(p.browser)) · 配对于 \(Date(timeIntervalSince1970: TimeInterval(p.pairedAtMs) / 1000).formatted(date: .abbreviated, time: .shortened))")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if p.paused {
+                                    Label("已暂停", systemImage: "pause.circle.fill")
+                                        .foregroundStyle(KV.Colors.statusWarningFg)
+                                    Button("恢复") { model.resumeBrowserPairing(id: p.id) }
+                                }
+                                Button("解除配对…") { revoking = p }
                             }
-                            Spacer()
-                            Button("解除配对…") { revoking = p }
+                            AuthorizationList(pairing: p)
                         }
                     }
                 }
                 if model.pendingRevocationWarning {
                     Banner(kind: .warning, message: "有撤销没能写入数据库，重启 Keevo 后可能失效。下次解锁时会自动重试。")
+                }
+                if model.authorizationRevokeWarning {
+                    Banner(kind: .warning, message: "撤销授权没能写入数据库，重启 Keevo 后这项授权可能恢复。请稍后再试一次。")
                 }
             }
         }
@@ -238,6 +377,34 @@ struct BrowserSettings: View {
             installMessage = "写入 host 清单失败：\(error.localizedDescription)"
         }
         installed = NativeHostManifest.installed
+    }
+}
+
+/// 一个配对已授权的网站（spec/ipc.md §5.2 第 2 条）：可逐项撤销。撤销只会减少权限，不需要重新验证。
+private struct AuthorizationList: View {
+    @Environment(AppModel.self) private var model
+    let pairing: BrowserPairing
+
+    var body: some View {
+        let items = model.browserAuthorizations[pairing.id] ?? []
+        if !items.isEmpty {
+            DisclosureGroup("已授权的网站（\(items.count)）") {
+                ForEach(items, id: \.key) { a in
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(a.title ?? "（条目已删除）")
+                            Text("\(a.site) · \(Date(timeIntervalSince1970: TimeInterval(a.grantedAtMs) / 1000).formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("撤销") {
+                            model.revokeBrowserAuthorization(pairingId: pairing.id, itemId: a.itemId, site: a.site)
+                        }
+                    }
+                }
+            }
+            .font(.callout)
+        }
     }
 }
 

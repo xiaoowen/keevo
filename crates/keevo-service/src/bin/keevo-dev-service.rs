@@ -27,6 +27,7 @@ use keevo_core::{
     AccountSecretKey, FieldData, FieldKind, ItemType, KdfParams, NewField, Purpose, Vault,
 };
 use keevo_crypto::StaticKeypair;
+use keevo_ipc::service::FillRequest;
 use keevo_service::{PairingPrompt, PeerPolicy, VaultService, bind};
 use zeroize::Zeroizing;
 
@@ -51,16 +52,7 @@ impl PairingPrompt for TerminalPrompt {
         eprintln!("请确认扩展弹窗中显示的验证码与此一致：  {}", code.join(" "));
         eprint!("一致吗？[y/N] ");
         let _ = std::io::stderr().flush();
-        // 在另一个线程读终端，到截止时间仍未回答即按拒绝处理
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut line = String::new();
-            let ok = std::io::stdin().lock().read_line(&mut line).is_ok()
-                && line.trim().eq_ignore_ascii_case("y");
-            let _ = tx.send(ok);
-        });
-        let left = deadline.saturating_duration_since(std::time::Instant::now());
-        let ok = rx.recv_timeout(left).unwrap_or(false);
+        let ok = ask(deadline);
         eprintln!(
             "{}",
             if ok {
@@ -71,6 +63,42 @@ impl PairingPrompt for TerminalPrompt {
         );
         ok
     }
+
+    fn authorize_fill(&self, r: &FillRequest, deadline: std::time::Instant) -> bool {
+        eprintln!(
+            "\n「{}」（{}）请求在 {} 上取用「{}」（{}）的凭据。",
+            r.pairing_name, r.browser, r.site, r.title, r.username
+        );
+        eprint!("允许吗？[y/N] ");
+        let _ = std::io::stderr().flush();
+        let ok = ask(deadline);
+        eprintln!(
+            "{}",
+            if ok {
+                "已允许。"
+            } else {
+                "已拒绝（或超时）。"
+            }
+        );
+        ok
+    }
+
+    fn fill_paused(&self, _: &[u8; 32], name: &str, _: &str) {
+        eprintln!("\n「{name}」短时间内取用了太多条目，已暂停它的填充。");
+    }
+}
+
+/// 在另一个线程读终端，到截止时间仍未回答即按拒绝处理。
+fn ask(deadline: std::time::Instant) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let ok = std::io::stdin().lock().read_line(&mut line).is_ok()
+            && line.trim().eq_ignore_ascii_case("y");
+        let _ = tx.send(ok);
+    });
+    let left = deadline.saturating_duration_since(std::time::Instant::now());
+    rx.recv_timeout(left).unwrap_or(false)
 }
 
 struct AutoConfirm;
@@ -78,6 +106,14 @@ struct AutoConfirm;
 impl PairingPrompt for AutoConfirm {
     fn confirm(&self, _: [u8; 6], name: &str, _: &str, _: std::time::Instant) -> bool {
         eprintln!("[auto-confirm] 已自动确认「{name}」的配对");
+        true
+    }
+
+    fn authorize_fill(&self, r: &FillRequest, _: std::time::Instant) -> bool {
+        eprintln!(
+            "[auto-confirm] 已自动允许在 {} 上取用「{}」",
+            r.site, r.title
+        );
         true
     }
 }

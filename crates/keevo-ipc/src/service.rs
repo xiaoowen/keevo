@@ -18,6 +18,8 @@ use crate::message::{
 
 /// 配对的时限（`spec/ipc.md` §4.2）：从收到第 1 条消息起算，覆盖握手与用户确认，超时视为拒绝。
 pub const PAIRING_TIMEOUT: Duration = Duration::from_secs(60);
+/// `fill` 首次授权的等待时间：到期按拒绝处理（§5.2 第 1 条）。
+pub const FILL_AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(60);
 /// 每小时最多开始的配对次数（§4.2）。
 pub const MAX_PAIRING_STARTS_PER_HOUR: usize = 10;
 
@@ -78,6 +80,17 @@ pub struct PairingRecord {
     pub paired_at_ms: u64,
 }
 
+/// `fill` 之前的授权检查结果（§5.2"按站点授权"）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FillGate {
+    /// 已授权，且没有触发频率限制：这次使用已记下。
+    Allowed,
+    /// 这个配对还没有为这个条目在这个站点取用过凭据：需要用户在原生界面确认。
+    NeedsAuthorization,
+    /// 这个配对因频率限制被暂停（§5.2 第 3 条）。
+    Paused,
+}
+
 /// 配对记录的存储。正式实现保存在加密数据库中；撤销配对即删除记录。
 pub trait PairingStore {
     /// 配对记录是否已读入。记录存在加密数据库中，进程启动后、首次解锁前不可读，此时 IK 握手一律返回
@@ -97,6 +110,18 @@ pub trait PairingStore {
     /// # Errors
     /// 持久化失败时返回错误：调用方必须告知用户撤销可能在重启后失效。
     fn revoke(&mut self, extension_public: &[u8; 32]) -> std::io::Result<()>;
+    /// `fill` 之前的授权检查（§5.2）：`(配对, 条目, 站点)` 是否已授权，以及频率限制。允许时记下这次使用。
+    /// 默认要求用户确认（失败安全的方向）；正式实现见 `keevo-service`。
+    fn fill_gate(
+        &mut self,
+        extension_public: &[u8; 32],
+        item_id: &str,
+        site: &str,
+        now: Instant,
+    ) -> FillGate {
+        let _ = (extension_public, item_id, site, now);
+        FillGate::NeedsAuthorization
+    }
 }
 
 /// 内存中的配对存储，用于测试与开发服务。
@@ -139,6 +164,11 @@ impl PairingStore for MemoryPairingStore {
             .retain(|r| &r.extension_public != extension_public);
         Ok(())
     }
+
+    /// 测试用：不做按站点授权。
+    fn fill_gate(&mut self, _: &[u8; 32], _: &str, _: &str, _: Instant) -> FillGate {
+        FillGate::Allowed
+    }
 }
 
 /// 保险库后端。协议层只通过这个接口取数据，最小披露规则由本状态机强制执行。
@@ -155,6 +185,58 @@ pub trait VaultBackend {
     fn unlock_epoch(&self) -> Option<u64> {
         (!self.is_locked()).then_some(0)
     }
+    /// 条目的标题与用户名，只用于原生授权界面（§5.2 第 1 条）。
+    fn describe(&self, item_id: &str) -> Option<(String, String)> {
+        let _ = item_id;
+        None
+    }
+    /// 规范化后的站点 `scheme://host[:port]`（§5.2 第 1 条）。
+    fn site(&self, url: &str) -> Option<String> {
+        site_of(url)
+    }
+}
+
+/// 把网址规范化为站点 `scheme://host[:port]`：方案与主机小写，去掉路径、查询、片段与用户信息。
+/// 只接受 `https` 与 `http`。
+#[must_use]
+pub fn site_of(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    if scheme != "https" && scheme != "http" {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    if host_port.is_empty() {
+        return None;
+    }
+    Some(format!("{scheme}://{}", host_port.to_ascii_lowercase()))
+}
+
+/// 一次等待用户授权的 `fill`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FillRequest {
+    /// 发起请求的配对（扩展静态公钥）。
+    pub extension_public: [u8; 32],
+    /// 配对的显示名。
+    pub pairing_name: String,
+    /// 浏览器标识。
+    pub browser: String,
+    /// 条目 ID。
+    pub item_id: String,
+    /// 条目标题。
+    pub title: String,
+    /// 用户名（条目副标题）。
+    pub username: String,
+    /// 规范化后的站点。
+    pub site: String,
+}
+
+/// 等待授权的请求在连接中的状态。
+struct PendingFill {
+    id: u32,
+    item_id: String,
+    url: String,
 }
 
 /// 状态机的输出。
@@ -175,6 +257,18 @@ pub enum Output {
         sas: [u8; 6],
         /// 扩展报告的显示名。
         name: String,
+        /// 浏览器标识。
+        browser: String,
+    },
+    /// 某个配对第一次为某个条目在某个站点取用凭据：请用户在原生界面确认（§5.2），60 秒内未确认按拒绝处理；
+    /// 确认后先记下授权，再调用 [`ServiceConnection::resolve_fill`]。等待期间不得持有任何锁。
+    AuthorizeFill(FillRequest),
+    /// 这个配对因频率限制被暂停（§5.2 第 3 条）：在 Keevo.app 中提示，用户确认后恢复。
+    FillPaused {
+        /// 配对（扩展静态公钥）。
+        extension_public: [u8; 32],
+        /// 配对的显示名。
+        pairing_name: String,
         /// 浏览器标识。
         browser: String,
     },
@@ -204,6 +298,7 @@ enum State {
     Established {
         transport: Box<Transport>,
         origin: String,
+        pending: Option<PendingFill>,
     },
     Closed,
 }
@@ -293,7 +388,7 @@ impl ServiceConnection {
     pub fn on_frame(
         &mut self,
         frame: &[u8],
-        store: &dyn PairingStore,
+        store: &mut dyn PairingStore,
         backend: &dyn VaultBackend,
     ) -> Vec<Output> {
         match self.step(frame, store, backend) {
@@ -350,7 +445,11 @@ impl ServiceConnection {
             },
         ) {
             Ok(frame) => {
-                self.state = State::Established { transport, origin };
+                self.state = State::Established {
+                    transport,
+                    origin,
+                    pending: None,
+                };
                 vec![Output::Send(frame)]
             }
             Err(_) => self.fail(ErrorCode::BadRequest),
@@ -382,7 +481,7 @@ impl ServiceConnection {
     fn step(
         &mut self,
         frame: &[u8],
-        store: &dyn PairingStore,
+        store: &mut dyn PairingStore,
         backend: &dyn VaultBackend,
     ) -> Result<Vec<Output>, ErrorCode> {
         let state = std::mem::replace(&mut self.state, State::Closed);
@@ -460,6 +559,7 @@ impl ServiceConnection {
                     self.state = State::Established {
                         transport: Box::new(transport),
                         origin: hello.extension_origin,
+                        pending: None,
                     };
                     Ok(vec![send_noise(&reply)?])
                 }
@@ -514,12 +614,13 @@ impl ServiceConnection {
             State::Established {
                 mut transport,
                 origin,
+                mut pending,
             } => {
                 // 每个请求都重新核对配对记录：撤销立即生效，不存在撤销与请求之间的竞态（评审 F1）
-                match store.find(&transport.remote_static()) {
-                    Some(r) if r.extension_origin == origin => {}
+                let record = match store.find(&transport.remote_static()) {
+                    Some(r) if r.extension_origin == origin => r,
                     _ => return Err(ErrorCode::NotPaired),
-                }
+                };
                 let ControlFrame::Noise { d } = parse(frame)? else {
                     return Err(ErrorCode::BadRequest);
                 };
@@ -528,7 +629,41 @@ impl ServiceConnection {
                     .map_err(|_| ErrorCode::BadRequest)?;
                 let request: Request =
                     decode_canonical(&plaintext).map_err(|_| ErrorCode::BadRequest)?;
-                let reply = handle(&request, backend);
+                let mut extra = Vec::new();
+                let reply = match &request.call {
+                    Call::Fill { item_id, url } if !backend.is_locked() => {
+                        match gated_fill(request.id, item_id, url, &record, store, backend) {
+                            Gated::Reply(reply) => reply,
+                            Gated::Paused(reply) => {
+                                extra.push(paused(&record));
+                                reply
+                            }
+                            // 已有一个请求在等待授权时，新的 fill 直接拒绝
+                            Gated::NeedsAuthorization(_) if pending.is_some() => {
+                                ServerMessage::Err {
+                                    id: request.id,
+                                    error: ErrorBody {
+                                        code: ErrorCode::NotAuthorized,
+                                    },
+                                }
+                            }
+                            Gated::NeedsAuthorization(req) => {
+                                pending = Some(PendingFill {
+                                    id: request.id,
+                                    item_id: item_id.clone(),
+                                    url: url.clone(),
+                                });
+                                self.state = State::Established {
+                                    transport,
+                                    origin,
+                                    pending,
+                                };
+                                return Ok(vec![Output::AuthorizeFill(req)]);
+                            }
+                        }
+                    }
+                    _ => handle(&request, backend),
+                };
                 // 放不进一条 Noise 消息的响应改为 `response_too_large`（§2，第四轮评审 J4）
                 let frame = match encrypt(&mut transport, &reply) {
                     Err(IpcError::TooLarge) => encrypt(
@@ -543,10 +678,139 @@ impl ServiceConnection {
                     other => other,
                 }
                 .map_err(|_| ErrorCode::BadRequest)?;
-                self.state = State::Established { transport, origin };
-                Ok(vec![Output::Send(frame)])
+                self.state = State::Established {
+                    transport,
+                    origin,
+                    pending,
+                };
+                let mut out = vec![Output::Send(frame)];
+                out.append(&mut extra);
+                Ok(out)
             }
         }
+    }
+
+    /// 用户对 [`Output::AuthorizeFill`] 的决定。`authorized` 为 `true` 时调用方必须已经记下授权
+    /// （之后的 [`PairingStore::fill_gate`] 返回允许）。等待期间保险库可能已锁定、条目可能已变化，这里全部重新核对。
+    pub fn resolve_fill(
+        &mut self,
+        authorized: bool,
+        store: &mut dyn PairingStore,
+        backend: &dyn VaultBackend,
+    ) -> Vec<Output> {
+        let State::Established {
+            mut transport,
+            origin,
+            pending,
+        } = std::mem::replace(&mut self.state, State::Closed)
+        else {
+            return Vec::new();
+        };
+        let Some(p) = pending else {
+            self.state = State::Established {
+                transport,
+                origin,
+                pending: None,
+            };
+            return Vec::new();
+        };
+        let record = match store.find(&transport.remote_static()) {
+            Some(r) if r.extension_origin == origin => r,
+            _ => return self.fail(ErrorCode::NotPaired),
+        };
+        let err = |code| ServerMessage::Err {
+            id: p.id,
+            error: ErrorBody { code },
+        };
+        let mut extra = Vec::new();
+        let reply = if !authorized {
+            err(ErrorCode::NotAuthorized)
+        } else if backend.is_locked() {
+            err(ErrorCode::Locked)
+        } else {
+            match gated_fill(p.id, &p.item_id, &p.url, &record, store, backend) {
+                Gated::Reply(reply) => reply,
+                Gated::Paused(reply) => {
+                    extra.push(paused(&record));
+                    reply
+                }
+                Gated::NeedsAuthorization(_) => err(ErrorCode::NotAuthorized),
+            }
+        };
+        let frame = match encrypt(&mut transport, &reply) {
+            Err(IpcError::TooLarge) => encrypt(&mut transport, &err(ErrorCode::ResponseTooLarge)),
+            other => other,
+        };
+        let Ok(frame) = frame else {
+            return self.fail(ErrorCode::BadRequest);
+        };
+        self.state = State::Established {
+            transport,
+            origin,
+            pending: None,
+        };
+        let mut out = vec![Output::Send(frame)];
+        out.append(&mut extra);
+        out
+    }
+}
+
+enum Gated {
+    Reply(ServerMessage),
+    Paused(ServerMessage),
+    NeedsAuthorization(FillRequest),
+}
+
+fn paused(record: &PairingRecord) -> Output {
+    Output::FillPaused {
+        extension_public: record.extension_public,
+        pairing_name: record.name.clone(),
+        browser: record.browser.clone(),
+    }
+}
+
+/// `fill` 的最小披露规则（§5.2）：网址再次校验，再按站点授权与频率限制，最后才取出秘密。
+fn gated_fill(
+    id: u32,
+    item_id: &str,
+    url: &str,
+    record: &PairingRecord,
+    store: &mut dyn PairingStore,
+    backend: &dyn VaultBackend,
+) -> Gated {
+    let err = |code| ServerMessage::Err {
+        id,
+        error: ErrorBody { code },
+    };
+    match backend.item_matches(item_id, url) {
+        None => return Gated::Reply(err(ErrorCode::NotFound)),
+        Some(false) => return Gated::Reply(err(ErrorCode::UrlMismatch)),
+        Some(true) => {}
+    }
+    let Some(site) = backend.site(url) else {
+        return Gated::Reply(err(ErrorCode::UrlMismatch));
+    };
+    match store.fill_gate(&record.extension_public, item_id, &site, Instant::now()) {
+        FillGate::Paused => Gated::Paused(err(ErrorCode::NotAuthorized)),
+        FillGate::NeedsAuthorization => {
+            let (title, username) = backend.describe(item_id).unwrap_or_default();
+            Gated::NeedsAuthorization(FillRequest {
+                extension_public: record.extension_public,
+                pairing_name: record.name.clone(),
+                browser: record.browser.clone(),
+                item_id: item_id.to_owned(),
+                title,
+                username,
+                site,
+            })
+        }
+        FillGate::Allowed => Gated::Reply(match backend.fill(item_id) {
+            Some(data) => ServerMessage::Ok {
+                id,
+                result: CallResult::Fill(data),
+            },
+            None => err(ErrorCode::NotFound),
+        }),
     }
 }
 
@@ -583,17 +847,8 @@ fn handle(request: &Request, backend: &dyn VaultBackend) -> ServerMessage {
                     .collect(),
             },
         },
-        Call::Fill { item_id, url } => match backend.item_matches(item_id, url) {
-            None => err(ErrorCode::NotFound),
-            Some(false) => err(ErrorCode::UrlMismatch),
-            Some(true) => match backend.fill(item_id) {
-                Some(data) => ServerMessage::Ok {
-                    id,
-                    result: CallResult::Fill(data),
-                },
-                None => err(ErrorCode::NotFound),
-            },
-        },
+        // fill 一律经由 gated_fill（按站点授权与频率限制）；走到这里说明调用方绕过了它，拒绝
+        Call::Fill { .. } => err(ErrorCode::NotAuthorized),
     }
 }
 

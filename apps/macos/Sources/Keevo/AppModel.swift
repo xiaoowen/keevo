@@ -32,10 +32,16 @@ final class AppModel {
 
     /// 有浏览器正在请求配对（spec/ipc.md §4.2 第 8 步：每次尝试都对用户可见）。值为浏览器标识。
     var pairingNotice: String?
-    /// 待确认的配对。
-    var pairingRequest: PairingRequest?
+    /// 当前显示的浏览器确认界面（配对或填充授权）。
+    var browserDialog: BrowserPromptItem?
+    /// 因频率限制被暂停、等待用户处理的配对（spec/ipc.md §5.2 第 3 条）。
+    var pausedPairing: PausedPairing?
     /// 已配对的浏览器扩展。
     private(set) var browserPairings: [BrowserPairing] = []
+    /// 每个配对已授权的网站，按配对 ID。
+    private(set) var browserAuthorizations: [String: [BrowserAuthorization]] = [:]
+    /// 撤销授权没能写入数据库。
+    private(set) var authorizationRevokeWarning = false
     /// 浏览器服务没有启动的原因。
     private(set) var browserServiceError: String?
     /// 有撤销没能写入数据库（spec/ipc.md §4.4）。
@@ -254,6 +260,26 @@ final class AppModel {
 
     func refreshBrowserPairings() {
         browserPairings = vault?.browserPairings() ?? []
+        var authorizations: [String: [BrowserAuthorization]] = [:]
+        for p in browserPairings {
+            authorizations[p.id] = (try? vault?.browserAuthorizations(pairingId: p.id)) ?? []
+        }
+        browserAuthorizations = authorizations
+    }
+
+    /// 撤销一项站点授权：之后这个扩展再在该网站上使用该条目，需要重新确认。
+    func revokeBrowserAuthorization(pairingId: String, itemId: String, site: String) {
+        guard let vault else { return }
+        let persisted = (try? vault.revokeBrowserAuthorization(pairingId: pairingId, itemId: itemId, site: site)) ?? false
+        authorizationRevokeWarning = !persisted
+        refreshBrowserPairings()
+    }
+
+    /// 用户确认后恢复被暂停的配对（spec/ipc.md §5.2 第 3 条）。
+    func resumeBrowserPairing(id: String) {
+        try? vault?.resumeBrowserPairing(pairingId: id)
+        if pausedPairing?.id == id { pausedPairing = nil }
+        refreshBrowserPairings()
     }
 
     /// 解除配对：先重新验证（docs/ux.md §5），再删除记录并立即断开（spec/ipc.md §4.4）。
@@ -280,6 +306,9 @@ final class AppModel {
         vaults = []
         items = []
         browserPairings = []
+        browserAuthorizations = [:]
+        browserDialog = nil
+        pausedPairing = nil
         pendingSecretKey = nil
         pendingKdf = nil
         dataVersion &+= 1

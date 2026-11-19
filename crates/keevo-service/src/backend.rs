@@ -1,4 +1,6 @@
-use keevo_core::{Id128, ItemType, Purpose, RecordKey, RecordValue, Vault, url_match};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use keevo_core::{FieldKind, Id128, ItemType, Purpose, RecordKey, RecordValue, Vault, url_match};
 use keevo_ipc::message::{Candidate, FillData};
 use keevo_ipc::service::VaultBackend;
 
@@ -71,8 +73,15 @@ impl VaultBackend for CoreBackend<'_> {
         )
     }
 
+    fn describe(&self, item_id: &str) -> Option<(String, String)> {
+        let id = parse_id(item_id)?;
+        let item = self.vault.items().ok()?.into_iter().find(|i| i.id == id)?;
+        Some((item.overview.title, item.overview.subtitle))
+    }
+
     fn fill(&self, item_id: &str) -> Option<FillData> {
-        let view = self.vault.item(parse_id(item_id)?).ok()?;
+        let id = parse_id(item_id)?;
+        let view = self.vault.item(id).ok()?;
         let text_with = |purpose: Purpose| {
             view.doc
                 .records
@@ -86,11 +95,29 @@ impl VaultBackend for CoreBackend<'_> {
                     _ => None,
                 })
         };
+        // 第一个一次性密码字段的当前验证码；生成失败（如 otpauth 无效）时不带
+        let totp = view
+            .doc
+            .records
+            .iter()
+            .find_map(|(k, v)| match (k, &v.value) {
+                (RecordKey::Field(field_id), Some(RecordValue::Field(f)))
+                    if matches!(f.kind, FieldKind::Totp) =>
+                {
+                    Some(*field_id)
+                }
+                _ => None,
+            })
+            .and_then(|field_id| {
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
+                let ms = u64::try_from(now.as_millis()).ok()?;
+                self.vault.otp_code(id, field_id, ms).ok()
+            })
+            .map(|c| c.code.as_str().to_owned());
         Some(FillData {
             username: text_with(Purpose::Username).unwrap_or_default(),
             password: text_with(Purpose::Password)?,
-            // M1.2 实现 TOTP 生成后提供
-            totp: None,
+            totp,
         })
     }
 }

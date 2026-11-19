@@ -9,7 +9,7 @@
 | [crypto.md](crypto.md)：账户密钥、KDF、2SKD、密钥集、加密信封 | 1.2 | **已冻结**（§8.7 本机密钥包裹、§8.8 本机记录是本机格式，不在冻结范围内） | [test-vectors/crypto-v1.json](test-vectors/crypto-v1.json) |
 | [revisions.md](revisions.md)：修订图、记录、HLC、合并 | 1.1 | **已冻结** | [test-vectors/revisions-v1.json](test-vectors/revisions-v1.json)（24 个合并场景） |
 | [vault-format.md](vault-format.md)：条目与保险库的明文结构 | 1.2 | **已冻结** | [test-vectors/vault-format-v1.json](test-vectors/vault-format-v1.json)（规范编码、正向与负向解码） |
-| [ipc.md](ipc.md)：浏览器扩展与桌面应用的本地通信 | 1.1 | **已冻结**（浏览器 IPC 协议 v1） | 计划中（M1.3） |
+| [ipc.md](ipc.md)：浏览器扩展与桌面应用的本地通信 | 1.2 | **已冻结**（浏览器 IPC 协议 v1） | 计划中（M1.3） |
 
 2026-11-18 冻结，此前经过四轮模型评审，报告与处理记录在 [docs/reviews/](../docs/reviews/)。
 

@@ -12,6 +12,8 @@ import type { Candidate, PopupRequest, PopupResponse, ServerMessage, ViewState }
 
 const NATIVE_HOST = "io.github.xiaoowen.keevo";
 const REQUEST_TIMEOUT_MS = 10_000;
+/** fill 第一次在某个网站上使用某个条目时，要等用户在 Keevo 中确认（最长 60 秒，spec/ipc.md §5.2）。 */
+const FILL_TIMEOUT_MS = 70_000;
 
 interface Stored {
   extKey?: string;
@@ -127,7 +129,7 @@ async function onEvent(e: ClientEventJson): Promise<void> {
   }
 }
 
-function request(call: object): Promise<ServerMessage | null> {
+function request(call: object, timeoutMs = REQUEST_TIMEOUT_MS): Promise<ServerMessage | null> {
   if (!client || state.status !== "connected") return Promise.resolve(null);
   const { id, frame } = JSON.parse(client.request(JSON.stringify(call))) as { id: number; frame: string };
   return new Promise((resolve) => {
@@ -135,7 +137,7 @@ function request(call: object): Promise<ServerMessage | null> {
     send(frame);
     setTimeout(() => {
       if (pending.delete(id)) resolve(null);
-    }, REQUEST_TIMEOUT_MS);
+    }, timeoutMs);
   });
 }
 
@@ -175,7 +177,7 @@ async function handle(req: PopupRequest): Promise<PopupResponse> {
     case "fill": {
       const tab = await activeTab();
       if (!tab) return { state, fill: "no_tab" };
-      const m = await request({ method: "fill", params: { item_id: req.itemId, url: tab.url } });
+      const m = await request({ method: "fill", params: { item_id: req.itemId, url: tab.url } }, FILL_TIMEOUT_MS);
       if (!m || !("result" in m) || !("password" in m.result)) {
         return { state, fill: m && "error" in m ? m.error.code : "failed" };
       }

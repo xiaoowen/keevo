@@ -646,7 +646,7 @@ fn browser_service_pairs_lists_and_revokes() {
     use keevo_ipc::message::HostHello;
     use std::os::unix::net::UnixStream;
 
-    struct Accept(Mutex<Vec<String>>);
+    struct Accept(Mutex<Vec<String>>, Mutex<std::collections::VecDeque<bool>>);
     impl BrowserPrompt for Accept {
         fn pairing_started(&self, browser: String) {
             self.0.lock().unwrap().push(format!("started {browser}"));
@@ -655,6 +655,17 @@ fn browser_service_pairs_lists_and_revokes() {
             assert!(timeout_ms > 0 && timeout_ms <= 60_000);
             self.0.lock().unwrap().push(format!("confirm {name} {sas}"));
             true
+        }
+        fn authorize_fill(&self, r: BrowserFillRequest, timeout_ms: u64) -> bool {
+            assert!(timeout_ms > 0 && timeout_ms <= 60_000);
+            self.0.lock().unwrap().push(format!(
+                "authorize {} {} {} {}",
+                r.pairing_name, r.title, r.username, r.site
+            ));
+            self.1.lock().unwrap().pop_front().unwrap_or(false)
+        }
+        fn fill_paused(&self, _: String, name: String, _: String) {
+            self.0.lock().unwrap().push(format!("paused {name}"));
         }
     }
 
@@ -672,7 +683,7 @@ fn browser_service_pairs_lists_and_revokes() {
         }
     }
     let _cleanup = Cleanup(short.clone());
-    let prompt = Arc::new(Accept(Mutex::new(Vec::new())));
+    let prompt = Arc::new(Accept(Mutex::new(Vec::new()), Mutex::default()));
     let info = f.vault.start_service_at(prompt.clone(), &socket).unwrap();
     assert!(info.new_identity);
     let again = f.vault.start_service_at(prompt.clone(), &socket).unwrap();
@@ -721,6 +732,79 @@ fn browser_service_pairs_lists_and_revokes() {
         ),
         ("测试扩展", origin)
     );
+
+    // fill 的按站点授权（spec/ipc.md §5.2）：第一次在原生界面确认，之后不再询问；撤销授权后重新询问
+    let gh = f
+        .vault
+        .create_login(
+            f.vault_id.clone(),
+            LoginInput {
+                title: "GitHub".into(),
+                username: "octocat".into(),
+                password: "hunter2".into(),
+                url: "https://github.com".into(),
+            },
+        )
+        .unwrap();
+    let fill = |client: &mut ExtensionClient, stream: &mut UnixStream| {
+        let (_, frame) = client
+            .request(keevo_ipc::message::Call::Fill {
+                item_id: gh.clone(),
+                url: "https://github.com/login".into(),
+            })
+            .unwrap();
+        write_socket_frame(stream, &frame).unwrap();
+        let frame = read_socket_frame(stream).unwrap();
+        let (_, mut events) = client.on_frame(&frame).unwrap();
+        match events.remove(0) {
+            ClientEvent::Message(m) => m,
+            other => panic!("{other:?}"),
+        }
+    };
+    let is_fill = |m: &keevo_ipc::message::ServerMessage| {
+        matches!(m, keevo_ipc::message::ServerMessage::Ok {
+            result: keevo_ipc::message::CallResult::Fill(d), ..
+        } if d.username == "octocat" && d.password == "hunter2")
+    };
+    let is_denied = |m: &keevo_ipc::message::ServerMessage| {
+        matches!(m, keevo_ipc::message::ServerMessage::Err { error, .. }
+            if error.code == keevo_ipc::message::ErrorCode::NotAuthorized)
+    };
+    prompt.1.lock().unwrap().push_back(true);
+    assert!(is_fill(&fill(&mut client, &mut stream)), "确认后返回凭据");
+    assert!(is_fill(&fill(&mut client, &mut stream)), "已授权：不再询问");
+    let asked = |p: &Accept| {
+        p.0.lock()
+            .unwrap()
+            .iter()
+            .filter(|l| l.starts_with("authorize"))
+            .count()
+    };
+    assert_eq!(asked(&prompt), 1);
+    assert_eq!(
+        prompt.0.lock().unwrap()[2],
+        "authorize 测试扩展 GitHub octocat https://github.com"
+    );
+    let auths = f
+        .vault
+        .browser_authorizations(pairings[0].id.clone())
+        .unwrap();
+    assert_eq!(auths.len(), 1);
+    assert_eq!(
+        (auths[0].title.as_deref(), auths[0].site.as_str()),
+        (Some("GitHub"), "https://github.com")
+    );
+    assert!(
+        f.vault
+            .revoke_browser_authorization(pairings[0].id.clone(), gh.clone(), auths[0].site.clone())
+            .unwrap()
+    );
+    assert!(
+        is_denied(&fill(&mut client, &mut stream)),
+        "撤销授权后重新询问，拒绝时不返回秘密"
+    );
+    assert_eq!(asked(&prompt), 2);
+    assert!(!f.vault.browser_pairings()[0].paused);
 
     assert!(
         f.vault
