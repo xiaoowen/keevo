@@ -48,6 +48,10 @@ export type PopupRequest =
 
 export interface PopupResponse {
   state: ViewState;
+  /** 页内菜单是否已启用（标准模式：已授予网站权限）。 */
+  inline?: boolean;
+  /** 这个标签页的页内菜单因为被遮挡或变透明而关闭过（点击劫持防护），请在弹窗中填充。 */
+  blocked?: boolean;
   /** 这个浏览器在 Keevo 中的显示名（清洗后，与 Keevo.app 一致）。 */
   name?: string;
   candidates?: Candidate[];
@@ -56,6 +60,35 @@ export interface PopupResponse {
   secret?: Secret;
   error?: string;
 }
+
+/** 页内菜单的初始内容。 */
+export interface MenuInit {
+  /** 输入框所在帧的来源（由 Chrome 提供，不采信页面自述）。 */
+  origin: string;
+  /** 标签页顶层的来源；与 origin 不同时，输入框位于跨域 iframe 中。 */
+  topOrigin: string | null;
+  kind: "login" | "otp";
+  candidates: Candidate[];
+  /** 不能列出条目时的原因。 */
+  message?: "unpaired" | "locked" | "connecting" | "error" | "no_session";
+}
+
+/** 页内菜单（menu.html）发给 Service Worker 的消息。 */
+export type MenuRequest =
+  | { type: "menu_init" }
+  | { type: "menu_fill"; itemId: string; confirmed: boolean }
+  | { type: "menu_close" }
+  | { type: "menu_size"; height: number }
+  | { type: "menu_blocked" };
+
+export interface MenuResponse {
+  init?: MenuInit;
+  fill?: string;
+  error?: string;
+}
+
+/** 内容脚本发给 Service Worker 的消息。 */
+export type ContentRequest = { type: "inline_open"; kind: "login" | "otp" } | { type: "inline_close" };
 
 /** Service Worker 发给离屏文档的消息。 */
 export interface OffscreenRequest {

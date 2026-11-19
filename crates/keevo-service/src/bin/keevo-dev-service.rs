@@ -156,7 +156,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "⚠️  Keevo 开发服务：仅供开发，账户密钥以明文保存在 {}，切勿存放真实数据。",
         dir.display()
     );
-    let vault = open_or_create_demo(&dir)?;
+    // 本地开发演示条目的网址：浏览器测试在随机端口上提供登录页
+    let local_url = args
+        .iter()
+        .position(|a| a == "--local-url")
+        .and_then(|i| args.get(i.saturating_add(1)))
+        .map_or("http://localhost:3000", String::as_str);
+    let vault = open_or_create_demo(&dir, local_url)?;
     let key = load_or_create_service_key(&dir.join("service-key"))?;
     let prompt: Arc<dyn PairingPrompt> = if auto_confirm {
         Arc::new(AutoConfirm)
@@ -182,7 +188,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn open_or_create_demo(dir: &Path) -> Result<Vault, Box<dyn std::error::Error>> {
+fn open_or_create_demo(dir: &Path, local_url: &str) -> Result<Vault, Box<dyn std::error::Error>> {
     let db = dir.join("vault.sqlite");
     let sk_path = dir.join("dev-secret-key.txt");
     if db.exists() {
@@ -229,7 +235,7 @@ fn open_or_create_demo(dir: &Path) -> Result<Vault, Box<dyn std::error::Error>> 
             "本地开发（演示）",
             "admin",
             "demo-local-password",
-            "http://localhost:3000",
+            local_url,
         ),
     ] {
         vault.create_item(

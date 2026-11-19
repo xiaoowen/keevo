@@ -73,6 +73,10 @@ input {
 input:focus-visible { outline: 2px solid var(--kv-focus-ring); outline-offset: 0; }
 #search { margin: 0 0 var(--kv-space-2); }
 .footer { font: var(--kv-type-caption); color: var(--kv-fg-tertiary); margin-top: var(--kv-space-3); }
+.setting { display: flex; align-items: center; gap: var(--kv-space-2); margin-top: var(--kv-space-3); padding-top: var(--kv-space-3); border-top: 1px solid var(--kv-border-subtle); }
+.setting .text { flex: 1; min-width: 0; }
+.setting-title { font: var(--kv-type-footnote); font-weight: 600; }
+.setting .subtitle { white-space: normal; }
 
 /* 候选条目：选中的一行展开更多操作 */
 .item { border-top: 1px solid var(--kv-border-subtle); padding: var(--kv-space-1) 0; }

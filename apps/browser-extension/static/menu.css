@@ -1,0 +1,36 @@
+/* 页内菜单样式。颜色、间距、圆角、字体一律取自 tokens.css。 */
+html, body { margin: 0; background: var(--kv-bg-raised); color: var(--kv-fg-primary); font: var(--kv-type-body); }
+main { padding: var(--kv-space-2); }
+.head { display: flex; align-items: baseline; gap: var(--kv-space-1-5); padding: var(--kv-space-1) var(--kv-space-1-5) var(--kv-space-2); }
+.label { font: var(--kv-type-caption); color: var(--kv-fg-secondary); }
+.site { font: var(--kv-type-body-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+p { margin: var(--kv-space-1) var(--kv-space-1-5); }
+.muted { color: var(--kv-fg-secondary); }
+.hint { font: var(--kv-type-footnote); color: var(--kv-fg-tertiary); }
+.banner { padding: var(--kv-space-1-5) var(--kv-space-2); border-radius: var(--kv-radius-md); font: var(--kv-type-footnote); }
+.banner.warning { color: var(--kv-status-warning-fg); background: var(--kv-status-warning-bg); }
+.banner.danger { color: var(--kv-status-danger-fg); background: var(--kv-status-danger-bg); }
+.banner.info { color: var(--kv-status-info-fg); background: var(--kv-status-info-bg); }
+
+.list { display: flex; flex-direction: column; }
+button.item {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--kv-space-2);
+  width: 100%;
+  padding: var(--kv-space-1-5) var(--kv-space-2);
+  border-radius: var(--kv-radius-md);
+  cursor: default;
+}
+.text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.title { font: var(--kv-type-body-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subtitle { font: var(--kv-type-footnote); color: var(--kv-fg-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.confirm { font: var(--kv-type-caption); color: var(--kv-status-warning-fg); }
+
+/* 可见满 500 毫秒（body.armed）之前，条目显示为不可用：点了也不会填充 */
+body:not(.armed) button.item { opacity: 0.55; }
+body.armed button.item:hover, body.armed button.item:focus-visible { background: var(--kv-bg-selected); cursor: pointer; }
+button.item:focus-visible { outline: 2px solid var(--kv-focus-ring); outline-offset: -2px; }
+button.item:disabled { opacity: 0.55; }

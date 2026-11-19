@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: GPL-3.0-or-later（附加 App Store 许可，见仓库根目录 LICENSE）
+//
+// 最小的 Chrome DevTools 协议客户端（管道模式：fd 3 写、fd 4 读，消息以 \0 分隔）。
+// 管道模式下可以用 Extensions.loadUnpacked 加载扩展（需要 --enable-unsafe-extension-debugging）；
+// 品牌版 Chrome 137 起不再接受 --load-extension 命令行参数。
+
+import { spawn } from "node:child_process";
+
+export async function launchChrome(chrome, args, env) {
+  const proc = spawn(chrome, [...args, "--remote-debugging-pipe", "--enable-unsafe-extension-debugging"], {
+    env,
+    stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
+  });
+  let stderr = "";
+  proc.stderr.on("data", (d) => {
+    stderr += d;
+    if (stderr.length > 20000) stderr = stderr.slice(-10000);
+  });
+  const writer = proc.stdio[3];
+  const reader = proc.stdio[4];
+  let buf = "";
+  let next = 1;
+  const waiting = new Map();
+  const listeners = new Set();
+  reader.on("data", (d) => {
+    buf += d.toString("utf8");
+    let i;
+    while ((i = buf.indexOf("\0")) >= 0) {
+      const msg = JSON.parse(buf.slice(0, i));
+      buf = buf.slice(i + 1);
+      if (msg.id !== undefined && waiting.has(msg.id)) {
+        const { resolve, reject } = waiting.get(msg.id);
+        waiting.delete(msg.id);
+        if (msg.error) reject(new Error(`${msg.error.message}（${JSON.stringify(msg.error.data ?? "")}）`));
+        else resolve(msg.result);
+      } else if (msg.method) {
+        for (const l of listeners) l(msg);
+      }
+    }
+  });
+  const send = (method, params = {}, sessionId) =>
+    new Promise((resolve, reject) => {
+      const id = next++;
+      waiting.set(id, { resolve, reject });
+      writer.write(`${JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })}\0`);
+    });
+  return {
+    send,
+    on(fn) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+    stderr: () => stderr,
+    /** 结束 Chrome 并等它退出（之后才能删除用户目录）。 */
+    close() {
+      if (proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve();
+      const exited = new Promise((r) => proc.once("exit", r));
+      proc.kill("SIGKILL");
+      return exited;
+    },
+  };
+}
+
+/** 一个已附加的目标（页面或 iframe）。 */
+export function session(browser, sessionId) {
+  return {
+    id: sessionId,
+    send: (method, params) => browser.send(method, params, sessionId),
+    async eval(expression) {
+      const r = await browser.send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sessionId);
+      if (r.exceptionDetails) throw new Error(`页面脚本出错：${r.exceptionDetails.exception?.description ?? r.exceptionDetails.text}`);
+      return r.result.value;
+    },
+  };
+}
+
+export async function attach(browser, targetId) {
+  const { sessionId } = await browser.send("Target.attachToTarget", { targetId, flatten: true });
+  return session(browser, sessionId);
+}
+
+export async function waitFor(fn, what, timeoutMs = 10000) {
+  const until = Date.now() + timeoutMs;
+  let last;
+  while (Date.now() < until) {
+    try {
+      last = await fn();
+      if (last) return last;
+    } catch (e) {
+      last = e;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`等待超时：${what}（最后的结果：${last instanceof Error ? last.message : JSON.stringify(last)}）`);
+}
+
+/** 在页面坐标处单击：DevTools 协议的输入事件是可信事件（isTrusted），与真实鼠标一样。 */
+export async function click(page, x, y) {
+  for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) {
+    await page.send("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 });
+  }
+}

@@ -94,6 +94,10 @@ interface View {
   totp: { itemId: string; code: string } | null;
   /** 用户点了"重新配对"：显示配对表单。 */
   repairing: boolean;
+  /** 页内菜单已启用（已授予网站权限）。 */
+  inline: boolean;
+  /** 这个标签页的页内菜单因为被遮挡或变透明而关闭过。 */
+  blocked: boolean;
 }
 
 const view: View = {
@@ -107,7 +111,10 @@ const view: View = {
   busy: false,
   totp: null,
   repairing: false,
+  inline: false,
+  blocked: false,
 };
+const SITE_ORIGINS = ["https://*/*", "http://*/*"];
 let lastKey = "";
 let totpTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -242,9 +249,15 @@ function renderItems(refocus: boolean): void {
     }
   };
   root.append(search);
+  if (view.blocked) {
+    root.append(
+      el("div", "这个页面上的 Keevo 菜单被遮挡或变得透明，为了安全已经关闭。请在这里选择要填充的登录。", "banner warning"),
+    );
+  }
   if (view.origin) root.append(el("p", view.origin, "origin"));
   root.append(list);
   renderList(list);
+  root.append(inlineSetting());
   if (view.name) root.append(el("p", `这个浏览器在 Keevo 中显示为「${view.name}」`, "footer"));
   if (refocus || !document.activeElement || document.activeElement === document.body) search.focus();
 }
@@ -274,6 +287,34 @@ function renderList(list: HTMLElement): void {
     if (selected) row.append(actions(c));
     list.append(row);
   });
+}
+
+/**
+ * 标准模式开关：在输入框旁显示 Keevo 图标需要"读取和更改网站数据"的权限，默认不申请（最小权限模式），
+ * 由用户在这里开启（docs/ux.md §4.5）。关闭后仍可用弹窗或快捷键填充。
+ */
+function inlineSetting(): HTMLElement {
+  const row = el("div", undefined, "setting");
+  const text = el("div", undefined, "text");
+  text.append(
+    el("div", "在输入框旁显示 Keevo 图标", "setting-title"),
+    el("div", view.inline ? "已开启。刷新页面后生效。" : "需要读取和更改网站数据的权限。不开启时可用快捷键或这个弹窗填充。", "subtitle"),
+  );
+  const toggle = button(view.inline ? "关闭" : "开启", () => {
+    // 权限请求必须是点击之后的第一个异步操作
+    const change = view.inline
+      ? chrome.permissions.remove({ origins: SITE_ORIGINS })
+      : chrome.permissions.request({ origins: SITE_ORIGINS });
+    void change.then(
+      async () => {
+        view.inline = await chrome.permissions.contains({ origins: SITE_ORIGINS });
+        render();
+      },
+      () => undefined,
+    );
+  }, "secondary");
+  row.append(text, toggle);
+  return row;
 }
 
 /** 选中条目的更多操作：复制用户名、复制密码、一次性密码。 */
@@ -416,7 +457,11 @@ async function update(): Promise<void> {
   if (view.busy || view.repairing) return;
   const r = await ask({ type: "state" });
   if (r.name) view.name = r.name;
+  const extra = r.inline !== view.inline || r.blocked !== view.blocked;
+  view.inline = r.inline === true;
+  view.blocked = r.blocked === true;
   apply(r.state);
+  if (extra && lastKey === JSON.stringify(r.state)) render();
 }
 
 void update();

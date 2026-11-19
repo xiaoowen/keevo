@@ -3,7 +3,8 @@
 #
 # 用法：
 #   scripts/build-extension.sh          # 构建
-#   scripts/build-extension.sh --test   # 构建，并用真实的 native host 与开发服务跑端到端测试
+#   scripts/build-extension.sh --test   # 构建，并用真实的 native host 与开发服务跑端到端测试；
+#                                       # 有 Chrome 时再跑真实浏览器测试（页内菜单与点击劫持防护）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -34,4 +35,5 @@ if [[ "${1:-}" == "--test" ]]; then
   cd "$ROOT"
   cargo build -p keevo-native-host -p keevo-service --locked
   node "$EXT/test/e2e.mjs"
+  node "$EXT/test/browser.mjs"
 fi
