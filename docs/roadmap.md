@@ -31,7 +31,7 @@
 | ✅ | 扩展骨架 + Native Messaging 全链路原型 | `keevo-native-host`（父进程代码签名校验）、`keevo-service`（socket 服务与对端 audit token 校验机制）、`keevo-wasm` + MV3 扩展骨架（最小权限：无网站权限，点击弹窗才填充）。两套端到端测试：Rust 侧与扩展 WASM 侧都经真实 native host 与 socket 跑通配对 → 填充。待你在真实 Chrome 中手动验证一次 |
 | ✅ | 设计系统 v0 | `design/tokens` 单一来源，生成 CSS 与 Swift，160 组 WCAG 对比度校验接入 CI；macOS 与扩展已接入令牌和 v0 组件；高保真稿 6 张（总览、锁屏、主窗口浅色、开发者条目深色、扩展弹窗、内联菜单与钓鱼拦截） |
 | ✅ | CI | 格式、clippy、测试（Linux + macOS）、密码学边界、测试向量比对、cargo-deny、cargo-vet、macOS 冒烟测试、6 个模糊测试目标 |
-| ✅ | 治理文件 | 多许可证落地（App Store 附加许可为草案，待法律审阅）、`CONTRIBUTING.md`（DCO）、`SECURITY.md`、`CODE_OF_CONDUCT.md`、ADR 模板、CODEOWNERS、PR 模板 |
+| ✅ | 治理文件 | 多许可证落地（App Store 附加许可为草案，待法律审阅）、`CONTRIBUTING.md`、`SECURITY.md`、`CODE_OF_CONDUCT.md`、ADR 模板、CODEOWNERS、PR 模板 |
 
 | ✅ | 规范的外部模型评审与冻结 | 2026-11-18 完成四轮，每轮的发现全部处理（[docs/reviews/](reviews/)）。第四轮结论为有条件冻结，所列条件已在处理中完成；四份规范定为 1.0 并冻结，冻结清单见 [spec/README.md](../spec/README.md) |
 

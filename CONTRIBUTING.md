@@ -80,19 +80,11 @@ python3 -m venv .venv
 
 - 要点一
 - 要点二
-
-Signed-off-by: 你的名字 <you@example.com>
 ```
 
 - **常用 type**：`feat`、`fix`、`docs`、`refactor`、`test`、`build`、`ci`、`chore`、`security`。
 - **scope**：取模块名，如 `crypto`、`spec`、`docs`、`ci`。
 - 中文或英文均可。
-
-## DCO（开发者原创声明）
-
-每个提交都必须带 `Signed-off-by` 行，表示你同意 [Developer Certificate of Origin 1.1](https://developercertificate.org/)：你有权按本项目的许可证提交这份贡献。
-
-用 `git commit -s` 可以自动加上这一行。
 
 ## 许可证
 

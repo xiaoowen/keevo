@@ -10,4 +10,3 @@
 - [ ] 新增依赖已说明理由，并通过 `cargo deny check` 与 `cargo vet`
 - [ ] 没有新增网络请求；如有，已登记在 `docs/governance.md` §5
 - [ ] 日志、错误信息中没有秘密
-- [ ] 所有提交都带有 `Signed-off-by`（`git commit -s`）

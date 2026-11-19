@@ -20,5 +20,5 @@ Keevo is multi-licensed by directory. See docs/governance.md §1 for the rationa
 除非文件或其所在目录另有声明，否则以上表为准。
 Unless a file or its directory states otherwise, the table above applies.
 
-贡献者以其贡献所在路径对应的许可证授权其贡献，并通过 DCO 签署确认（见 CONTRIBUTING.md）。
-Contributions are licensed under the license of the path they are made to, certified via the DCO (see CONTRIBUTING.md).
+贡献者以其贡献所在路径对应的许可证授权其贡献（见 CONTRIBUTING.md）。
+Contributions are licensed under the license of the path they are made to (see CONTRIBUTING.md).
