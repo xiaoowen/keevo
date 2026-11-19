@@ -699,6 +699,23 @@ impl Vault {
         self.unlock_inner(password, &secret_key, Some(confirmed))
     }
 
+    /// 账户 ID（应急包上印出，便于确认是哪个账户）。锁定时也可以读取。
+    ///
+    /// # Errors
+    /// 没有账户；SQLite 错误。
+    pub fn account_id(&self) -> Result<Id128> {
+        Ok(self.store.account()?.ok_or(CoreError::NoAccount)?.id)
+    }
+
+    /// 重新保存应急包：先重新验证用户，再取出本机保存的账户密钥。
+    ///
+    /// # Errors
+    /// 同 [`Vault::reverify`]；本机没有可用的账户密钥时返回 [`CoreError::SecretKeyRequired`]。
+    pub fn secret_key_for_kit(&mut self, proof: Reverify<'_>) -> Result<AccountSecretKey> {
+        self.reverify(proof)?;
+        self.local_secret_key()
+    }
+
     fn local_secret_key(&mut self) -> Result<AccountSecretKey> {
         let account = self.store.account()?.ok_or(CoreError::NoAccount)?;
         let local = self.local.as_ref().ok_or(CoreError::SecretKeyRequired)?;

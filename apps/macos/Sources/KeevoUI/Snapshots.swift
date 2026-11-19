@@ -56,13 +56,26 @@ public enum Snapshots {
         let model = AppModel(dataDirectory: temp, enclave: SnapshotEnclave(), background: false)
         var shooter = Shooter(out: out, model: model, filters: filters)
 
-        await shooter.shoot("onboarding", size: CGSize(width: 1100, height: 720)) { RootView() }
+        let onboarding = CGSize(width: 1000, height: 720)
+        await shooter.shoot("onboarding", size: onboarding) { RootView() }
+        model.onboardingStep = .password
+        await shooter.shoot("onboarding-password", size: onboarding) { RootView() }
         await model.createAccount(password: "截图用的主密码 correct horse")
         guard let vault = model.vault, let secretKey = model.pendingSecretKey else {
             print("✗ 创建账户失败：\(model.errorMessage ?? "未知错误")")
             return 1
         }
-        await shooter.shoot("secret-key-sheet", sheet: true) { SecretKeySheet(secretKey: secretKey) }
+        for step in [OnboardingStep.kit, .touchID, .browser, .done] {
+            model.onboardingStep = step
+            await shooter.shoot("onboarding-\(step.rawValue)", size: onboarding) { RootView() }
+        }
+        model.onboardingStep = nil
+        // 应急包 PDF：写到输出目录，便于检查
+        if shooter.wants("emergency-kit") {
+            let pdf = EmergencyKit.pdf(secretKey: secretKey.expose(), accountId: model.accountId, created: Date())
+            try? pdf.write(to: out.appendingPathComponent("emergency-kit.pdf"))
+        }
+        await shooter.shoot("emergency-kit-sheet", sheet: true) { EmergencyKitSheet() }
         model.pendingSecretKey = nil
 
         let ids: SampleItems
@@ -151,6 +164,7 @@ public enum Snapshots {
         }
         await shooter.shoot("export", sheet: true) { ExportSheet() }
         await shooter.shoot("export-plain", sheet: true) { ExportPlainSheet { _ in false } }
+        await shooter.shoot("practice", sheet: true) { PracticeSheet() }
         await shooter.shoot("settings-browser", sheet: true) { SettingsView(initialPage: .browser) }
         model.refreshDeveloper()
         await shooter.shoot("settings-developer", sheet: true) { SettingsView(initialPage: .developer) }
@@ -216,8 +230,12 @@ private struct Shooter {
 
     /// 浅色与深色各渲染一张：`<名称>-light.png`、`<名称>-dark.png`。
     /// `size` 为 `nil` 时按内容的自然大小截取；`sheet` 为真时不带窗口外框（面板、设置）。
+    func wants(_ name: String) -> Bool {
+        filters.isEmpty || filters.contains(where: { name.contains($0) })
+    }
+
     mutating func shoot<V: View>(_ name: String, size: CGSize? = nil, sheet: Bool = false, @ViewBuilder _ view: () -> V) async {
-        guard filters.isEmpty || filters.contains(where: { name.contains($0) }) else { return }
+        guard wants(name) else { return }
         for dark in [false, true] {
             let base = view().tinted.environment(model)
             let host: NSHostingView<AnyView>

@@ -61,6 +61,14 @@ final class AppModel {
     var backups: [BackupInfo] = []
     /// 上次自动备份失败的原因（例如外部硬盘没有连接）。
     var backupError: String?
+    /// 首次使用进行到哪一步（docs/ux.md §3.1）；`nil` 为不在首次使用中。
+    var onboardingStep: OnboardingStep?
+    /// 欢迎页选了"从其他密码管理器导入"：完成后直接打开导入。
+    var importAfterOnboarding = false
+    /// 请设置窗口显示的页面（完成页的"在浏览器中使用"等）。
+    var requestedSettingsPage: SettingsView.Page?
+    /// 主密码练习（docs/ux.md §3.1 第 8 条）。
+    var showingPractice = false
     /// 导入向导与导出（「文件 → 导入…」「文件 → 导出…」）。
     var showingImport = false
     var showingExport = false
@@ -189,6 +197,8 @@ final class AppModel {
         localDir = support.appendingPathComponent("local", isDirectory: true).path
         if FileManager.default.fileExists(atPath: dbPath) {
             open(reenrolling: false)
+        } else {
+            onboardingStep = .welcome
         }
         if background {
             observeSystemLockEvents()
@@ -425,6 +435,8 @@ final class AppModel {
         securityReport = nil
         showingImport = false
         showingExport = false
+        showingPractice = false
+        onboardingStep = nil
         breachChecking = false
         pendingSecretKey = nil
         pendingKdf = nil
@@ -439,6 +451,8 @@ final class AppModel {
 
     private func didUnlock() throws {
         lockNotice = nil
+        // 首次使用中途锁定或退出过：接着进行
+        if onboardingStep == nil, let saved = savedOnboardingStep { onboardingStep = saved }
         refreshLocalState()
         try reload()
         phase = .unlocked
@@ -448,6 +462,7 @@ final class AppModel {
         }
         unlockWaiter = nil
         refreshDeveloper()
+        schedulePracticeReminder()
     }
 
     private func refreshLocalState() {
@@ -464,7 +479,8 @@ final class AppModel {
     private func startIdleTimer() {
         idleTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.phase == .unlocked, !self.busy else { return }
+                // 首次使用期间不因闲置锁定（保险库还是空的；睡眠与锁屏照常锁定）
+                guard let self, self.phase == .unlocked, !self.busy, self.onboardingStep == nil else { return }
                 if Self.systemIdleSeconds() >= TimeInterval(self.autoLockMinutes * 60) {
                     self.lock()
                 }

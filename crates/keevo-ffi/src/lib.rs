@@ -1566,6 +1566,31 @@ impl KeevoVault {
         Ok(())
     }
 
+    /// 账户 ID（十六进制，应急包上印出）。
+    ///
+    /// # Errors
+    /// 没有账户；数据库错误。
+    pub fn account_id(&self) -> Result<String, KeevoError> {
+        Ok(self.vault().account_id()?.to_hex())
+    }
+
+    /// 重新保存应急包：重新验证用户（`password` 为 `None` 时用 Touch ID），返回账户密钥的显示形式。
+    /// 请在后台线程调用。
+    ///
+    /// # Errors
+    /// 同 [`KeevoVault::reverify`]；本机没有可用的账户密钥时返回 [`KeevoError::SecretKeyRequired`]。
+    pub fn emergency_kit_secret_key(
+        &self,
+        password: Option<String>,
+    ) -> Result<Arc<SecretValue>, KeevoError> {
+        let proof = password.as_deref().map_or(
+            keevo_core::Reverify::TouchId,
+            keevo_core::Reverify::Password,
+        );
+        let sk = self.vault().secret_key_for_kit(proof)?;
+        Ok(self.secrets.issue(sk.to_display_string()))
+    }
+
     /// 已配对的浏览器扩展（"设置 → 浏览器"）。服务未启动或首次解锁前为空。
     pub fn browser_pairings(&self) -> Vec<BrowserPairing> {
         self.with_service(|svc| {

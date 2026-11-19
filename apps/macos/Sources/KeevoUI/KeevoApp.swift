@@ -83,7 +83,8 @@ struct RootView: View {
         @Bindable var model = model
         Group {
             switch model.phase {
-            case .onboarding: OnboardingView()
+            case .onboarding: OnboardingFlow()
+            case .unlocked where model.onboardingStep != nil: OnboardingFlow()
             case .unavailable: EnclaveUnavailableView()
             case .locked: LockView()
             case .unlocked: MainView()

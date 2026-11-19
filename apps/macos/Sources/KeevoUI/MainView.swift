@@ -137,11 +137,8 @@ struct MainView: View {
         .sheet(isPresented: $showingGenerator) {
             GeneratorView()
         }
-        .sheet(item: Binding(
-            get: { model.pendingSecretKey.map(SecretKeyItem.init) },
-            set: { if $0 == nil { model.pendingSecretKey = nil } }
-        )) { key in
-            SecretKeySheet(secretKey: key.value).interactiveDismissDisabled()
+        .sheet(isPresented: Binding(get: { model.showingPractice }, set: { model.showingPractice = $0 })) {
+            PracticeSheet()
         }
         .onChange(of: sidebar) {
             selectedItem = selectAfterSidebarChange
@@ -584,11 +581,6 @@ struct ItemRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
-}
-
-private struct SecretKeyItem: Identifiable {
-    let value: SecretValue
-    var id: String { "secret-key" }
 }
 
 struct NewLoginSheet: View {

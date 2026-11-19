@@ -34,6 +34,8 @@ struct SettingsView: View {
         _page = ViewState(initialValue: initialPage)
     }
 
+    @Environment(AppModel.self) private var model
+
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 2) {
@@ -67,6 +69,15 @@ struct SettingsView: View {
             .background(KV.Colors.bgCanvas)
         }
         .frame(width: 720, height: 560)
+        .onAppear(perform: showRequestedPage)
+        .onChange(of: model.requestedSettingsPage) { showRequestedPage() }
+    }
+
+    private func showRequestedPage() {
+        if let requested = model.requestedSettingsPage {
+            page = requested
+            model.requestedSettingsPage = nil
+        }
     }
 }
 
@@ -74,6 +85,8 @@ private struct SecuritySettings: View {
     @Environment(AppModel.self) private var model
     @ViewState private var askPassword = false
     @ViewState private var askDisable = false
+    @ViewState private var askKit = false
+    @ViewState private var showingKit = false
 
     var body: some View {
         @Bindable var model = model
@@ -123,6 +136,16 @@ private struct SecuritySettings: View {
                 }
             }
             SettingsSection(
+                title: "应急包",
+                footer: "在新设备上登录、或从备份恢复时，需要主密码和应急包中的账户密钥。"
+            ) {
+                SettingsRow(title: "重新保存应急包", detail: "先确认是你本人，然后可以保存 PDF 或打印。") {
+                    Button("保存应急包…") { askKit = true }
+                        .buttonStyle(.kvBordered)
+                        .disabled(model.phase != .unlocked)
+                }
+            }
+            SettingsSection(
                 title: "隐私",
                 footer: "并非所有截屏方式都遵守这一设置，它不能防范这台 Mac 上的恶意软件。"
             ) {
@@ -140,6 +163,16 @@ private struct SecuritySettings: View {
         }
         .sheet(isPresented: $askDisable) {
             DisableTouchIDSheet()
+        }
+        .sheet(isPresented: $askKit) {
+            ReverifySheet(title: "保存应急包", message: "请先确认是你本人。应急包中有账户密钥。", confirmTitle: "继续") { password in
+                let ok = await model.revealEmergencyKit(password: password)
+                if ok { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showingKit = true } }
+                return ok
+            }
+        }
+        .sheet(isPresented: $showingKit) {
+            EmergencyKitSheet()
         }
     }
 
