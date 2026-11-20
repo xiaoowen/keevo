@@ -88,6 +88,10 @@ extension AppModel {
         await runSecurityCheck()
     }
 
+    /// 泄露检查共用的会话（不带 Cookie 与缓存）：所有前缀复用同一个连接，网络观察者不能按连接数数出密码个数
+    /// （第五轮预审 K16）。
+    nonisolated static let breachSession = URLSession(configuration: .ephemeral)
+
     /// 一个前缀的查询。不带 Cookie 与缓存；User-Agent 只写通用的客户端名。
     nonisolated static func fetchRange(_ prefix: String) async throws -> String {
         guard prefix.count == 5, prefix.allSatisfy(\.isHexDigit),
@@ -96,7 +100,7 @@ extension AppModel {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
         request.setValue("true", forHTTPHeaderField: "Add-Padding")
         request.setValue("Keevo", forHTTPHeaderField: "User-Agent")
-        let (data, response) = try await URLSession(configuration: .ephemeral).data(for: request)
+        let (data, response) = try await breachSession.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200, let body = String(data: data, encoding: .utf8) else {
             throw URLError(.badServerResponse)
         }

@@ -24,6 +24,7 @@ fn str_of<'a>(v: &'a Value, key: &str) -> &'a str {
 }
 
 pub(super) fn parse(data: &[u8], password: Option<&str>) -> Result<Parsed, ImportError> {
+    super::check_json_nodes(data)?;
     let doc: Value = serde_json::from_slice(data).map_err(|_| ImportError::NotRecognized)?;
     if doc.get("encrypted").and_then(Value::as_bool) == Some(true) {
         if doc.get("passwordProtected").and_then(Value::as_bool) != Some(true) {
@@ -31,6 +32,7 @@ pub(super) fn parse(data: &[u8], password: Option<&str>) -> Result<Parsed, Impor
         }
         let password = password.ok_or(ImportError::PasswordRequired)?;
         let plain = decrypt(&doc, password)?;
+        super::check_json_nodes(&plain)?;
         let inner: Value = serde_json::from_slice(&plain).map_err(|_| ImportError::Malformed)?;
         return items(&inner);
     }
@@ -138,7 +140,7 @@ fn items(doc: &Value) -> Result<Parsed, ImportError> {
             .and_then(Value::as_array)
             .map_or(0, Vec::len);
         b.attachments(attachments);
-        out.items.push(b.finish());
+        out.push(b.finish())?;
     }
     Ok(out)
 }

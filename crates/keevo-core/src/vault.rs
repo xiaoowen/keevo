@@ -12,13 +12,15 @@ use keevo_format::{
     ItemOverview, ItemType, Purpose, RecordKey, RecordValue, RevisionGraph, SectionValue,
     VaultMeta, merge_heads, order_between, order_sequence,
 };
-use keevo_store::{AccountRow, ObjectKind, RevisionRow, Store};
+use keevo_store::{AccountRow, AttachmentChanges, ObjectKind, RevisionRow, Store};
 
 use crate::error::{CoreError, Result};
 use crate::local::{LocalKeys, Unwrapped};
 
 const META_DEVICE_ID: &str = "device_id";
 const META_HLC: &str = "hlc_last";
+/// SSH Agent 的策略已从条目属性迁移到本机记录（[`crate::ssh_agent`]）。本机状态，不随备份回退。
+const META_SSH_AGENT_LOCAL: &str = "ssh_agent_local";
 /// 上次用主密码解锁的时间（Unix 毫秒，大端 u64）。
 const META_PASSWORD_MS: &str = "password_unlock_ms";
 /// 上次用主密码解锁时的开机标识。
@@ -165,8 +167,6 @@ pub enum Edit {
     },
     /// 删除分区：其中的字段依次移到默认分区的末尾，不会被删除。
     RemoveSection(Id128),
-    /// 设置 SSH Agent 的授权策略（`ssh_key` 条目的属性 `ssh_agent`）；`None` 表示不在 Agent 中提供。
-    SetSshAgent(Option<crate::ssh_agent::AgentPolicy>),
     /// 安全中心是否报告这个条目（属性 `security_alerts`）：`false` 表示"忽略这个条目的提醒"。
     SetSecurityAlerts(bool),
 }
@@ -404,10 +404,12 @@ impl Vault {
     ///
     /// # Errors
     /// 见 [`Vault::open`]。
-    pub fn open_with_store(store: Store) -> Result<Self> {
+    pub fn open_with_store(mut store: Store) -> Result<Self> {
         if store.account()?.is_none() {
             return Err(CoreError::NoAccount);
         }
+        // 中断的写入（重建时的崩溃等）可能留下无主的附件：所属条目不存在或已永久删除
+        store.delete_orphan_attachments()?;
         let device_id = match store.meta(META_DEVICE_ID)? {
             Some(bytes) => id_from(&bytes)?,
             None => Id128::random()?,
@@ -629,6 +631,80 @@ impl Vault {
             vault_keys,
         });
         self.unlock_epoch = self.unlock_epoch.wrapping_add(1);
+        // 尽力而为：失败时下次解锁再试，迁移完成之前旧属性中的策略不生效（不在 Agent 中提供）
+        let _ = self.migrate_ssh_agent_policies();
+        Ok(())
+    }
+
+    /// 全部 SSH 密钥在 Agent 中的策略（本机记录，[`crate::ssh_agent`]）。只包括仍然存在的条目。
+    ///
+    /// # Errors
+    /// 已锁定或读取失败。
+    pub fn ssh_agent_policies(&self) -> Result<HashMap<Id128, crate::ssh_agent::AgentPolicy>> {
+        let (records, _) = self.local_records(crate::ssh_agent::LOCAL_KIND)?;
+        let mut out = HashMap::new();
+        for (id, plain) in records {
+            let (Ok(bytes), Ok(text)) = (
+                <[u8; 16]>::try_from(id.as_slice()),
+                core::str::from_utf8(&plain),
+            ) else {
+                continue;
+            };
+            if let Some(policy) = crate::ssh_agent::AgentPolicy::parse(text) {
+                out.insert(Id128::from_bytes(bytes), policy);
+            }
+        }
+        Ok(out)
+    }
+
+    /// 设置一把 SSH 密钥在 Agent 中的策略；`None` 表示不在 Agent 中提供。只写本机记录，不产生修订。
+    ///
+    /// # Errors
+    /// 条目不存在或不是 SSH 密钥时返回 [`CoreError::NotFound`]；已锁定。
+    pub fn set_ssh_agent_policy(
+        &mut self,
+        item_id: Id128,
+        policy: Option<crate::ssh_agent::AgentPolicy>,
+    ) -> Result<()> {
+        if self.item(item_id)?.doc.item_type != ItemType::SshKey {
+            return Err(CoreError::NotFound);
+        }
+        let kind = crate::ssh_agent::LOCAL_KIND;
+        match policy {
+            Some(p) => self.put_local_record(kind, item_id.as_bytes(), p.as_str().as_bytes()),
+            None => self.delete_local_record(kind, item_id.as_bytes()),
+        }
+    }
+
+    /// 把 M1.4 写在条目属性中的策略迁移到本机记录，并从条目中删除属性（只做一次，之后条目属性一律忽略）。
+    /// 已有本机记录的密钥保留本机记录。
+    fn migrate_ssh_agent_policies(&mut self) -> Result<()> {
+        if self.store.meta(META_SSH_AGENT_LOCAL)?.is_some() {
+            return Ok(());
+        }
+        let existing = self.ssh_agent_policies()?;
+        let mut legacy = Vec::new();
+        for summary in self.items()? {
+            if summary.overview.item_type != ItemType::SshKey {
+                continue;
+            }
+            let doc = self.item(summary.id)?.doc;
+            if doc
+                .get(&RecordKey::attr(crate::ssh_agent::ATTRIBUTE))
+                .is_some()
+            {
+                legacy.push((summary.id, crate::ssh_agent::legacy_policy_of(&doc)));
+            }
+        }
+        for (item_id, policy) in legacy {
+            if let (Some(p), false) = (policy, existing.contains_key(&item_id)) {
+                self.set_ssh_agent_policy(item_id, Some(p))?;
+            }
+            self.revise(item_id, |doc, hlc, rev| {
+                Ok(doc.delete(RecordKey::attr(crate::ssh_agent::ATTRIBUTE), hlc, rev)?)
+            })?;
+        }
+        self.store.set_meta(META_SSH_AGENT_LOCAL, &[1])?;
         Ok(())
     }
 
@@ -954,7 +1030,7 @@ impl Vault {
     /// 不是 Keevo 备份、来自更新版本、属于另一个账户，或 SQLite 错误。失败时什么都不改变。
     pub(crate) fn restore_from(&mut self, src: &Path) -> Result<()> {
         let current = self.store.account()?.ok_or(CoreError::NoAccount)?;
-        if Store::inspect_backup(src)?.id != current.id {
+        if Store::inspect_backup(src)?.account.id != current.id {
             return Err(CoreError::OtherAccount);
         }
         self.lock();
@@ -968,7 +1044,7 @@ impl Vault {
     /// 不是 Keevo 备份、来自更新版本，或属于另一个账户。
     pub fn check_backup(&self, src: &Path) -> Result<()> {
         let current = self.store.account()?.ok_or(CoreError::NoAccount)?;
-        if Store::inspect_backup(src)?.id != current.id {
+        if Store::inspect_backup(src)?.account.id != current.id {
             return Err(CoreError::OtherAccount);
         }
         Ok(())
@@ -1293,6 +1369,16 @@ impl Vault {
         item_id: Id128,
         change: impl FnOnce(&mut ItemDoc, Hlc, Id128) -> Result<()>,
     ) -> Result<()> {
+        self.revise_with(item_id, &AttachmentChanges::default(), change)
+    }
+
+    /// 与 [`Vault::revise`] 相同，附件变化与新修订在同一个事务中写入（第五轮预审 K6）。
+    fn revise_with(
+        &mut self,
+        item_id: Id128,
+        changes: &AttachmentChanges<'_>,
+        change: impl FnOnce(&mut ItemDoc, Hlc, Id128) -> Result<()>,
+    ) -> Result<()> {
         let view = self.item(item_id)?;
         let heads = self.store.heads(&item_id)?;
         // 精简也回不到的状态：头太多（新修订必须以全部头为父），或键太多（删除只会留下墓碑，键数不减）
@@ -1314,7 +1400,15 @@ impl Vault {
             self.item_key(session, live)?
         };
         let parents = heads.iter().map(|h| h.rev_id).collect();
-        self.write_item_revision(view.vault_id, item_id, rev_id, parents, &ik, Some(&doc))?;
+        self.write_item_revision_with(
+            view.vault_id,
+            item_id,
+            rev_id,
+            parents,
+            &ik,
+            Some(&doc),
+            changes,
+        )?;
         let pruned = self
             .store
             .prune(&item_id, HISTORY_KEEP, HISTORY_MIN_AGE_MS)?;
@@ -1330,7 +1424,7 @@ impl Vault {
     ///
     /// # Errors
     /// 超过 [`crate::attachment::MAX_ATTACHMENT_LEN`] 时返回 [`CoreError::OutOfRange`]；其余同
-    /// [`Vault::update_item`]。失败时什么都不留下。
+    /// [`Vault::update_item`]。附件与引用它的修订在同一个事务中写入，失败时什么都不留下。
     pub fn add_attachment(
         &mut self,
         item_id: Id128,
@@ -1338,71 +1432,17 @@ impl Vault {
         data: &[u8],
         added_ms: u64,
     ) -> Result<keevo_format::AttachmentRef> {
-        use crate::attachment::{
-            CHUNK_LEN, MAX_ATTACHMENT_LEN, Meta, chunk_binding, clean_name, context as actx,
-        };
-        if data.len() > MAX_ATTACHMENT_LEN {
-            return Err(CoreError::OutOfRange);
-        }
         let view = self.item(item_id)?;
-        let vault_id = view.vault_id;
-        let name = clean_name(name);
-        let attachment_id = Id128::random()?;
-        let ak = SymmetricKey::generate()?;
-        let (row, chunks) = {
-            let session = self.session()?;
-            let vk = session
-                .vault_keys
-                .get(&vault_id)
-                .ok_or(CoreError::NotFound)?;
-            let acct = session.account_id;
-            let count =
-                u32::try_from(data.len().div_ceil(CHUNK_LEN)).map_err(|_| CoreError::OutOfRange)?;
-            let wrapped = vk.wrap_key(
-                &actx(acct, vault_id, attachment_id, Part::WrappedKey, 0, [0; 32]),
-                &ak,
-            )?;
-            let meta = Meta {
-                v: 1,
-                item: item_id.to_hex(),
-                name: name.clone(),
-                size: u64::try_from(data.len()).map_err(|_| CoreError::OutOfRange)?,
-                chunks: count,
-            };
-            let meta_json = serde_json::to_vec(&meta).map_err(|_| CoreError::Tampered)?;
-            let meta_ct = seal(
-                &ak,
-                &actx(acct, vault_id, attachment_id, Part::Content, 0, [0; 32]),
-                &meta_json,
-            )?;
-            let binding = chunk_binding(count);
-            let chunks = (0u32..)
-                .zip(data.chunks(CHUNK_LEN))
-                .map(|(i, c)| {
-                    seal(
-                        &ak,
-                        &actx(acct, vault_id, attachment_id, Part::Chunk, i, binding),
-                        c,
-                    )
-                })
-                .collect::<core::result::Result<Vec<_>, _>>()?;
-            let row = keevo_store::AttachmentRow {
-                id: attachment_id,
-                item_id,
-                wrapped_key_ct: wrapped,
-                meta_ct,
-                chunk_count: count,
-            };
-            (row, chunks)
-        };
-        self.store.insert_attachment(&row, &chunks)?;
+        let name = crate::attachment::clean_name(name);
+        let (row, chunks) = self.seal_attachment(view.vault_id, item_id, &name, data)?;
         let reference = keevo_format::AttachmentRef {
-            id: attachment_id,
+            id: row.id,
             name: name.clone(),
             size: i64::try_from(data.len()).map_err(|_| CoreError::OutOfRange)?,
             added: i64::try_from(added_ms)
                 .unwrap_or(0)
                 .clamp(0, keevo_format::MAX_SAFE_INT),
+            sha256: Some(keevo_crypto::sha256(data)),
         };
         let field = NewField {
             kind: FieldKind::Attachment,
@@ -1410,24 +1450,136 @@ impl Vault {
             purpose: None,
             data: FieldData::Attachment(reference.clone()),
         };
-        if let Err(e) = self.update_item(item_id, vec![Edit::AddField(field)]) {
-            let _ = self.store.delete_attachment(&attachment_id);
-            return Err(e);
-        }
+        let changes = AttachmentChanges {
+            add: vec![(&row, chunks.as_slice())],
+            delete_all_of: None,
+        };
+        self.revise_with(item_id, &changes, |doc, hlc, rev_id| {
+            apply(doc, Edit::AddField(field), hlc, rev_id)
+        })?;
         Ok(reference)
     }
 
-    /// 读取附件内容。附件必须属于这个条目（存储与加密的元数据都核对）。
+    /// 加密一个新附件（新的附件 ID 与 AK），不写入。
+    fn seal_attachment(
+        &self,
+        vault_id: Id128,
+        item_id: Id128,
+        name: &str,
+        data: &[u8],
+    ) -> Result<(keevo_store::AttachmentRow, Vec<Vec<u8>>)> {
+        use crate::attachment::{
+            CHUNK_LEN, MAX_ATTACHMENT_LEN, Meta, chunk_binding, context as actx,
+        };
+        if data.len() > MAX_ATTACHMENT_LEN {
+            return Err(CoreError::OutOfRange);
+        }
+        let attachment_id = Id128::random()?;
+        let ak = SymmetricKey::generate()?;
+        let session = self.session()?;
+        let vk = session
+            .vault_keys
+            .get(&vault_id)
+            .ok_or(CoreError::NotFound)?;
+        let acct = session.account_id;
+        let count =
+            u32::try_from(data.len().div_ceil(CHUNK_LEN)).map_err(|_| CoreError::OutOfRange)?;
+        let wrapped = vk.wrap_key(
+            &actx(acct, vault_id, attachment_id, Part::WrappedKey, 0, [0; 32]),
+            &ak,
+        )?;
+        let meta = Meta {
+            v: 1,
+            item: item_id.to_hex(),
+            name: name.to_owned(),
+            size: u64::try_from(data.len()).map_err(|_| CoreError::OutOfRange)?,
+            chunks: count,
+        };
+        let meta_json = serde_json::to_vec(&meta).map_err(|_| CoreError::Tampered)?;
+        if meta_json.len() > keevo_store::MAX_ATTACHMENT_META_LEN {
+            return Err(CoreError::OutOfRange);
+        }
+        let meta_ct = seal(
+            &ak,
+            &actx(acct, vault_id, attachment_id, Part::Content, 0, [0; 32]),
+            &meta_json,
+        )?;
+        let binding = chunk_binding(count);
+        let chunks = (0u32..)
+            .zip(data.chunks(CHUNK_LEN))
+            .map(|(i, c)| {
+                seal(
+                    &ak,
+                    &actx(acct, vault_id, attachment_id, Part::Chunk, i, binding),
+                    c,
+                )
+            })
+            .collect::<core::result::Result<Vec<_>, _>>()?;
+        let row = keevo_store::AttachmentRow {
+            id: attachment_id,
+            item_id,
+            wrapped_key_ct: wrapped,
+            meta_ct,
+            chunk_count: count,
+        };
+        Ok((row, chunks))
+    }
+
+    /// 读取附件内容。附件必须属于这个条目（存储与加密的元数据都核对），并且被这个条目的当前视图或某个留有内容的
+    /// 历史版本引用；内容与引用中的大小、文件名与 `sha256` 一致。
     ///
     /// # Errors
-    /// 已锁定；附件不存在或不属于该条目时返回 [`CoreError::NotFound`]；被篡改或损坏时返回
+    /// 已锁定；附件不存在、不属于该条目或没有被引用时返回 [`CoreError::NotFound`]；被篡改或损坏时返回
     /// [`CoreError::Tampered`] 或对应的密码学错误。
     pub fn attachment_data(
         &self,
         item_id: Id128,
         attachment_id: Id128,
     ) -> Result<zeroize::Zeroizing<Vec<u8>>> {
-        use crate::attachment::{CHUNK_LEN, Meta, chunk_binding, context as actx};
+        let reference = self.attachment_ref(item_id, attachment_id)?;
+        self.read_attachment(item_id, &reference)
+    }
+
+    /// 条目中引用 `attachment_id` 的附件引用：先找当前视图（含并发版本），再找留有内容的历史版本。
+    fn attachment_ref(
+        &self,
+        item_id: Id128,
+        attachment_id: Id128,
+    ) -> Result<keevo_format::AttachmentRef> {
+        let find = |doc: &ItemDoc| {
+            doc.records
+                .values()
+                .chain(doc.concurrent.values().flatten())
+                .find_map(|v| match &v.value {
+                    Some(RecordValue::Field(FieldValue {
+                        data: FieldData::Attachment(a),
+                        ..
+                    })) if a.id == attachment_id => Some(a.clone()),
+                    _ => None,
+                })
+        };
+        if let Some(a) = find(&self.item(item_id)?.doc) {
+            return Ok(a);
+        }
+        for row in self.store.history(&item_id)? {
+            if row.deleted || row.pruned {
+                continue;
+            }
+            let doc = ItemDoc::decode(&self.decrypt_part(&row, Part::Details)?)?;
+            if let Some(a) = find(&doc) {
+                return Ok(a);
+            }
+        }
+        Err(CoreError::NotFound)
+    }
+
+    /// 按引用读取附件内容（`spec/crypto.md` §8.9"读取"）。
+    fn read_attachment(
+        &self,
+        item_id: Id128,
+        reference: &keevo_format::AttachmentRef,
+    ) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+        let attachment_id = reference.id;
         let session = self.session()?;
         let (row, chunks) = self
             .store
@@ -1446,53 +1598,15 @@ impl Vault {
             .vault_keys
             .get(&vault_id)
             .ok_or(CoreError::NotFound)?;
-        let acct = session.account_id;
-        let ak = vk.unwrap_key(
-            &actx(acct, vault_id, attachment_id, Part::WrappedKey, 0, [0; 32]),
-            &row.wrapped_key_ct,
-        )?;
-        let meta_json = open(
-            &ak,
-            &actx(acct, vault_id, attachment_id, Part::Content, 0, [0; 32]),
-            &row.meta_ct,
-        )?;
-        let meta: Meta = serde_json::from_slice(&meta_json).map_err(|_| CoreError::Tampered)?;
-        if meta.v != 1 || meta.item != item_id.to_hex() || meta.chunks != row.chunk_count {
-            return Err(CoreError::Tampered);
-        }
-        let size = usize::try_from(meta.size).map_err(|_| CoreError::Tampered)?;
-        if size > crate::attachment::MAX_ATTACHMENT_LEN || size.div_ceil(CHUNK_LEN) != chunks.len()
-        {
-            return Err(CoreError::Tampered);
-        }
-        let binding = chunk_binding(meta.chunks);
-        let mut out = zeroize::Zeroizing::new(Vec::with_capacity(size));
-        let last = chunks.len().saturating_sub(1);
-        for ((i, idx), ct) in chunks
-            .iter()
-            .enumerate()
-            .zip(0u32..)
-            .map(|((i, ct), idx)| ((i, idx), ct))
-        {
-            let plain = open(
-                &ak,
-                &actx(acct, vault_id, attachment_id, Part::Chunk, idx, binding),
-                ct,
-            )?;
-            let ok = if i == last {
-                !plain.is_empty() && plain.len() <= CHUNK_LEN
-            } else {
-                plain.len() == CHUNK_LEN
-            };
-            if !ok {
-                return Err(CoreError::Tampered);
-            }
-            out.extend_from_slice(&plain);
-        }
-        if out.len() != size {
-            return Err(CoreError::Tampered);
-        }
-        Ok(out)
+        crate::attachment::open_parts(
+            vk,
+            session.account_id,
+            vault_id,
+            item_id,
+            &row,
+            &chunks,
+            reference,
+        )
     }
 
     /// 测试用：直接访问存储。
@@ -1572,11 +1686,18 @@ impl Vault {
             item_id,
             heads.iter().map(|h| h.rev_id).collect(),
         )?;
-        self.store.insert_revisions(&rows)?;
-        // 永久删除：附件随之删除
-        for id in self.store.attachments_of(&item_id)? {
-            self.store.delete_attachment(&id)?;
-        }
+        // 永久删除：附件随之删除，与墓碑在同一个事务中（第五轮预审 K6）
+        self.store.insert_revisions_with(
+            &rows,
+            &AttachmentChanges {
+                add: Vec::new(),
+                delete_all_of: Some(item_id),
+            },
+        )?;
+        // 本机的 Agent 授权随之删除：即使条目随旧备份回来，也不在 Agent 中提供（第五轮预审 K17）
+        let _ = self
+            .store
+            .delete_local_record(crate::ssh_agent::LOCAL_KIND, item_id.as_bytes());
         Ok(())
     }
 
@@ -1584,9 +1705,29 @@ impl Vault {
     /// 复制为一个新条目，再永久删除旧条目。用于超出上限、只能重建的条目（[`CoreError::ItemNeedsRebuild`]）。
     /// 新条目有新的 ID；旧条目的历史随永久删除进入正常清理。
     ///
+    /// 附件复制为新条目的新附件（新的附件 ID 与 AK）：附件元数据绑定所属条目，而每个附件只封装一次
+    /// （`spec/crypto.md` §8.9）。读不出的附件不保留引用。旧条目的附件随永久删除一起删除（第五轮预审 K5）。
+    ///
     /// # Errors
-    /// 复制后仍超过键数或大小上限时返回错误，调用方应让用户在 `drop` 中选出更多不保留的键。
+    /// 复制后仍超过键数或大小上限时返回错误，调用方应让用户在 `drop` 中选出更多不保留的键。失败时什么都不改变。
     pub fn rebuild_item(&mut self, item_id: Id128, drop: &[RecordKey]) -> Result<Id128> {
+        let mut copies = Vec::new();
+        let result = self.rebuild_inner(item_id, drop, &mut copies);
+        if result.is_err() {
+            // 复制品在新条目写入之前是无主的；崩溃时由打开时的清理（Store::delete_orphan_attachments）删除
+            for id in &copies {
+                let _ = self.store.delete_attachment(id);
+            }
+        }
+        result
+    }
+
+    fn rebuild_inner(
+        &mut self,
+        item_id: Id128,
+        drop: &[RecordKey],
+        copies: &mut Vec<Id128>,
+    ) -> Result<Id128> {
         let view = self.item(item_id)?;
         let hlc = self.tick()?;
         let new_id = Id128::random()?;
@@ -1596,12 +1737,38 @@ impl Vault {
             if key.is_deletion_state() || drop.contains(key) {
                 continue;
             }
-            if let Some(value) = &version.value {
-                doc.set(key.clone(), value.clone(), hlc, rev_id)?;
-            }
+            let Some(value) = &version.value else {
+                continue;
+            };
+            let value = match value {
+                RecordValue::Field(f) => match &f.data {
+                    FieldData::Attachment(a) => {
+                        // 一次只在内存中保留一个附件
+                        let data = match self.read_attachment(item_id, a) {
+                            Ok(data) => data,
+                            Err(CoreError::Locked) => return Err(CoreError::Locked),
+                            Err(_) => continue,
+                        };
+                        let (row, chunks) =
+                            self.seal_attachment(view.vault_id, new_id, &a.name, &data)?;
+                        self.store.insert_attachment(&row, &chunks)?;
+                        copies.push(row.id);
+                        let mut f = f.clone();
+                        f.data = FieldData::Attachment(keevo_format::AttachmentRef {
+                            id: row.id,
+                            sha256: Some(keevo_crypto::sha256(&data)),
+                            ..a.clone()
+                        });
+                        RecordValue::Field(f)
+                    }
+                    _ => value.clone(),
+                },
+                _ => value.clone(),
+            };
+            doc.set(key.clone(), value, hlc, rev_id)?;
         }
         let ik = SymmetricKey::generate()?;
-        // 新条目与旧条目的墓碑在一个事务中写入：要么都成功，要么都不发生（第四轮评审 J2）
+        // 新条目、旧条目的墓碑与旧附件的删除在一个事务中：要么都成功，要么都不发生（第四轮评审 J2）
         let mut rows = vec![self.item_revision_row(
             view.vault_id,
             new_id,
@@ -1616,7 +1783,13 @@ impl Vault {
             item_id,
             heads.iter().map(|h| h.rev_id).collect(),
         )?);
-        self.store.insert_revisions(&rows)?;
+        self.store.insert_revisions_with(
+            &rows,
+            &AttachmentChanges {
+                add: Vec::new(),
+                delete_all_of: Some(item_id),
+            },
+        )?;
         Ok(new_id)
     }
 
@@ -1857,8 +2030,25 @@ impl Vault {
         ik: &SymmetricKey,
         doc: Option<&ItemDoc>,
     ) -> Result<()> {
+        let none = AttachmentChanges::default();
+        self.write_item_revision_with(vault_id, item_id, rev_id, parents, ik, doc, &none)
+    }
+
+    /// 与 [`Vault::write_item_revision`] 相同，附件变化在同一个事务中写入。
+    #[allow(clippy::too_many_arguments, reason = "内部函数，参数各不相同")]
+    fn write_item_revision_with(
+        &mut self,
+        vault_id: Id128,
+        item_id: Id128,
+        rev_id: Id128,
+        parents: Vec<Id128>,
+        ik: &SymmetricKey,
+        doc: Option<&ItemDoc>,
+        changes: &AttachmentChanges<'_>,
+    ) -> Result<()> {
         let row = self.item_revision_row(vault_id, item_id, rev_id, parents, ik, doc)?;
-        self.store.insert_revision(&row)?;
+        self.store
+            .insert_revisions_with(std::slice::from_ref(&row), changes)?;
         Ok(())
     }
 
@@ -2113,18 +2303,6 @@ fn apply(doc: &mut ItemDoc, edit: Edit, hlc: Hlc, rev: Id128) -> Result<()> {
             doc.set(RecordKey::attr("favorite"), RecordValue::Bool(f), hlc, rev)?
         }
         Edit::AddTag(t) => doc.set(RecordKey::Tag(t), RecordValue::Tag, hlc, rev)?,
-        Edit::SetSshAgent(Some(policy)) => doc.set(
-            RecordKey::attr(crate::ssh_agent::ATTRIBUTE),
-            RecordValue::Text(policy.as_str().into()),
-            hlc,
-            rev,
-        )?,
-        Edit::SetSshAgent(None) => {
-            let key = RecordKey::attr(crate::ssh_agent::ATTRIBUTE);
-            if doc.get(&key).is_some() {
-                doc.delete(key, hlc, rev)?;
-            }
-        }
         Edit::SetSecurityAlerts(false) => doc.set(
             RecordKey::attr(crate::security::ATTRIBUTE),
             RecordValue::Text("off".into()),

@@ -56,6 +56,8 @@ impl BitwardenKey {
             return Err(CryptoError::EmptyPassword);
         }
         let mut master = Zeroizing::new([0u8; 32]);
+        // 与 Keevo 自己的 KDF 共用进程级互斥（crypto.md §5.3）
+        let _gate = crate::kdf::kdf_gate();
         match kdf {
             BitwardenKdf::Pbkdf2 { iterations } => {
                 if iterations == 0 {

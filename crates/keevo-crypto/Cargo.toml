@@ -11,6 +11,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# 只供其他 crate 的测试使用（跨实现测试向量）：由已知字节构造密钥。正式构建不得启用。
+test-util = []
+
 [dependencies]
 aes = "0.9"
 argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }

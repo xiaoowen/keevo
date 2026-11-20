@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use keevo_core::ssh_agent::{AgentPolicy, policy_of};
+use keevo_core::ssh_agent::AgentPolicy;
 use keevo_core::{FieldData, FieldKind, ItemType, RecordValue, Vault};
 use keevo_crypto::Id128;
 use keevo_ssh::agent::{
@@ -69,6 +69,7 @@ fn private_key_text(doc: &keevo_core::ItemDoc) -> Result<String, &'static str> {
 /// # Errors
 /// 已锁定或读取失败。
 pub fn key_statuses(vault: &Vault) -> keevo_core::Result<Vec<AgentKeyStatus>> {
+    let policies = vault.ssh_agent_policies()?;
     let mut out = Vec::new();
     for item in vault.items()? {
         if item.overview.item_type != ItemType::SshKey || item.overview.trashed_at.is_some() {
@@ -78,7 +79,7 @@ pub fn key_statuses(vault: &Vault) -> keevo_core::Result<Vec<AgentKeyStatus>> {
         let mut status = AgentKeyStatus {
             item_id: item.id.to_hex(),
             title: item.overview.title.clone(),
-            policy: policy_of(&view.doc),
+            policy: policies.get(&item.id).copied(),
             fingerprint: None,
             public_key: None,
             problem: None,
@@ -105,7 +106,7 @@ pub fn key_statuses(vault: &Vault) -> keevo_core::Result<Vec<AgentKeyStatus>> {
 
 /// 在 Agent 中可用的密钥（§3），按标题排序。
 fn agent_keys(vault: &Vault) -> Vec<AgentKey> {
-    let Ok(items) = vault.items() else {
+    let (Ok(items), Ok(policies)) = (vault.items(), vault.ssh_agent_policies()) else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -116,7 +117,7 @@ fn agent_keys(vault: &Vault) -> Vec<AgentKey> {
         let Ok(view) = vault.item(item.id) else {
             continue;
         };
-        let Some(policy) = policy_of(&view.doc) else {
+        let Some(policy) = policies.get(&item.id).copied() else {
             continue;
         };
         let Ok(text) = private_key_text(&view.doc) else {

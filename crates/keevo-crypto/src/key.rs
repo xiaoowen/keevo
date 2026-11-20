@@ -47,6 +47,16 @@ impl SymmetricKey {
         }
     }
 
+    /// 测试专用（`test-util` 特性）：由已知字节构造，供其他 crate 的跨实现测试向量使用。正式构建中不存在。
+    #[cfg(feature = "test-util")]
+    #[must_use]
+    pub fn from_raw_for_tests(id: [u8; 16], bytes: [u8; 32]) -> Self {
+        Self {
+            id: KeyId::from_bytes(id),
+            bytes: Zeroizing::new(bytes),
+        }
+    }
+
     /// 密钥 ID。
     #[must_use]
     pub const fn id(&self) -> KeyId {

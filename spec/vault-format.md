@@ -1,6 +1,6 @@
 # Keevo 保险库明文格式
 
-- **版本**：1.5
+- **版本**：1.6
 - **状态**：**已冻结**（2026-11-18，经四轮模型评审）。冻结范围与版本规则见 [README.md](README.md)。§2.5 条目详情 v2（附件）是草案，评审后冻结
 - **参考实现**：`crates/keevo-format`
 - **独立实现与测试向量**：`spec/reference/format_vectors.py`（Python 标准库，只依据本规范编写）生成 `spec/test-vectors/vault-format-v1.json` 与 `vault-format-v2.json`
@@ -58,7 +58,7 @@
 | 分区 | `label`、`order` | |
 | 字段 | `section`（可选）、`order`、`kind`、`label`、`purpose`（可选）、`data` | |
 | 字段数据 | 恰好一种：`{"text": 字符串}`、`{"kv": [键值项, …]}`、`{"codes": [恢复码, …]}`、`{"attachment": 附件引用}`（只在 v2 中） | |
-| 附件引用 | `id`、`name`、`size`、`added` | §2.5 |
+| 附件引用 | `id`、`name`、`size`、`added`、`sha256`（可选） | §2.5 |
 | 键值项 | `key`、`value`、`concealed` | |
 | 恢复码 | `code`、`used` | |
 | 条目概要 | `v`、`type`、`title`、`subtitle`、`urls`、`tags`、`favorite`、`archived`、`trashed_at`（可选）、`updated`、`conflicts`（可选，只在为 `true` 时输出） | §3 |
@@ -131,7 +131,7 @@
 | `favorite` | bool | 收藏 |
 | `archived` | bool | 归档 |
 | `trashed` | int | 移入回收站的时间（Unix 毫秒）；不在回收站时为墓碑或不存在 |
-| `ssh_agent` | text | `ssh_key` 条目在 SSH Agent 中的授权策略：`ask`、`session`、`unlocked`（`spec/ssh-agent.md` §4.1）。缺省或其他值表示不在 Agent 中提供；其他类型的条目忽略 |
+| `ssh_agent` | text | **已弃用**（M1.4）：`ssh_key` 条目在 SSH Agent 中的授权策略。M1.5 起策略存在本机记录中（`spec/ssh-agent.md` §4.1），Keevo 在第一次解锁时迁移并删除这个属性，此后忽略它。属性名本来就是开放的，解码规则不变 |
 | `security_alerts` | text | `off` 表示安全中心不报告这个条目（"忽略这个条目的提醒"，`docs/product.md` §5.6）。缺省或其他值表示照常报告 |
 | `purged` | bool | **保留**，客户端不得写入或删除，写入接口返回 `reserved_key`。合并时由墓碑修订产生（revisions.md §5.2）。文档中只允许两种形态，其他形态解码时返回 `reserved_key`：`records` 中只能是墓碑（恢复已确定）；`concurrent` 中只能是墓碑，或 `hlc = 0`、值为 `true` 的删除版本（删除被撤销） |
 
@@ -167,12 +167,21 @@
 
 条目详情 v2 = v1 的全部内容 + 字段类型 `attachment`。附件内容的加密见 crypto.md §8.9。
 
-- **版本由内容决定**：任何记录版本（含 `concurrent` 中的版本）是 `attachment` 字段时，文档的 `v` 为 2，否则为 1。
-  因此没有附件的条目仍按 v1 编码，旧版本的实现照常读取；`v` 与内容不符的文档不是规范编码，返回 `malformed`。
-  读取 v2 的实现必须继续读取 v1。
+- **版本由内容决定**：任何记录版本（含 `concurrent` 中的版本）的字段类型是 `attachment`、**或**数据是附件引用时，
+  文档的 `v` 为 2，否则为 1。因此没有附件的条目仍按 v1 编码，旧版本的实现照常读取；`v` 与内容不符的文档不是
+  规范编码，返回 `malformed`。两个条件都看，是为了让同一份 `"v":1` 文档在 v1 与 v2 读取方得到相同的错误码：
+  字段类型与数据只有一方是附件时，v1 读取方因为不认识 `attachment` 返回 `malformed`，v2 读取方也返回 `malformed`
+  （不是规范编码），而不是 `value_kind_mismatch`。
+  读取 v2 的实现必须继续读取 v1。只认识 v1 的读取方遇到 v2 文档时返回 `unsupported_version`：**整个条目**不可读，
+  不只是附件字段。因此带附件的条目在旧版本的 Keevo 中打不开。
 - **附件引用**：`id` 为附件 ID；`name` 为文件名（任意字符串，显示用）；`size` 为字节数，`added` 为添加时间
   （Unix 毫秒），两者都在 0 到 2⁵³−1 之间，否则返回 `value_too_large`。`kind` 为 `attachment` 而数据不是附件引用，
   或数据是附件引用而 `kind` 不是 `attachment`，都返回 `value_kind_mismatch`。
+- **内容承诺 `sha256`**：附件内容（明文）的 SHA-256，64 个小写十六进制字符，否则返回 `malformed`。条目修订由此承诺
+  附件的内容：读取方核对 crypto.md §8.9 解密得到的内容，不符即视为篡改。即使有人持有 VK、在同一个附件 ID 下用另一把
+  AK 封装了别的内容，也会被发现（第五轮预审 K13）。它随条目详情一起加密，不额外泄露任何信息。
+  - **可选**：缺省表示没有承诺，用于 M1.5 草案期间写入的引用。新写入的引用必须带上。
+  - 承诺的是明文，因此同一个文件复制为新的附件（新的附件 ID 与 AK，crypto.md §8.9"只封装一次"）时，摘要不变。
 - **附件不可变**：修改附件只能删除这个字段、再添加新的附件。附件的显示名可以改（`label`），引用中的 `name` 不变。
 - **测试向量**：`spec/test-vectors/vault-format-v2.json`。v1 的测试向量中"不认识的版本"改用 `"v": 3`。
 
@@ -244,3 +253,4 @@
 | 1.3 | 2026-11-19 | §2.1 新增属性 `ssh_agent`（SSH Agent 的授权策略）。属性名本来就是开放的，解码规则不变 |
 | 1.4 | 2026-11-19 | §2.1 新增属性 `security_alerts`（安全中心忽略某个条目）；文首版本号补正（1.3 时漏改）。解码规则不变 |
 | 1.5 | 2026-11-19 | 新增 §2.5 条目详情 v2（草案）：字段类型 `attachment` 与附件引用；版本由内容决定，没有附件的条目仍是 v1。v1 的解码规则不变；v1 测试向量中"不认识的版本"改用 3，新增 v2 测试向量 |
+| 1.6 | 2026-11-20 | 按第五轮预审修订 §2.5（草案）：字段类型是 `attachment` **或**数据是附件引用时版本为 2，同一份 v1 文档在新旧读取方得到相同的错误码（K11、S5）；附件引用新增可选的内容承诺 `sha256`（K13）。§2.1 属性 `ssh_agent` 弃用，策略改存本机记录（K17）。v1 的解码规则不变；v2 测试向量相应更新 |

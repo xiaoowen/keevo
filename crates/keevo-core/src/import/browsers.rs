@@ -53,7 +53,7 @@ pub(super) fn parse(source: Source, data: &[u8]) -> Result<Parsed, ImportError> 
             b.note(get(notes));
             lastpass_folder(&mut b, get(folder));
             b.favorite(get(favorite) == "1");
-            out.items.push(b.finish());
+            out.push(b.finish())?;
             continue;
         }
         if site.trim().is_empty() && get(password).is_empty() && get(username).is_empty() {
@@ -85,7 +85,7 @@ pub(super) fn parse(source: Source, data: &[u8]) -> Result<Parsed, ImportError> 
             b.tag(get(folder));
         }
         b.favorite(matches!(get(favorite).trim(), "1" | "true" | "TRUE"));
-        out.items.push(b.finish());
+        out.push(b.finish())?;
     }
     Ok(out)
 }

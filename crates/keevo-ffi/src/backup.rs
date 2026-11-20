@@ -84,7 +84,7 @@ pub fn auto_backup_due(dir: String) -> bool {
 #[uniffi::export]
 pub fn prune_backups(dir: String, keep: u32) -> Result<u32, KeevoError> {
     let keep = usize::try_from(keep).unwrap_or(usize::MAX);
-    let removed = backup::prune(Path::new(&dir), keep)?;
+    let removed = backup::prune(Path::new(&dir), keep, now_ms())?;
     Ok(u32::try_from(removed).unwrap_or(u32::MAX))
 }
 

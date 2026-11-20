@@ -232,6 +232,14 @@ pub struct AttachmentRef {
     pub size: i64,
     /// 添加时间（Unix 毫秒），0 到 2⁵³−1。
     pub added: i64,
+    /// 内容（明文）的 SHA-256：条目修订对附件内容的承诺，读取时核对（第五轮预审 K13）。可选：缺省表示没有
+    /// 承诺（M1.5 草案期间写入的附件）；Keevo 新写入的附件一律带上。
+    #[serde(
+        with = "id_hex::sha256_option",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sha256: Option<[u8; 32]>,
 }
 
 /// 环境变量中的一项。

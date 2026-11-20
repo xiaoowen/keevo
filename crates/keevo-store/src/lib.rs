@@ -99,6 +99,15 @@ CREATE INDEX attachment_item ON attachment (item_id);
 
 /// 一个附件的块数上限（50 MiB / 64 KiB）。
 pub const MAX_ATTACHMENT_CHUNKS: usize = 800;
+/// 附件密钥包裹的密文长度（`spec/crypto.md` §8.9）：明文 `child_kid ‖ AK` 48 字节，填充到 256。
+pub const ATTACHMENT_KEY_CT_LEN: usize = keevo_crypto::HEADER_LEN + 256 + 16;
+/// 附件元数据明文的长度上限（UTF-8 JSON）。
+pub const MAX_ATTACHMENT_META_LEN: usize = 1024;
+/// 附件元数据密文的长度上限：42 + Padmé(4 + 1024) + 16。
+pub const MAX_ATTACHMENT_META_CT_LEN: usize = keevo_crypto::HEADER_LEN + 1088 + 16;
+/// 一个完整块（明文 65536 字节）的密文长度：42 + Padmé(4 + 65536) + 16。除最后一块外的每块都恰好这么长，
+/// 最后一块不超过它。读取之前按这些长度检查，认证之前读入内存的数据至多 800 × 67642 字节（第五轮预审 K3）。
+pub const ATTACHMENT_CHUNK_CT_LEN: usize = keevo_crypto::HEADER_LEN + 67_584 + 16;
 
 /// 本机记录密文的长度上限：64 KiB 明文加版本、nonce 与认证标签。
 pub const MAX_LOCAL_RECORD_CT: usize = 64 * 1024 + 1 + 24 + 16;
@@ -543,11 +552,33 @@ impl Store {
     /// # Errors
     /// 同 [`Store::insert_revision`]；任何一个失败时整个事务回滚。
     pub fn insert_revisions(&mut self, rows: &[RevisionRow]) -> Result<()> {
+        self.insert_revisions_with(rows, &AttachmentChanges::default())
+    }
+
+    /// 与 [`Store::insert_revisions`] 相同，并在同一个事务中增删附件（第五轮预审 K6）：添加附件时附件与引用它的
+    /// 修订一起写入；永久删除时墓碑与附件的删除一起发生。任何一步失败时什么都不改变。
+    ///
+    /// # Errors
+    /// 同 [`Store::insert_revisions`] 与 [`Store::insert_attachment`]。
+    pub fn insert_revisions_with(
+        &mut self,
+        rows: &[RevisionRow],
+        changes: &AttachmentChanges<'_>,
+    ) -> Result<()> {
+        for (row, chunks) in &changes.add {
+            check_attachment(row, chunks)?;
+        }
         let stored =
             i64::try_from(self.effective_now()?).map_err(|_| StoreError::Corrupt("clock"))?;
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(item_id) = &changes.delete_all_of {
+            delete_attachments_of(&tx, item_id)?;
+        }
+        for (row, chunks) in &changes.add {
+            insert_attachment_tx(&tx, row, chunks)?;
+        }
         for row in rows {
             insert_one(&tx, row, stored)?;
         }
@@ -803,80 +834,6 @@ impl Store {
         Ok(())
     }
 
-    /// 检查 `src` 是否为可以恢复的 Keevo 数据库：schema 不新于当前版本，并且有账户。只读打开，不修改它。
-    ///
-    /// # Errors
-    /// 不是 Keevo 数据库时返回 [`StoreError::Corrupt`]；来自更新版本时返回 [`StoreError::UnsupportedSchema`]。
-    pub fn inspect_backup(src: &Path) -> Result<AccountRow> {
-        let conn = Connection::open_with_flags(src, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        let version: u32 = conn
-            .pragma_query_value(None, "user_version", |r| r.get(0))
-            .map_err(|_| StoreError::Corrupt("not a keevo database"))?;
-        if version > SCHEMA_VERSION {
-            return Err(StoreError::UnsupportedSchema(version));
-        }
-        if version == 0 {
-            return Err(StoreError::Corrupt("not a keevo database"));
-        }
-        let probe = Self {
-            conn,
-            _lock: None,
-            clock: None,
-        };
-        probe
-            .account()
-            .map_err(|_| StoreError::Corrupt("not a keevo database"))?
-            .ok_or(StoreError::Corrupt("no account"))
-    }
-
-    /// 用 `src` 处的备份替换保险库内容（SQLite 在线备份接口），然后按需迁移 schema。连接保持不变，
-    /// 持有这个 `Store` 的对象不需要重新打开。调用方先用 [`Store::inspect_backup`] 检查。
-    ///
-    /// 本机状态不随备份回退：`meta`（设备 ID、HLC、有效时间、解锁策略与失败计数）与 `local_record`
-    /// （浏览器配对、授权）保持恢复前的内容，否则已撤销的配对会随旧备份重新生效。
-    ///
-    /// # Errors
-    /// 备份无效或 SQLite 错误。替换失败时数据库保持原样。
-    pub fn restore_from(&mut self, src: &Path) -> Result<()> {
-        Self::inspect_backup(src)?;
-        let meta: Vec<(String, Vec<u8>)> = {
-            let mut stmt = self.conn.prepare("SELECT key, value FROM meta")?;
-            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-                .collect::<rusqlite::Result<_>>()?
-        };
-        let local: Vec<(String, Vec<u8>, Vec<u8>)> = {
-            let mut stmt = self.conn.prepare("SELECT kind, id, ct FROM local_record")?;
-            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-                .collect::<rusqlite::Result<_>>()?
-        };
-        let source = Connection::open_with_flags(src, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        {
-            let backup = rusqlite::backup::Backup::new(&source, &mut self.conn)?;
-            backup.run_to_completion(256, std::time::Duration::ZERO, None)?;
-        }
-        self.clock = None;
-        self.migrate()?;
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute("DELETE FROM meta", [])?;
-        for (key, value) in &meta {
-            tx.execute(
-                "INSERT INTO meta (key, value) VALUES (?1, ?2)",
-                params![key, value],
-            )?;
-        }
-        tx.execute("DELETE FROM local_record", [])?;
-        for (kind, id, ct) in &local {
-            tx.execute(
-                "INSERT INTO local_record (kind, id, ct) VALUES (?1, ?2, ?3)",
-                params![kind, id, ct],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
     /// SQLite 的完整性检查（`PRAGMA integrity_check`）：返回发现的问题，没有问题时为空。
     /// 用于验收中的 `kill -9` 测试与诊断。
     ///
@@ -893,39 +850,41 @@ impl Store {
     /// 写入一个附件与它的全部块（一个事务）。
     ///
     /// # Errors
-    /// 块数与 `row.chunk_count` 不符、超过 [`MAX_ATTACHMENT_CHUNKS`] 或某块超过信封上限时返回
-    /// [`StoreError::TooLarge`]；附件已存在时返回 SQLite 错误。
+    /// 块数与 `row.chunk_count` 不符、超过 [`MAX_ATTACHMENT_CHUNKS`]，或某部分的长度不符合 `spec/crypto.md` §8.9
+    /// （[`ATTACHMENT_KEY_CT_LEN`]、[`MAX_ATTACHMENT_META_CT_LEN`]、[`ATTACHMENT_CHUNK_CT_LEN`]）时返回
+    /// [`StoreError::TooLarge`]；附件已存在时返回 SQLite 错误。写入与读取用同一套规则。
     pub fn insert_attachment(&mut self, row: &AttachmentRow, chunks: &[Vec<u8>]) -> Result<()> {
-        let env = keevo_crypto::MAX_ENVELOPE_LEN;
-        if chunks.len() > MAX_ATTACHMENT_CHUNKS
-            || usize::try_from(row.chunk_count).ok() != Some(chunks.len())
-            || row.wrapped_key_ct.len() > env
-            || row.meta_ct.len() > env
-            || chunks.iter().any(|c| c.len() > env)
-        {
-            return Err(StoreError::TooLarge);
-        }
+        check_attachment(row, chunks)?;
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute(
-            "INSERT INTO attachment (id, item_id, wrapped_key_ct, meta_ct, chunk_count) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                row.id.as_bytes(),
-                row.item_id.as_bytes(),
-                row.wrapped_key_ct,
-                row.meta_ct,
-                row.chunk_count
-            ],
-        )?;
-        for (idx, ct) in (0u32..).zip(chunks) {
-            tx.execute(
-                "INSERT INTO attachment_chunk (attachment_id, idx, ct) VALUES (?1, ?2, ?3)",
-                params![row.id.as_bytes(), idx, ct],
-            )?;
-        }
+        insert_attachment_tx(&tx, row, chunks)?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// 删除无主的附件：所属条目没有任何修订，或全部头修订都是墓碑（已永久删除）。返回删除的个数。
+    /// 用于清理中断的写入留下的附件（第五轮预审 K6）；只看明文的修订图，不需要解锁。
+    ///
+    /// # Errors
+    /// SQLite 错误。
+    pub fn delete_orphan_attachments(&mut self) -> Result<usize> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let orphan = "SELECT a.id FROM attachment a WHERE NOT EXISTS (
+                        SELECT 1 FROM head h JOIN revision r ON r.rev_id = h.rev_id
+                        WHERE h.object_id = a.item_id AND r.deleted = 0)";
+        tx.execute(
+            &format!("DELETE FROM attachment_chunk WHERE attachment_id IN ({orphan})"),
+            [],
+        )?;
+        let n = tx.execute(
+            &format!("DELETE FROM attachment WHERE id IN ({orphan})"),
+            [],
+        )?;
+        tx.commit()?;
+        Ok(n)
     }
 
     /// 读取附件行与全部块（按序号）。读取之前在同一个读事务里检查长度（第二、三轮评审 G4、H3）。
@@ -933,18 +892,18 @@ impl Store {
     /// # Errors
     /// SQLite 错误；长度或块数不符时返回 [`StoreError::Corrupt`]。
     pub fn attachment(&self, id: &Id128) -> Result<Option<(AttachmentRow, Vec<Vec<u8>>)>> {
-        let env = i64::try_from(keevo_crypto::MAX_ENVELOPE_LEN).unwrap_or(i64::MAX);
         let tx = self.conn.unchecked_transaction()?;
+        // 各部分的长度按 §8.9 精确检查（第五轮预审 K3）：只在 WHERE 中计算 length()，不读入内容
         let bad: Option<i64> = tx
             .query_row(
-                "SELECT length(item_id) != 16 OR length(wrapped_key_ct) > ?2 OR length(meta_ct) > ?2
-                   OR chunk_count < 0 OR chunk_count > ?3
-                 FROM attachment WHERE id = ?1",
-                params![
-                    id.as_bytes(),
-                    env,
-                    i64::try_from(MAX_ATTACHMENT_CHUNKS).unwrap_or(i64::MAX)
-                ],
+                &format!(
+                    "SELECT length(item_id) != 16 OR length(wrapped_key_ct) != {ATTACHMENT_KEY_CT_LEN}
+                       OR length(meta_ct) < {min} OR length(meta_ct) > {MAX_ATTACHMENT_META_CT_LEN}
+                       OR chunk_count < 0 OR chunk_count > {MAX_ATTACHMENT_CHUNKS}
+                     FROM attachment WHERE id = ?1",
+                    min = keevo_crypto::MIN_ENVELOPE_LEN,
+                ),
+                params![id.as_bytes()],
                 |r| r.get(0),
             )
             .optional()?;
@@ -954,8 +913,15 @@ impl Store {
             Some(_) => return Err(StoreError::Corrupt("attachment exceeds its size limit")),
         }
         let (oversized, count): (i64, i64) = tx.query_row(
-            "SELECT coalesce(sum(length(ct) > ?2), 0), count(*) FROM attachment_chunk WHERE attachment_id = ?1",
-            params![id.as_bytes(), env],
+            &format!(
+                "SELECT coalesce(sum(length(c.ct) < {min} OR length(c.ct) > {ATTACHMENT_CHUNK_CT_LEN}
+                          OR (c.idx < a.chunk_count - 1 AND length(c.ct) != {ATTACHMENT_CHUNK_CT_LEN})), 0),
+                        count(*)
+                 FROM attachment_chunk c JOIN attachment a ON a.id = c.attachment_id
+                 WHERE c.attachment_id = ?1",
+                min = keevo_crypto::MIN_ENVELOPE_LEN,
+            ),
+            params![id.as_bytes()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         if oversized > 0 {
@@ -1165,10 +1131,79 @@ fn decode_ids(bytes: &[u8]) -> Result<Vec<Id128>> {
     bytes.chunks_exact(16).map(id_from).collect()
 }
 
+mod restore;
+pub use restore::BackupSummary;
+
 #[cfg(test)]
 mod tests;
 
 /// 在给定事务中写入一个修订（不提交）。
+/// 与修订一起写入的附件变化（[`Store::insert_revisions_with`]）。
+#[derive(Debug, Default)]
+pub struct AttachmentChanges<'a> {
+    /// 新增的附件与它们的块。
+    pub add: Vec<(&'a AttachmentRow, &'a [Vec<u8>])>,
+    /// 先删除这个条目的全部附件（永久删除）。
+    pub delete_all_of: Option<Id128>,
+}
+
+/// 附件各部分的长度（`spec/crypto.md` §8.9）。写入与读取用同一套规则，写进去的东西一定读得出来。
+fn check_attachment(row: &AttachmentRow, chunks: &[Vec<u8>]) -> Result<()> {
+    let min = keevo_crypto::MIN_ENVELOPE_LEN;
+    let last = chunks.len().saturating_sub(1);
+    if chunks.len() > MAX_ATTACHMENT_CHUNKS
+        || usize::try_from(row.chunk_count).ok() != Some(chunks.len())
+        || row.wrapped_key_ct.len() != ATTACHMENT_KEY_CT_LEN
+        || !(min..=MAX_ATTACHMENT_META_CT_LEN).contains(&row.meta_ct.len())
+        || chunks.iter().enumerate().any(|(i, c)| {
+            if i < last {
+                c.len() != ATTACHMENT_CHUNK_CT_LEN
+            } else {
+                !(min..=ATTACHMENT_CHUNK_CT_LEN).contains(&c.len())
+            }
+        })
+    {
+        return Err(StoreError::TooLarge);
+    }
+    Ok(())
+}
+
+fn insert_attachment_tx(
+    tx: &rusqlite::Transaction<'_>,
+    row: &AttachmentRow,
+    chunks: &[Vec<u8>],
+) -> Result<()> {
+    tx.execute(
+        "INSERT INTO attachment (id, item_id, wrapped_key_ct, meta_ct, chunk_count) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            row.id.as_bytes(),
+            row.item_id.as_bytes(),
+            row.wrapped_key_ct,
+            row.meta_ct,
+            row.chunk_count
+        ],
+    )?;
+    for (idx, ct) in (0u32..).zip(chunks) {
+        tx.execute(
+            "INSERT INTO attachment_chunk (attachment_id, idx, ct) VALUES (?1, ?2, ?3)",
+            params![row.id.as_bytes(), idx, ct],
+        )?;
+    }
+    Ok(())
+}
+
+fn delete_attachments_of(tx: &rusqlite::Transaction<'_>, item_id: &Id128) -> Result<()> {
+    tx.execute(
+        "DELETE FROM attachment_chunk WHERE attachment_id IN (SELECT id FROM attachment WHERE item_id = ?1)",
+        params![item_id.as_bytes()],
+    )?;
+    tx.execute(
+        "DELETE FROM attachment WHERE item_id = ?1",
+        params![item_id.as_bytes()],
+    )?;
+    Ok(())
+}
+
 fn insert_one(tx: &rusqlite::Transaction<'_>, row: &RevisionRow, stored: i64) -> Result<()> {
     // 父修订是集合：先排序去重，再计数与编码，与修订图的规则一致（第四轮评审 §5.2）
     let mut parents = row.parents.clone();

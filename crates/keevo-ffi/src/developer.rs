@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use keevo_core::secret_ref::reference_for;
-use keevo_core::ssh_agent::{AgentPolicy, policy_of};
+use keevo_core::ssh_agent::AgentPolicy;
 use keevo_core::{Edit, FieldData, FieldKind, ItemType, NewField, RecordKey, RecordValue};
 use keevo_service::agent::{LinkStatus, SshAgent, ensure_link, key_statuses};
 use keevo_service::cli::CliService;
@@ -320,10 +320,11 @@ impl KeevoVault {
         if !key.comment().is_empty() {
             set(None, "注释", key.comment(), FieldKind::Text);
         }
-        if policy_of(&view.doc).is_none() {
-            edits.push(Edit::SetSshAgent(Some(AgentPolicy::Ask)));
-        }
         vault.update_item(item_id, edits)?;
+        // 新生成或导入的密钥默认为每次确认（spec/ssh-agent.md §4.1）
+        if !vault.ssh_agent_policies()?.contains_key(&item_id) {
+            vault.set_ssh_agent_policy(item_id, Some(AgentPolicy::Ask))?;
+        }
         Ok(())
     }
 }
@@ -474,8 +475,7 @@ impl KeevoVault {
     ) -> Result<(), KeevoError> {
         let id = parse_id(&item_id)?;
         let policy = parse_policy(policy.as_deref())?;
-        self.vault()
-            .update_item(id, vec![Edit::SetSshAgent(policy)])?;
+        self.vault().set_ssh_agent_policy(id, policy)?;
         Ok(())
     }
 

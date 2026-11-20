@@ -89,6 +89,7 @@ pub(super) fn parse(data: &[u8], password: Option<&str>) -> Result<Parsed, Impor
     } else {
         data
     };
+    super::check_json_nodes(json)?;
     let file: ExportFile = serde_json::from_slice(json).map_err(|_| ImportError::NotRecognized)?;
     if file.format != FORMAT || file.version != VERSION {
         return Err(ImportError::NotRecognized);
@@ -101,9 +102,18 @@ pub(super) fn parse(data: &[u8], password: Option<&str>) -> Result<Parsed, Impor
             let sections: Vec<Option<usize>> = item.sections.iter().map(|s| b.section(s)).collect();
             for f in item.fields {
                 let section = f.section.and_then(|i| sections.get(i).copied().flatten());
+                // 恰好一种数据，且与字段类型一致（spec/export.md §2）；否则跳过这个字段并在备注中说明，
+                // 而不是让整次导入失败（第五轮预审 K20）
+                let text_kind = !matches!(
+                    f.kind,
+                    FieldKind::KvList | FieldKind::RecoveryCodes | FieldKind::Attachment
+                );
                 match (f.value, f.entries, f.codes) {
-                    (Some(v), _, _) => b.add(section, f.kind, &f.label, f.purpose, v.expose()),
-                    (None, Some(entries), _) => b.push(
+                    (None, None, None) => {}
+                    (Some(v), None, None) if text_kind => {
+                        b.add(section, f.kind, &f.label, f.purpose, v.expose());
+                    }
+                    (None, Some(entries), None) if f.kind == FieldKind::KvList => b.push(
                         section,
                         NewField {
                             kind: FieldKind::KvList,
@@ -121,7 +131,7 @@ pub(super) fn parse(data: &[u8], password: Option<&str>) -> Result<Parsed, Impor
                             ),
                         },
                     ),
-                    (None, None, Some(codes)) => b.push(
+                    (None, None, Some(codes)) if f.kind == FieldKind::RecoveryCodes => b.push(
                         section,
                         NewField {
                             kind: FieldKind::RecoveryCodes,
@@ -138,7 +148,7 @@ pub(super) fn parse(data: &[u8], password: Option<&str>) -> Result<Parsed, Impor
                             ),
                         },
                     ),
-                    _ => {}
+                    _ => b.skip_field(),
                 }
             }
             for t in &item.tags {
@@ -148,7 +158,7 @@ pub(super) fn parse(data: &[u8], password: Option<&str>) -> Result<Parsed, Impor
                 b.tag(&format!("Keevo · {}", vault.name));
             }
             b.favorite(item.favorite);
-            out.items.push(b.finish());
+            out.push(b.finish())?;
         }
     }
     Ok(out)

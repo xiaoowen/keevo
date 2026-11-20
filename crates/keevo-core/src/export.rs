@@ -46,11 +46,23 @@ pub struct Exported {
     pub count: usize,
 }
 
-/// 导出全部保险库，或 `only` 指定的一个。`password` 只用于 [`Format::Keevo`]（至少 10 个字符）。
+/// 导出密码是否可用（`docs/export.md`）：至少 [`MIN_EXPORT_PASSWORD_CHARS`] 个字符、不全是空白，强度达到"很强"
+/// （[`crate::strength::estimate`] 4 分）。导出文件只受这个密码保护，没有账户密钥这一层（第五轮预审 K4）。
+#[must_use]
+pub fn export_password_ok(password: &str) -> bool {
+    password.chars().count() >= MIN_EXPORT_PASSWORD_CHARS
+        && !password.trim().is_empty()
+        && crate::strength::estimate(password).score >= 4
+}
+
+/// 导出密码的最少字符数。
+pub const MIN_EXPORT_PASSWORD_CHARS: usize = 10;
+
+/// 导出全部保险库，或 `only` 指定的一个。`password` 只用于 [`Format::Keevo`]，必须满足 [`export_password_ok`]。
 /// 加密导出约需一秒（Argon2id），应在后台线程调用。
 ///
 /// # Errors
-/// 已锁定；保险库不存在；导出密码过短（[`CoreError::OutOfRange`]）；序列化或加密失败。
+/// 已锁定；保险库不存在；导出密码不满足要求（[`CoreError::OutOfRange`]）；序列化或加密失败。
 pub fn export(
     vault: &Vault,
     format: Format,
@@ -71,7 +83,7 @@ pub fn export(
         Format::Json => json(vaults)?,
         Format::Keevo => {
             let password = password.ok_or(CoreError::OutOfRange)?;
-            if password.chars().count() < 10 {
+            if !export_password_ok(password) {
                 return Err(CoreError::OutOfRange);
             }
             let plain = json(vaults)?;

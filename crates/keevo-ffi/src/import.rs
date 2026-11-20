@@ -108,15 +108,9 @@ impl KeevoVault {
         })?;
         // 先确认已解锁，再读文件
         self.vault().vaults()?;
-        let meta =
-            std::fs::metadata(&path).map_err(|_| import_error(ImportError::NotRecognized))?;
-        if meta.len() > u64::try_from(import::MAX_FILE_LEN).unwrap_or(u64::MAX) {
-            return Err(import_error(ImportError::TooLarge));
-        }
-        let data = zeroize::Zeroizing::new(
-            std::fs::read(Path::new(&path))
-                .map_err(|_| import_error(ImportError::NotRecognized))?,
-        );
+        let data = crate::read_bounded(&path, import::MAX_FILE_LEN)
+            .map_err(|_| import_error(ImportError::NotRecognized))?
+            .ok_or_else(|| import_error(ImportError::TooLarge))?;
         let password = password.map(zeroize::Zeroizing::new);
         let parsed = import::parse(source, &data, password.as_deref().map(String::as_str))
             .map_err(import_error)?;
@@ -224,7 +218,7 @@ impl KeevoVault {
         Ok(moved)
     }
 
-    /// 导出到 `path`（新文件，权限 0600）。`format`：`keevo`（需要 `export_password`，至少 10 个字符）、
+    /// 导出到 `path`（新文件，权限 0600）。`format`：`keevo`（需要 `export_password`：至少 10 个字符、不全是空白、强度"很强"）、
     /// `json`、`csv`。`vault_id` 为 `None` 时导出全部保险库。明文格式要求 2 分钟内重新验证过用户
     /// （[`KeevoVault::reverify`]），且每次验证只能导出一次。返回导出的条目数。加密导出约需一秒。
     ///
@@ -277,6 +271,9 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let tmp = dir.join(format!(".{name}.keevo-tmp"));
+    // 上次导出中途崩溃留下的临时文件（可能是明文）：先删掉，否则它一直留在用户选择的目录中，
+    // 而且 create_new 会让这次导出失败（第五轮预审 K22）
+    let _ = std::fs::remove_file(&tmp);
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)

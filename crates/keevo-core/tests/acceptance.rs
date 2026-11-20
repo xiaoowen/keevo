@@ -246,7 +246,7 @@ fn no_plaintext_secrets_on_disk() {
         &v,
         keevo_core::export::Format::Keevo,
         None,
-        Some("export password"),
+        Some("plum orbit cactus velvet 41"),
     )
     .unwrap();
     std::fs::write(dir.join("export.keevo-export"), &*export.bytes).unwrap();

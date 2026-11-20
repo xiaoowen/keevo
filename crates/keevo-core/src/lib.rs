@@ -11,6 +11,8 @@ pub mod generator;
 pub mod import;
 pub mod local;
 pub mod otp;
+#[cfg(test)]
+mod r5_tests;
 pub mod search;
 pub mod secret_ref;
 pub mod security;

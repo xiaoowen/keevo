@@ -1,5 +1,12 @@
 use super::*;
 
+struct Cleanup(std::path::PathBuf);
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 fn id(n: u8) -> Id128 {
     Id128::from_bytes([n; 16])
 }
@@ -462,12 +469,6 @@ fn backup_and_restore() {
         Id128::random().unwrap().to_hex()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    struct Cleanup(std::path::PathBuf);
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
     let _cleanup = Cleanup(dir.clone());
     let mut store = Store::open(&dir.join("vault.sqlite")).unwrap();
     store
@@ -483,7 +484,7 @@ fn backup_and_restore() {
     let backup = dir.join("one.keevo-backup");
     store.backup_to(&backup).unwrap();
     assert!(store.backup_to(&backup).is_err(), "不覆盖已有的文件");
-    assert_eq!(Store::inspect_backup(&backup).unwrap().id, id(1));
+    assert_eq!(Store::inspect_backup(&backup).unwrap().account.id, id(1));
 
     store.insert_revision(&rev(2, &[1])).unwrap();
     store.set_meta("device_id", &[7; 16]).unwrap();
@@ -524,26 +525,88 @@ fn backup_and_restore() {
 #[test]
 fn attachments_round_trip_and_checks() {
     let mut store = Store::open_in_memory().unwrap();
+    let full = ATTACHMENT_CHUNK_CT_LEN;
+    let min = keevo_crypto::MIN_ENVELOPE_LEN;
     let row = AttachmentRow {
         id: id(70),
         item_id: id(50),
-        wrapped_key_ct: vec![1; 80],
-        meta_ct: vec![2; 300],
+        wrapped_key_ct: vec![1; ATTACHMENT_KEY_CT_LEN],
+        meta_ct: vec![2; min],
         chunk_count: 2,
     };
     assert_eq!(
-        store.insert_attachment(&row, &[vec![3; 10]]),
+        store.insert_attachment(&row, &[vec![3; full]]),
         Err(StoreError::TooLarge),
         "块数必须与 chunk_count 一致"
     );
+    // 各部分的长度按 §8.9 精确检查（第五轮预审 K3）
+    for (bad, what) in [
+        (
+            vec![vec![3; full - 1], vec![4; min]],
+            "非最后一块必须是完整长度",
+        ),
+        (
+            vec![vec![3; full], vec![4; full + 1]],
+            "最后一块不超过完整长度",
+        ),
+        (
+            vec![vec![3; full], vec![4; min - 1]],
+            "最后一块不短于最短的信封",
+        ),
+    ] {
+        assert_eq!(
+            store.insert_attachment(&row, &bad),
+            Err(StoreError::TooLarge),
+            "{what}"
+        );
+    }
+    for bad_row in [
+        AttachmentRow {
+            wrapped_key_ct: vec![1; ATTACHMENT_KEY_CT_LEN + 1],
+            ..row.clone()
+        },
+        AttachmentRow {
+            meta_ct: vec![2; MAX_ATTACHMENT_META_CT_LEN + 1],
+            ..row.clone()
+        },
+    ] {
+        assert_eq!(
+            store.insert_attachment(&bad_row, &[vec![3; full], vec![4; min]]),
+            Err(StoreError::TooLarge)
+        );
+    }
     store
-        .insert_attachment(&row, &[vec![3; 10], vec![4; 5]])
+        .insert_attachment(&row, &[vec![3; full], vec![4; min]])
         .unwrap();
     let (got, chunks) = store.attachment(&id(70)).unwrap().unwrap();
     assert_eq!(got, row);
-    assert_eq!(chunks, [vec![3; 10], vec![4; 5]]);
+    assert_eq!(chunks, [vec![3; full], vec![4; min]]);
     assert_eq!(store.attachments_of(&id(50)).unwrap(), [id(70)]);
     assert_eq!(store.attachment(&id(71)).unwrap(), None);
+    // 数据库中被改写的块：读入之前拒绝
+    for sql in [
+        format!(
+            "UPDATE attachment_chunk SET ct = zeroblob({}) WHERE idx = 1",
+            full + 1
+        ),
+        format!(
+            "UPDATE attachment_chunk SET ct = zeroblob({}) WHERE idx = 0",
+            full - 16
+        ),
+        format!(
+            "UPDATE attachment SET wrapped_key_ct = zeroblob({})",
+            ATTACHMENT_KEY_CT_LEN - 1
+        ),
+    ] {
+        let mut copy = Store::open_in_memory().unwrap();
+        copy.insert_attachment(&row, &[vec![3; full], vec![4; min]])
+            .unwrap();
+        copy.execute_for_tests_internal(&sql).unwrap();
+        assert!(
+            matches!(copy.attachment(&id(70)), Err(StoreError::Corrupt(_))),
+            "{sql}"
+        );
+    }
     // 少了一块：读取时发现
     store
         .execute_for_tests_internal("DELETE FROM attachment_chunk WHERE idx = 1")
@@ -555,6 +618,133 @@ fn attachments_round_trip_and_checks() {
     store.delete_attachment(&id(70)).unwrap();
     assert_eq!(store.attachment(&id(70)).unwrap(), None);
     assert!(store.attachments_of(&id(50)).unwrap().is_empty());
+}
+
+/// 恢复只认 Keevo 自己的 schema，逐行检查后导入新建的数据库（第五轮预审 K1、K2）。
+#[test]
+fn restore_rejects_tampered_backups() {
+    let dir = std::env::temp_dir().join(format!(
+        "keevo-restore-{}",
+        Id128::random().unwrap().to_hex()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _cleanup = Cleanup(dir.clone());
+    let mut store = Store::open(&dir.join("vault.sqlite")).unwrap();
+    store
+        .create_account(&AccountRow {
+            id: id(1),
+            format_version: 1,
+            epoch: 1,
+            kdf_params: vec![1; 29],
+            keyset_ct: vec![2; 400],
+        })
+        .unwrap();
+    store.insert_revision(&rev(1, &[])).unwrap();
+    store.insert_revision(&rev(2, &[1])).unwrap();
+    let full = ATTACHMENT_CHUNK_CT_LEN;
+    let min = keevo_crypto::MIN_ENVELOPE_LEN;
+    store
+        .insert_attachment(
+            &AttachmentRow {
+                id: id(70),
+                item_id: id(50),
+                wrapped_key_ct: vec![1; ATTACHMENT_KEY_CT_LEN],
+                meta_ct: vec![2; min],
+                chunk_count: 2,
+            },
+            &[vec![3; full], vec![4; min]],
+        )
+        .unwrap();
+    let good = dir.join("good.keevo-backup");
+    store.backup_to(&good).unwrap();
+    store.insert_revision(&rev(3, &[2])).unwrap();
+    store.put_local_record("pairing", &[1], &[9; 40]).unwrap();
+
+    let cases = [
+        (
+            "CREATE TRIGGER t AFTER INSERT ON head BEGIN DELETE FROM head WHERE rev_id = NEW.rev_id; END;",
+            "触发器",
+        ),
+        ("CREATE VIEW v AS SELECT * FROM head;", "视图"),
+        ("CREATE TABLE extra (x);", "多余的表不影响导入"),
+        ("DELETE FROM head;", "头修订由修订图重算"),
+        (
+            "UPDATE revision SET parents = zeroblob(16) WHERE rev_id = x'02020202020202020202020202020202';",
+            "缺少父修订",
+        ),
+        (
+            "UPDATE revision SET details_ct = zeroblob(17301600) WHERE rev_id = x'01010101010101010101010101010101';",
+            "超长的列",
+        ),
+        (
+            "UPDATE revision SET deleted = 1 WHERE rev_id = x'02020202020202020202020202020202';",
+            "墓碑带内容",
+        ),
+        (
+            "UPDATE attachment_chunk SET ct = zeroblob(4194304) WHERE idx = 0;",
+            "超长的块",
+        ),
+        ("DELETE FROM attachment_chunk WHERE idx = 1;", "少了一块"),
+        (
+            "UPDATE revision SET stored_ms = 9007199254740000;",
+            "保存时间不超过恢复前的有效时间",
+        ),
+        ("DELETE FROM account;", "没有账户"),
+    ];
+    for (i, (sql, what)) in cases.iter().enumerate() {
+        let copy = dir.join(format!("case-{i}.keevo-backup"));
+        std::fs::copy(&good, &copy).unwrap();
+        rusqlite::Connection::open(&copy)
+            .unwrap()
+            .execute_batch(sql)
+            .unwrap();
+        let accepted = matches!(
+            *what,
+            "多余的表不影响导入" | "头修订由修订图重算" | "保存时间不超过恢复前的有效时间"
+        );
+        let result = Store::inspect_backup(&copy).and_then(|_| store.restore_from(&copy));
+        assert_eq!(result.is_ok(), accepted, "{what}: {result:?}");
+        if accepted {
+            assert_eq!(head_ids(&store), [id(2)], "{what}");
+            let schema: i64 = store
+                .conn
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE name = 'extra'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                schema, 0,
+                "{what}：备份中的其他 schema 对象不进入当前数据库"
+            );
+            assert!(
+                store.effective_now().unwrap() < 9_007_199_254_740_000,
+                "{what}"
+            );
+            assert!(
+                store.attachment(&id(70)).unwrap().is_some(),
+                "{what}：附件随之恢复"
+            );
+        } else {
+            assert_eq!(
+                store.local_records("pairing").unwrap(),
+                [(vec![1], vec![9; 40])],
+                "{what}：失败时保持原样"
+            );
+        }
+        store
+            .insert_revision(&rev(10 + u8::try_from(i).unwrap(), &[]))
+            .ok();
+        assert!(store.integrity_check().unwrap().is_empty());
+    }
+    // 恢复之后没有遗留的临时数据库
+    let leftovers: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().contains(".restore-"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
 }
 
 #[test]

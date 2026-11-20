@@ -1282,17 +1282,22 @@ fn security_center() {
     assert!(f.vault.item_security(b.clone()).unwrap().unwrap().ignored);
 
     // 泄露检查：前缀交给界面查询，响应在这里比对
+    // 一个不同的密码，加上伪前缀补到 64 个（第五轮预审 K16）
     let prefixes = f.vault.prepare_breach_check().unwrap();
-    assert_eq!(prefixes.len(), 1, "只有一个不同的密码");
+    assert_eq!(prefixes.len(), keevo_core::security::BREACH_PREFIX_BUCKET);
     let hash: String = keevo_crypto::sha1_for_breach_check(b"hunter2")
         .iter()
         .map(|x| format!("{x:02X}"))
         .collect();
-    assert_eq!(prefixes[0], hash[..5]);
-    assert!(
-        f.vault
-            .record_breach_range(prefixes[0].clone(), format!("{}:17043\r\n", &hash[5..]))
-    );
+    assert!(prefixes.contains(&hash[..5].to_owned()));
+    for p in &prefixes {
+        let body = if *p == hash[..5] {
+            format!("{}:17043\r\n", &hash[5..])
+        } else {
+            String::new()
+        };
+        assert!(f.vault.record_breach_range(p.clone(), body));
+    }
     let report = f.vault.run_security_check().unwrap();
     assert!(report.breach_checked);
     assert!(
@@ -1462,7 +1467,7 @@ fn import_and_export() {
                 enc.clone(),
                 "keevo".into(),
                 None,
-                Some("export password".into())
+                Some("plum orbit cactus velvet 41".into())
             )
             .unwrap(),
         6
@@ -1471,7 +1476,11 @@ fn import_and_export() {
     let other = Fixture::new();
     let preview = other
         .vault
-        .prepare_import(enc, "keevo".into(), Some("export password".into()))
+        .prepare_import(
+            enc,
+            "keevo".into(),
+            Some("plum orbit cactus velvet 41".into()),
+        )
         .unwrap();
     assert_eq!(preview.total, 6);
     other

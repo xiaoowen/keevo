@@ -24,6 +24,7 @@ fn array<'a>(v: &'a Value, key: &str) -> impl Iterator<Item = &'a Value> {
 
 pub(super) fn parse(data: &[u8]) -> Result<Parsed, ImportError> {
     let json = zip::read(data, "export.data", MAX_DATA)?.ok_or(ImportError::NotRecognized)?;
+    super::check_json_nodes(&json)?;
     let doc: Value = serde_json::from_slice(&json).map_err(|_| ImportError::Malformed)?;
     drop(json);
     let accounts = doc
@@ -45,7 +46,7 @@ pub(super) fn parse(data: &[u8]) -> Result<Parsed, ImportError> {
                 if str_of(item, "state") == "archived" {
                     b.tag("已归档");
                 }
-                out.items.push(b.finish());
+                out.push(b.finish())?;
             }
         }
     }

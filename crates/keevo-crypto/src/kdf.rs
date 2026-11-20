@@ -156,10 +156,7 @@ impl KdfParams {
     /// 同一进程内的 KDF 一律串行执行（`spec/crypto.md` §5.3）：无论有多少个保险库实例，
     /// 同一时刻最多只有一次 Argon2 占用内存。
     pub(crate) fn argon2id(&self, password: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
-        static KDF_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _gate = KDF_GATE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _gate = kdf_gate();
         let params =
             Params::new(self.m_kib, self.t, self.p, Some(32)).map_err(|_| CryptoError::Kdf)?;
         let mut out = Zeroizing::new([0u8; 32]);
@@ -168,6 +165,15 @@ impl KdfParams {
             .map_err(|_| CryptoError::Kdf)?;
         Ok(out)
     }
+}
+
+/// 进程级的 KDF 互斥（`spec/crypto.md` §5.3）：Keevo 自己的 Argon2id 与导入 Bitwarden 文件时的 Argon2id、
+/// PBKDF2 都经过它，同一时刻最多只有一次 KDF 占用内存（第五轮预审 K21）。
+pub(crate) fn kdf_gate() -> std::sync::MutexGuard<'static, ()> {
+    static KDF_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    KDF_GATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]

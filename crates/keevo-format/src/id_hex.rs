@@ -51,6 +51,45 @@ pub(crate) mod option {
     }
 }
 
+/// 可选的 SHA-256 摘要（64 个小写十六进制字符），用于附件引用的 `sha256`（`spec/vault-format.md` §2.5）。
+pub(crate) mod sha256_option {
+    use super::{Deserialize, Deserializer, Serializer, nibble};
+    use core::fmt::Write as _;
+
+    pub(crate) fn serialize<S: Serializer>(d: &Option<[u8; 32]>, s: S) -> Result<S::Ok, S::Error> {
+        match d {
+            Some(d) => {
+                let mut hex = String::with_capacity(64);
+                for b in d {
+                    let _ = write!(hex, "{b:02x}");
+                }
+                s.serialize_some(&hex)
+            }
+            None => s.serialize_none(),
+        }
+    }
+
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<[u8; 32]>, D::Error> {
+        Option::<String>::deserialize(d)?
+            .map(|s| parse(&s).ok_or_else(|| serde::de::Error::custom("invalid sha256")))
+            .transpose()
+    }
+
+    fn parse(s: &str) -> Option<[u8; 32]> {
+        let bytes = s.as_bytes();
+        if bytes.len() != 64 {
+            return None;
+        }
+        let mut out = [0u8; 32];
+        for (slot, pair) in out.iter_mut().zip(bytes.chunks_exact(2)) {
+            *slot = (nibble(*pair.first()?)? << 4) | nibble(*pair.get(1)?)?;
+        }
+        Some(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

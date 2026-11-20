@@ -233,13 +233,25 @@ fn write_dedupe_and_round_trip() {
     assert_eq!(dup, [true, false, false, false, false, true]);
     let chrome = parse(Source::Chrome, &sample("chrome.csv"), None).unwrap();
     assert_eq!(duplicates(v, &chrome.items).unwrap(), [true, false]);
+    // 主机、用户名、密码相同，但带有已有登录没有的内容：不算重复，否则跳过它会丢掉这些内容（第五轮预审 K8）
+    let mut extra = chrome.items[0].clone();
+    extra.fields.push((
+        None,
+        NewField {
+            kind: FieldKind::Multiline,
+            label: "备注".into(),
+            purpose: Some(Purpose::Notes),
+            data: FieldData::Text(SecretString::new("只在新文件里的备注".into())),
+        },
+    ));
+    assert_eq!(duplicates(v, &[extra]).unwrap(), [false]);
 
     // 导出为 Keevo 加密文件，再导入：内容一致
     let exported = crate::export::export(
         v,
         crate::export::Format::Keevo,
         None,
-        Some("export password"),
+        Some("plum orbit cactus velvet 41"),
     )
     .unwrap();
     assert_eq!(exported.count, 6);
@@ -252,7 +264,12 @@ fn write_dedupe_and_round_trip() {
         parse(Source::Keevo, &exported.bytes, Some("export passworD")).err(),
         Some(ImportError::WrongPassword)
     );
-    let back = parse(Source::Keevo, &exported.bytes, Some("export password")).unwrap();
+    let back = parse(
+        Source::Keevo,
+        &exported.bytes,
+        Some("plum orbit cactus velvet 41"),
+    )
+    .unwrap();
     assert_eq!(back.items.len(), 6);
     let gh2 = by_title(&back, "GitHub");
     assert_eq!(field(gh2, "密码"), Some("Tr0ub4dor&3-horse"));
@@ -265,11 +282,19 @@ fn write_dedupe_and_round_trip() {
             .count()
             >= 2
     );
-    assert_eq!(
-        crate::export::export(v, crate::export::Format::Keevo, None, Some("short")).err(),
-        Some(crate::CoreError::OutOfRange),
-        "导出密码至少 10 个字符"
-    );
+    for weak in [
+        "short",
+        "          ",
+        "aaaaaaaaaa",
+        "password123",
+        "export password",
+    ] {
+        assert_eq!(
+            crate::export::export(v, crate::export::Format::Keevo, None, Some(weak)).err(),
+            Some(crate::CoreError::OutOfRange),
+            "导出密码至少 10 个字符、不全是空白、强度达到很强：{weak:?}"
+        );
+    }
 
     // 明文 JSON 与 CSV
     let json = crate::export::export(v, crate::export::Format::Json, None, None).unwrap();
@@ -443,4 +468,21 @@ fn imports_lose_no_fields() {
     }
     // 换了写法的值：日期、年月
     assert!(text.contains("2023-11-14") && text.contains("2029-03"));
+}
+
+/// Keevo 导出文件中数据与字段类型不符的字段：跳过并在备注中说明，其余照常导入（第五轮预审 K20）。
+#[test]
+fn keevo_export_mismatched_fields_are_skipped() {
+    let doc = br#"{"format":"keevo-export","version":1,"exported_at":"x","vaults":[{"name":"v","items":[{"type":"login","title":"t","fields":[
+        {"kind":"text","label":"user","purpose":"username","value":"octocat"},
+        {"kind":"kv_list","label":"env","value":"x"},
+        {"kind":"attachment","label":"a","value":"x"},
+        {"kind":"text","label":"two","value":"x","codes":[]},
+        {"kind":"recovery_codes","label":"c","entries":[]}
+    ]}]}]}"#;
+    let parsed = parse(Source::Keevo, doc, None).unwrap();
+    let item = &parsed.items[0];
+    assert_eq!(item.text_of(Purpose::Username), Some("octocat"));
+    let notes = item.text_of(Purpose::Notes).unwrap();
+    assert!(notes.contains("4 个字段的格式不对"), "{notes}");
 }

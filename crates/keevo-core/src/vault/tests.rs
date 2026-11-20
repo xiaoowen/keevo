@@ -983,3 +983,82 @@ fn local_records() {
         "pk-b 已删除，pk-c 解不开"
     );
 }
+
+/// SSH Agent 的策略存在本机记录中（第五轮预审 K17）：M1.4 写在条目属性中的策略在解锁时迁移一次；
+/// 之后恢复一份带旧属性的备份，授权也不会变宽；永久删除时本机授权随之删除。
+#[test]
+fn ssh_agent_policy_is_local_and_survives_restore() {
+    use crate::ssh_agent::{ATTRIBUTE, AgentPolicy};
+    let dir = TempDir::new();
+    let (mut v, sk) = Vault::create(&dir.db(), "pw", fast_params()).unwrap();
+    let vault_id = v.vaults().unwrap()[0].id;
+    let key = v
+        .create_item(vault_id, ItemType::SshKey, "部署密钥", vec![])
+        .unwrap();
+    // 模拟 M1.4 的数据：策略写在条目属性中，尚未迁移
+    v.revise(key, |doc, hlc, rev| {
+        Ok(doc.set(
+            RecordKey::attr(ATTRIBUTE),
+            RecordValue::Text("unlocked".into()),
+            hlc,
+            rev,
+        )?)
+    })
+    .unwrap();
+    v.store
+        .execute_for_tests("DELETE FROM meta WHERE key = 'ssh_agent_local'")
+        .unwrap();
+    let old_backup = dir.0.join("old.keevo-backup");
+    v.backup_to(&old_backup).unwrap();
+
+    v.lock();
+    v.unlock("pw", &sk).unwrap();
+    assert_eq!(
+        v.ssh_agent_policies().unwrap().get(&key),
+        Some(&AgentPolicy::Unlocked)
+    );
+    assert!(
+        v.item(key)
+            .unwrap()
+            .doc
+            .get(&RecordKey::attr(ATTRIBUTE))
+            .is_none(),
+        "迁移后条目中不再有这个属性"
+    );
+
+    // 用户收紧授权，然后恢复迁移之前的备份：条目属性回来了，但本机授权不随之回退
+    v.set_ssh_agent_policy(key, Some(AgentPolicy::Ask)).unwrap();
+    crate::backup::restore(
+        &mut v,
+        &old_backup,
+        &dir.0.join("backups"),
+        1_795_105_920_000,
+    )
+    .unwrap();
+    v.unlock("pw", &sk).unwrap();
+    assert!(
+        v.item(key)
+            .unwrap()
+            .doc
+            .get(&RecordKey::attr(ATTRIBUTE))
+            .is_some()
+    );
+    assert_eq!(
+        v.ssh_agent_policies().unwrap().get(&key),
+        Some(&AgentPolicy::Ask),
+        "恢复不放宽授权"
+    );
+
+    // 永久删除：本机授权随之删除
+    v.trash_item(key).unwrap();
+    v.purge_item(key).unwrap();
+    assert!(v.ssh_agent_policies().unwrap().is_empty());
+    // 不是 SSH 密钥的条目不能设置
+    let login = v
+        .create_item(vault_id, ItemType::Login, "x", vec![])
+        .unwrap();
+    assert_eq!(
+        v.set_ssh_agent_policy(login, Some(AgentPolicy::Ask)).err(),
+        Some(CoreError::NotFound)
+    );
+}

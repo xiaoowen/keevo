@@ -195,11 +195,17 @@ impl ItemDoc {
         Ok(doc)
     }
 
-    /// 文档的版本（`spec/vault-format.md` §2.5）：任何记录版本（含并发版本）是附件字段时为 2，否则为 1。
-    /// 没有附件的条目仍按 v1 编码，旧版本的 Keevo 照常读取。
+    /// 文档的版本（`spec/vault-format.md` §2.5）：任何记录版本（含并发版本）的字段类型是 `attachment`、
+    /// 或数据是附件引用时为 2，否则为 1。没有附件的条目仍按 v1 编码，旧版本的 Keevo 照常读取。
+    ///
+    /// 两个条件都看：`"v":1` 而字段类型与数据只有一方是附件的文档不是规范编码，返回 `malformed`，与 v1 读取方
+    /// 对同一文档的结果相同（第五轮预审 K11）。
     #[must_use]
     pub fn version(&self) -> u32 {
-        let is_attachment = |v: &crate::RecordVersion| matches!(&v.value, Some(crate::RecordValue::Field(f)) if f.kind == FieldKind::Attachment);
+        let is_attachment = |v: &crate::RecordVersion| {
+            matches!(&v.value, Some(crate::RecordValue::Field(f))
+                if f.kind == FieldKind::Attachment || matches!(f.data, crate::FieldData::Attachment(_)))
+        };
         let any = self.records.values().any(is_attachment)
             || self.concurrent.values().flatten().any(is_attachment);
         if any { ITEM_DETAILS_V2 } else { FORMAT_VERSION }

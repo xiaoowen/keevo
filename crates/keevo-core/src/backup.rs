@@ -175,6 +175,11 @@ pub fn create(vault: &Vault, dir: &Path, kind: Kind, now_ms: u64) -> Result<Back
     }
     vault.backup_to(&path)?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(io)?;
+    // 文件名可以被改动；备份内另记一份创建时间，恢复时以它为准（第五轮预审 K17）
+    if let Err(e) = keevo_store::Store::mark_backup(&path, now_ms) {
+        let _ = std::fs::remove_file(&path);
+        return Err(e.into());
+    }
     let size = std::fs::metadata(&path).map_err(io)?.len();
     Ok(Backup {
         path,
@@ -184,13 +189,24 @@ pub fn create(vault: &Vault, dir: &Path, kind: Kind, now_ms: u64) -> Result<Back
     })
 }
 
+/// 文件名时间晚于"现在"这么多的文件不参与清理：它们不是这台设备刚写的（同步盘中的其他写入，或曾经的时钟错误）。
+pub const FUTURE_SLACK_MS: u64 = 60 * 60 * 1000;
+
 /// 只保留最新的 `keep` 份，删除更早的。返回删除的份数。
+///
+/// 文件名时间晚于 `now_ms` 超过 [`FUTURE_SLACK_MS`] 的文件既不计入、也不删除，否则这样的文件会让每次清理都删掉
+/// 刚刚创建的真实备份（第五轮预审 K7）。
 ///
 /// # Errors
 /// 文件无法删除。
-pub fn prune(dir: &Path, keep: usize) -> Result<usize> {
+pub fn prune(dir: &Path, keep: usize, now_ms: u64) -> Result<usize> {
     let mut removed = 0usize;
-    for b in list(dir).into_iter().skip(keep.max(1)) {
+    let limit = now_ms.saturating_add(FUTURE_SLACK_MS);
+    for b in list(dir)
+        .into_iter()
+        .filter(|b| b.created_ms <= limit)
+        .skip(keep.max(1))
+    {
         std::fs::remove_file(&b.path).map_err(io)?;
         removed = removed.saturating_add(1);
     }
@@ -309,6 +325,13 @@ mod tests {
         assert!(auto_due(&backups, t0 + day));
         let again = create(&v, &backups, Kind::Auto, t0).unwrap();
         assert_ne!(again.path, first.path, "同一秒内不覆盖");
+        // 备份内另记一份创建时间，不依赖文件名（第五轮预审 K17）
+        assert_eq!(
+            keevo_store::Store::inspect_backup(&first.path)
+                .unwrap()
+                .created_ms,
+            Some(t0)
+        );
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&first.path).unwrap().permissions().mode() & 0o777;
@@ -338,7 +361,7 @@ mod tests {
         assert_eq!(listed.len(), 3);
         assert_eq!(listed[0].kind, Kind::Restore, "新的在前");
 
-        assert_eq!(prune(&backups, 1).unwrap(), 2);
+        assert_eq!(prune(&backups, 1, t0 + 10_000).unwrap(), 2);
         assert_eq!(list(&backups).len(), 1);
         let junk = dir.join("junk.keevo-backup");
         std::fs::write(&junk, b"junk").unwrap();

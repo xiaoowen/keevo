@@ -1816,6 +1816,31 @@ fn peer_policy() -> Result<keevo_service::PeerPolicy, KeevoError> {
     Ok(keevo_service::PeerPolicy::CodeRequirement(requirement))
 }
 
+/// 读取一个普通文件，至多 `limit` 字节：在打开的同一个句柄上检查类型与大小，并且最多读 `limit + 1` 字节，
+/// 检查与读取之间文件被替换或变大都不会读入超过上限的数据（第五轮预审 K21）。
+/// 返回 `Ok(None)` 表示超过上限。
+fn read_bounded(path: &str, limit: usize) -> std::io::Result<Option<Zeroizing<Vec<u8>>>> {
+    use std::io::Read as _;
+    let file = std::fs::File::open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+    }
+    let limit64 = u64::try_from(limit).unwrap_or(u64::MAX);
+    if meta.len() > limit64 {
+        return Ok(None);
+    }
+    let mut data = Zeroizing::new(Vec::with_capacity(
+        usize::try_from(meta.len()).unwrap_or(0).min(limit),
+    ));
+    file.take(limit64.saturating_add(1))
+        .read_to_end(&mut data)?;
+    if data.len() > limit {
+        return Ok(None);
+    }
+    Ok(Some(data))
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

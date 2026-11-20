@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use keevo_core::ssh_agent::AgentPolicy;
-use keevo_core::{Edit, FieldData, FieldKind, ItemType, NewField, Vault};
+use keevo_core::{FieldData, FieldKind, ItemType, NewField, Vault};
 use keevo_crypto::{Id128, KdfParams};
 use keevo_ipc::cli::{
     CLI_CLIENT, CLI_PROTOCOL_VERSION, ClientHello, ErrorBody, ItemResult, ItemsResult, Request,
@@ -289,9 +289,7 @@ fn add_key(env: &Env, title: &str, policy: Option<AgentPolicy>) -> (Id128, Strin
             }],
         )
         .unwrap();
-    vault
-        .update_item(id, vec![Edit::SetSshAgent(policy)])
-        .unwrap();
+    vault.set_ssh_agent_policy(id, policy).unwrap();
     (id, key.public_key().to_line(""))
 }
 

@@ -27,16 +27,9 @@ impl KeevoVault {
         path: String,
     ) -> Result<AttachmentEntry, KeevoError> {
         let id = parse_id(&item_id)?;
-        let meta = std::fs::metadata(&path).map_err(|_| attachment_error("unreadable"))?;
-        if !meta.is_file() {
-            return Err(attachment_error("unreadable"));
-        }
-        if meta.len() > u64::try_from(MAX_ATTACHMENT_LEN).unwrap_or(u64::MAX) {
-            return Err(attachment_error("too_large"));
-        }
-        let data = zeroize::Zeroizing::new(
-            std::fs::read(&path).map_err(|_| attachment_error("unreadable"))?,
-        );
+        let data = crate::read_bounded(&path, MAX_ATTACHMENT_LEN)
+            .map_err(|_| attachment_error("unreadable"))?
+            .ok_or_else(|| attachment_error("too_large"))?;
         let name = Path::new(&path)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())

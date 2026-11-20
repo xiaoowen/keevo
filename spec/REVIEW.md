@@ -7,6 +7,34 @@
 - **预计时间**：核心部分（§3 的必读项）约 1 天；全部约 2–3 天
 - **请在反馈中注明你评审时的提交哈希**（`git rev-parse HEAD`）
 
+## 0. 第五轮评审（2026-11-20）：M1.5 新增的草案格式
+
+这一轮只评审 M1.5 新增、尚未冻结的格式，以及处理不可信输入的新代码。评审通过、处理完发现后，这些草案并入冻结清单。
+
+**预审**：正式评审之前，作者先用 Claude 子代理做了一轮预审，并修复了它发现的问题：[报告](../docs/reviews/2026-11-20-pre-review.md)，[处理记录](../docs/reviews/2026-11-20-pre-review-response.md)。子代理与作者是同一个模型，盲区相关，所以预审不能代替这一轮。请按修复之后的版本评审；也请检验这些修复是否到位，尤其是恢复（K1、K2）与附件的回收（K5、K6、K14）。§1–§7 是 1.0 冻结时的评审说明，背景与威胁模型仍然适用；§5 的"已知问题"表反映的是 1.0 冻结时的状态，以 [docs/roadmap.md](../docs/roadmap.md) 为准。
+
+| 对象 | 规范 | 实现 | 优先级 |
+|---|---|---|---|
+| 附件（分块加密） | [crypto.md](crypto.md) §8.9、[revisions.md](revisions.md) §7.3（回收） | `crates/keevo-core/src/attachment.rs`（`open_parts`）、`vault.rs` 的 `add_attachment` / `attachment_data` / `collect_attachments` / `rebuild_item` / `purge_item`、`crates/keevo-store`（schema v5、`attachment_chunk`、`insert_revisions_with`）；独立实现 `spec/reference/generate_vectors.py` 与向量 `spec/test-vectors/attachment-v1.json` | **必读** |
+| 条目详情 v2（附件引用） | [vault-format.md](vault-format.md) §2.5 | `crates/keevo-format`；独立实现 `spec/reference/format_vectors.py` 与向量 `spec/test-vectors/vault-format-v2.json` | **必读** |
+| 导出文件 | [export.md](export.md) | `crates/keevo-crypto/src/export.rs`、`crates/keevo-core/src/export.rs`、`import/keevo.rs`、`crates/keevo-ffi/src/import.rs`（明文导出前的重新验证） | **必读** |
+| 备份与恢复 | [docs/sync.md](../docs/sync.md) §2"本地备份" | `crates/keevo-core/src/backup.rs`、`crates/keevo-store/src/restore.rs`（`inspect_backup` / `restore_from`） | **必读** |
+| 导入（不可信文件） | [docs/product.md](../docs/product.md) §5.7 | `crates/keevo-core/src/import/`（自带的 zip 读取、CSV、1PUX、Bitwarden JSON）、`crates/keevo-crypto/src/bitwarden.rs`（有密码保护的 Bitwarden 导出的解密） | 推荐 |
+| 泄露检查（联网） | [docs/governance.md](../docs/governance.md) §5 | `crates/keevo-core/src/security.rs` 的 `Breaches`、`crates/keevo-ffi/src/security.rs`、`apps/macos/Sources/KeevoUI/SecurityCenter.swift` 的 `fetchRange` | 推荐 |
+| SSH Agent 策略的存放 | [ssh-agent.md](ssh-agent.md) §4.1 | `crates/keevo-core/src/vault.rs` 的 `ssh_agent_policies` / `set_ssh_agent_policy` / `migrate_ssh_agent_policies` | 推荐 |
+
+**这一轮最希望你回答的问题**（成立 / 不成立 / 有条件成立，并说明理由）：
+
+- **A1 附件的绑定**：块序号在 `part_index`、总块数在 `binding`、`rev_id` 为零（附件不可变）。能写入数据库或同步文件夹、但没有密钥的攻击者，能否调换、截断、追加、重放块，把一个附件的块或元数据移植到另一个附件、另一个条目或另一个保险库，或让读取返回与写入时不同的内容而不被发现？`rev_id` 为零是否留下了问题？
+- **A2 附件的回收与删除**：删除附件字段不删内容，条目永久删除或历史清理后回收。是否存在内容被提前删除（数据丢失）或永远不被删除（秘密残留）的路径？
+- **V1 条目详情 v2**：版本由内容决定（有附件字段为 2，否则为 1）。接受集合与 v1 的关系是否严密：同一内容是否只有一种合法编码？v1 读取方遇到 v2 文档时的行为是否正确？合并（revisions.md）在 v1 与 v2 头修订混合时是否仍然确定？
+- **E1 导出文件**：Argon2id + HKDF + XChaCha20-Poly1305，AAD 为全部头部，拒绝超出本机预算的 KDF 参数。是否足够？导出密码要求强度"很强"（zxcvbn 4 分），是否足够？导出前的重新验证是否有绕过？
+- **B1 恢复与本机状态**：备份视为不可信输入：拒绝触发器、视图与虚拟表，逐行导入 Keevo 新建的数据库，头修订由修订图重算，保存时间不超过恢复前的有效时间，最后一次性换入。保留恢复前的 `meta` 与 `local_record`（配对、授权、SSH Agent 策略、设备 ID、HLC）。能改写备份文件、但没有密钥的人，还能做到什么？是否仍有已撤销的配对或授权复活、清理提前生效的路径？只接受同一账户的备份是否足够？
+- **I1 不可信的导入文件**：zip（CRC、大小上限、Deflate 炸弹）、CSV、JSON、Bitwarden 加密导出的解析，能否导致 panic、过量内存或 CPU、或静默丢失字段？Bitwarden 的 KDF 参数上限是否合理？
+- **H1 泄露检查**：只发送 SHA-1 的前 5 位，请求带 `Add-Padding`，响应在 Rust 中比对。对 HIBP 运营方或网络观察者，还泄露了什么（例如保险库中密码的个数、修改密码的时机）？是否需要进一步缓解？
+
+**不必报告**：KeePass KDBX 4 导入、ECDSA 与 RSA 尚未支持；导出文件不含附件；备份内容没有认证（M2 随同步格式定义，见 docs/sync.md §2）；预审中已列出、处理记录中说明暂不处理的项。
+
 ## 1. Keevo 是什么
 
 Keevo 是开源、本地优先的个人密码与开发者凭证保险库。首发 macOS 与 Chrome 扩展。

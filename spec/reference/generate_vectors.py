@@ -8,7 +8,7 @@
 
 用法：
   python3 -m venv .venv && .venv/bin/pip install --require-hashes -r spec/reference/requirements.txt
-  .venv/bin/python spec/reference/generate_vectors.py            # 写入 spec/test-vectors/crypto-v1.json
+  .venv/bin/python spec/reference/generate_vectors.py            # 写入 spec/test-vectors/crypto-v1.json 与 attachment-v1.json
   .venv/bin/python spec/reference/generate_vectors.py --check    # 只校验已提交的文件是否一致
 
 所有输入都由固定标签确定性派生，因此输出可复现，CI 会比对生成结果。
@@ -32,6 +32,8 @@ from nacl.bindings import (
 )
 
 OUTPUT = Path(__file__).resolve().parent.parent / "test-vectors" / "crypto-v1.json"
+# §8.9 附件（草案）：单独的文件，已冻结的 crypto-v1.json 不变
+ATTACHMENT_OUTPUT = OUTPUT.parent / "attachment-v1.json"
 
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 ZERO16 = bytes(16)
@@ -439,6 +441,132 @@ def keyset_vectors() -> list:
     }]
 
 
+# ---------------------------------------------------------------- §8.9 附件（草案）
+
+CHUNK_LEN = 65536
+
+
+def canonical_str(text: str) -> str:
+    """vault-format.md §1.1 的字符串规范编码：只转义 "、\\ 与 U+0000–U+001F。"""
+    short = {0x08: "\\b", 0x09: "\\t", 0x0A: "\\n", 0x0C: "\\f", 0x0D: "\\r"}
+    out = ['"']
+    for ch in text:
+        c = ord(ch)
+        if ch == '"':
+            out.append('\\"')
+        elif ch == "\\":
+            out.append("\\\\")
+        elif c in short:
+            out.append(short[c])
+        elif c < 0x20:
+            out.append(f"\\u{c:04x}")
+        else:
+            out.append(ch)
+    out.append('"')
+    return "".join(out)
+
+
+def attachment_meta(item_id: bytes, name: str, size: int, chunks: int) -> bytes:
+    """§8.9 的元数据：成员 v、item、name、size、chunks，按 vault-format.md §1.1 规范编码。"""
+    text = (
+        '{"v":1,"item":"' + item_id.hex() + '","name":' + canonical_str(name)
+        + ',"size":' + str(size) + ',"chunks":' + str(chunks) + "}"
+    )
+    meta = text.encode("utf-8")
+    assert len(meta) <= 1024
+    return meta
+
+
+def attachment_case(name: str, file_name: str, data: bytes, error: str | None = None, meta_override: bytes | None = None,
+                    ref_override: dict | None = None) -> dict:
+    """按 §8.9 封装一个附件。`error` 不为空时是反例：读取方必须报告篡改（`tampered`）。"""
+    label = f"attachment/{name}"
+    account_id = det(f"{label}/account-id", 16)
+    vault_id = det(f"{label}/vault-id", 16)
+    item_id = det(f"{label}/item-id", 16)
+    attachment_id = det(f"{label}/attachment-id", 16)
+    vk_kid, vk = det(f"{label}/vk-kid", 16), det(f"{label}/vk", 32)
+    ak_kid, ak = det(f"{label}/ak-kid", 16), det(f"{label}/ak", 32)
+    n = -(-len(data) // CHUNK_LEN)
+
+    def ctx(part: str, index: int, binding: bytes) -> dict:
+        return {
+            "object_type": OBJECT_TYPES["attachment"], "part": PARTS[part], "part_index": index,
+            "account_id": account_id, "vault_id": vault_id, "object_id": attachment_id,
+            "rev_id": ZERO16, "binding": binding,
+        }
+
+    wrapped, _ = seal(vk, vk_kid, det(f"{label}/nonce/wrapped", 24), ctx("wrapped_key", 0, ZERO32), ak_kid + ak)
+    meta = meta_override if meta_override is not None else attachment_meta(item_id, file_name, len(data), n)
+    meta_ct, _ = seal(ak, ak_kid, det(f"{label}/nonce/meta", 24), ctx("content", 0, ZERO32), meta)
+    binding = struct.pack(">I", n) + bytes(28)
+    chunks = []
+    for i in range(n):
+        piece = data[i * CHUNK_LEN:(i + 1) * CHUNK_LEN]
+        ct, _ = seal(ak, ak_kid, det(f"{label}/nonce/chunk/{i}", 24), ctx("chunk", i, binding), piece)
+        chunks.append(ct)
+    # 各部分的长度（§8.9 的表）
+    assert len(wrapped) == 314
+    assert 314 <= len(meta_ct) <= 1146
+    assert all(len(c) == 67642 for c in chunks[:-1])
+    assert all(314 <= len(c) <= 67642 for c in chunks[-1:])
+    reference = {"name": file_name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    reference.update(ref_override or {})
+    out = {
+        "name": name,
+        "account_id": account_id.hex(), "vault_id": vault_id.hex(), "item_id": item_id.hex(),
+        "attachment_id": attachment_id.hex(),
+        "vk_kid": vk_kid.hex(), "vk": vk.hex(),
+        "reference": reference,
+        "content_len": len(data),
+        "content_sha256": hashlib.sha256(data).hexdigest(),
+        "meta": meta.decode("utf-8"),
+        "wrapped_key": wrapped.hex(),
+        "meta_ct": meta_ct.hex(),
+        "chunks": [c.hex() for c in chunks],
+    }
+    if error is not None:
+        out["error"] = error
+    return out
+
+
+def attachment_vectors() -> dict:
+    valid = [
+        # 两块：一个完整块（密文恰好 67642 字节）与一个短块；文件名带转义与非 ASCII 字符
+        attachment_case("two_chunks", '备份 "db"\\1.sql', det("attachment/two_chunks/data", CHUNK_LEN + 100)),
+        attachment_case("exactly_one_chunk", "a.bin", det("attachment/exactly_one_chunk/data", CHUNK_LEN)),
+        attachment_case("empty", "empty.txt", b""),
+    ]
+    small = det("attachment/small/data", 300)
+    item = det("attachment/meta_not_canonical/item-id", 16)
+    invalid = [
+        attachment_case("meta_not_canonical", "a.txt", small, "tampered",
+                        meta_override=('{"v":1, "item":"' + item.hex() + '","name":"a.txt","size":300,"chunks":1}').encode()),
+        attachment_case("meta_unknown_member", "a.txt", small, "tampered",
+                        meta_override=('{"v":1,"item":"' + det("attachment/meta_unknown_member/item-id", 16).hex()
+                                       + '","name":"a.txt","size":300,"chunks":1,"mime":"text/plain"}').encode()),
+        attachment_case("meta_other_item", "a.txt", small, "tampered",
+                        meta_override=attachment_meta(det("attachment/other", 16), "a.txt", 300, 1)),
+        attachment_case("reference_size_differs", "a.txt", small, "tampered", ref_override={"size": 301}),
+        attachment_case("reference_name_differs", "a.txt", small, "tampered", ref_override={"name": "b.txt"}),
+        attachment_case("reference_sha256_differs", "a.txt", small, "tampered",
+                        ref_override={"sha256": hashlib.sha256(b"other").hexdigest()}),
+    ]
+    return {
+        "spec": "spec/crypto.md §8.9（草案）",
+        "generator": "spec/reference/generate_vectors.py",
+        "note": "所有字节串均为小写十六进制。测试输入由固定标签确定性派生，不是真实密钥。valid：读取方解开 VK 包裹的 AK、"
+                "核对元数据与引用，得到长度为 content_len、SHA-256 为 content_sha256 的内容；meta 是元数据的明文，也是写入方"
+                "应产生的规范编码。invalid：读取方必须报告篡改。",
+        "valid": valid,
+        "invalid": invalid,
+    }
+
+
+def build_attachment() -> str:
+    return json.dumps(attachment_vectors(), ensure_ascii=False, indent=2) + "\n"
+
+
 def build() -> str:
     self_check()
     doc = {
@@ -460,16 +588,19 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true", help="只比对，不写入")
     args = parser.parse_args()
-    content = build()
+    outputs = [(OUTPUT, build()), (ATTACHMENT_OUTPUT, build_attachment())]
     if args.check:
-        if not OUTPUT.exists() or OUTPUT.read_text(encoding="utf-8") != content:
-            print(f"{OUTPUT} 与参考实现的输出不一致，请重新生成。", file=sys.stderr)
+        stale = [p for p, content in outputs if not p.exists() or p.read_text(encoding="utf-8") != content]
+        for p in stale:
+            print(f"{p} 与参考实现的输出不一致，请重新生成。", file=sys.stderr)
+        if stale:
             return 1
         print("测试向量与参考实现一致。")
         return 0
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT.write_text(content, encoding="utf-8")
-    print(f"已写入 {OUTPUT}")
+    for p, content in outputs:
+        p.write_text(content, encoding="utf-8")
+        print(f"已写入 {p}")
     return 0
 
 

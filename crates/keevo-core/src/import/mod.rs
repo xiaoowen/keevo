@@ -15,7 +15,7 @@ pub(crate) mod keevo;
 mod onepux;
 pub mod zip;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use keevo_format::{FieldData, FieldKind, ItemType, Purpose, SecretString};
 use zeroize::Zeroizing;
@@ -27,8 +27,15 @@ use crate::vault::{NewField, Vault};
 pub const MAX_FILE_LEN: usize = 512 * 1024 * 1024;
 /// 条目数上限。
 pub const MAX_ITEMS: usize = 50_000;
+/// 解析 JSON 之前允许的节点数（约每个值一个）。`serde_json::Value` 的每个节点在内存中约 30–80 字节，
+/// 因此解析树至多约 200 MB：压缩文件不能把几十 KB 放大成数 GB（第五轮预审 K10）。
+pub const MAX_JSON_NODES: usize = 4_000_000;
 /// 一个条目的字段数上限（`spec/revisions.md` §7.1 的记录键上限为 4096）。
 const MAX_FIELDS: usize = 1000;
+/// 一个条目的分区数上限。
+const MAX_SECTIONS: usize = 200;
+/// 一个条目的标签数上限。
+const MAX_TAGS: usize = 100;
 /// 文本值的长度上限（`keevo_format` 的单个值上限）。
 const MAX_TEXT: usize = 256 * 1024;
 const MAX_LABEL: usize = 200;
@@ -183,6 +190,48 @@ pub struct Parsed {
     pub items: Vec<Imported>,
 }
 
+impl Parsed {
+    /// 加入一个条目；超过 [`MAX_ITEMS`] 时立即停止解析，而不是全部解析完再检查（第五轮预审 K10）。
+    pub(crate) fn push(&mut self, item: Imported) -> core::result::Result<(), ImportError> {
+        if self.items.len() >= MAX_ITEMS {
+            return Err(ImportError::TooLarge);
+        }
+        self.items.push(item);
+        Ok(())
+    }
+}
+
+/// 解析 JSON 之前先数节点：字符串之外的 `{`、`[`、`,`、`:`。超过 [`MAX_JSON_NODES`] 时返回
+/// [`ImportError::TooLarge`]，不建立解析树。只做计数，JSON 是否合法仍由解析器判断。
+pub(crate) fn check_json_nodes(bytes: &[u8]) -> core::result::Result<(), ImportError> {
+    let mut nodes = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for &b in bytes {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'{' | b'[' | b',' | b':' => {
+                nodes = nodes.saturating_add(1);
+                if nodes > MAX_JSON_NODES {
+                    return Err(ImportError::TooLarge);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// 解析导入文件。`password` 为有密码保护的文件（Bitwarden、Keevo 加密导出）的密码。
 ///
 /// # Errors
@@ -241,12 +290,15 @@ fn login_fingerprint(
     Some(fingerprint(&host, username.unwrap_or_default(), password))
 }
 
-/// 每个条目是否与保险库中已有的登录（不含最近删除）完全相同：网址主机、用户名与密码都相同。
+/// 每个条目是否与保险库中已有的登录（不含最近删除）重复：网址主机、用户名与密码都相同，并且导入条目的每个字段值
+/// 都已在那个登录中。导入条目带有已有登录没有的内容（一次性密码、备注、其他字段）时不算重复，否则跳过它会丢掉
+/// 这些内容（第五轮预审 K8）。
 ///
 /// # Errors
 /// 已锁定或读取失败。
 pub fn duplicates(vault: &Vault, items: &[Imported]) -> Result<Vec<bool>> {
-    let mut existing = HashSet::new();
+    // 指纹 → 有这个指纹的每个登录的字段值集合（值的 SHA-256，只在内存中短暂存在）
+    let mut existing: HashMap<[u8; 32], Vec<HashSet<[u8; 32]>>> = HashMap::new();
     for summary in vault.items()? {
         if summary.overview.item_type != ItemType::Login || summary.overview.trashed_at.is_some() {
             continue;
@@ -269,30 +321,73 @@ pub fn duplicates(vault: &Vault, items: &[Imported]) -> Result<Vec<bool>> {
         };
         let username = text(&|f| f.purpose == Some(Purpose::Username));
         let password = text(&|f| f.purpose == Some(Purpose::Password));
+        let values: HashSet<[u8; 32]> = fields
+            .iter()
+            .filter_map(|f| f.text().map(|t| value_hash(f.kind, t)))
+            .collect();
         let urls: Vec<&str> = fields
             .iter()
             .filter(|f| f.kind == FieldKind::Url)
             .filter_map(|f| f.text())
             .collect();
-        if urls.is_empty() {
-            existing.extend(login_fingerprint(None, username, password));
-        }
-        for url in urls {
-            existing.extend(login_fingerprint(Some(url), username, password));
+        let prints: Vec<[u8; 32]> = if urls.is_empty() {
+            login_fingerprint(None, username, password)
+                .into_iter()
+                .collect()
+        } else {
+            urls.iter()
+                .filter_map(|url| login_fingerprint(Some(url), username, password))
+                .collect()
+        };
+        for print in prints {
+            existing.entry(print).or_default().push(values.clone());
         }
     }
     Ok(items
         .iter()
         .map(|i| {
-            i.item_type == ItemType::Login
-                && login_fingerprint(
-                    i.first_url(),
-                    i.text_of(Purpose::Username),
-                    i.text_of(Purpose::Password),
-                )
-                .is_some_and(|f| existing.contains(&f))
+            if i.item_type != ItemType::Login {
+                return false;
+            }
+            let Some(print) = login_fingerprint(
+                i.first_url(),
+                i.text_of(Purpose::Username),
+                i.text_of(Purpose::Password),
+            ) else {
+                return false;
+            };
+            // 结构化字段（环境变量、恢复码）无法逐值比较：有这样的字段就不算重复
+            let values: Option<Vec<[u8; 32]>> = i
+                .fields
+                .iter()
+                .map(|(_, f)| match &f.data {
+                    FieldData::Text(t) => Some(value_hash(f.kind, t.expose())),
+                    _ => None,
+                })
+                .collect();
+            values.is_some_and(|values| {
+                existing.get(&print).is_some_and(|logins| {
+                    logins
+                        .iter()
+                        .any(|have| values.iter().all(|v| have.contains(v)))
+                })
+            })
         })
         .collect())
+}
+
+/// 重复判定中一个字段值的摘要。网址只比较主机（去掉 `www.`），与登录指纹相同。
+fn value_hash(kind: FieldKind, text: &str) -> [u8; 32] {
+    if kind == FieldKind::Url
+        && let Some((_, host)) = crate::security::host_of(text)
+    {
+        let host = host.trim_start_matches("www.");
+        return keevo_crypto::sha256(format!("url\0{host}").as_bytes());
+    }
+    let mut buf = Zeroizing::new(Vec::with_capacity(text.len().saturating_add(5)));
+    buf.extend_from_slice(b"text\0");
+    buf.extend_from_slice(text.as_bytes());
+    keevo_crypto::sha256(&buf)
 }
 
 /// 截断到 `max` 字节（字符边界）。
@@ -311,6 +406,15 @@ fn clip(s: &str, max: usize) -> String {
 pub(crate) struct Builder {
     item: Imported,
     notes: Vec<String>,
+    /// 分区名 → 序号（去重用；第五轮预审 K9：线性查找使去重成为平方复杂度）。
+    section_index: HashMap<String, usize>,
+    tag_set: HashSet<String>,
+    /// 因超过上限而没有导入的字段、分区与标签数，在备注中说明（第五轮预审 K8：不静默丢弃）。
+    dropped_fields: usize,
+    dropped_sections: usize,
+    dropped_tags: usize,
+    /// 数据与字段类型不符、因而没有导入的字段数。
+    malformed_fields: usize,
 }
 
 impl Builder {
@@ -327,6 +431,12 @@ impl Builder {
                 attachments: 0,
             },
             notes: Vec::new(),
+            section_index: HashMap::new(),
+            tag_set: HashSet::new(),
+            dropped_fields: 0,
+            dropped_sections: 0,
+            dropped_tags: 0,
+            malformed_fields: 0,
         }
     }
 
@@ -336,17 +446,23 @@ impl Builder {
         self
     }
 
-    /// 分区；同名的分区合并，空名称为默认分区。
+    /// 分区；同名的分区合并，空名称为默认分区。超过 [`MAX_SECTIONS`] 个时，其余分区的字段放进默认分区。
     pub(crate) fn section(&mut self, label: &str) -> Option<usize> {
         let label = clip(label.trim(), MAX_LABEL);
         if label.is_empty() {
             return None;
         }
-        if let Some(i) = self.item.sections.iter().position(|s| *s == label) {
-            return Some(i);
+        if let Some(i) = self.section_index.get(&label) {
+            return Some(*i);
         }
+        if self.item.sections.len() >= MAX_SECTIONS {
+            self.dropped_sections = self.dropped_sections.saturating_add(1);
+            return None;
+        }
+        let i = self.item.sections.len();
+        self.section_index.insert(label.clone(), i);
         self.item.sections.push(label);
-        Some(self.item.sections.len().saturating_sub(1))
+        Some(i)
     }
 
     pub(crate) fn add(
@@ -357,7 +473,16 @@ impl Builder {
         purpose: Option<Purpose>,
         value: &str,
     ) {
-        if value.trim().is_empty() || self.item.fields.len() >= MAX_FIELDS {
+        // 秘密值原样保留，首尾的空格也是密码的一部分（第五轮预审 K8）；其余的值去掉首尾空白
+        let raw = matches!(
+            kind,
+            FieldKind::Concealed | FieldKind::Multiline | FieldKind::SshPrivateKey
+        );
+        if value.is_empty() || (!raw && value.trim().is_empty()) {
+            return;
+        }
+        if self.item.fields.len() >= MAX_FIELDS {
+            self.dropped_fields = self.dropped_fields.saturating_add(1);
             return;
         }
         let label = clip(label.trim(), MAX_LABEL);
@@ -374,7 +499,7 @@ impl Builder {
                 .iter()
                 .any(|(_, f)| f.purpose == Some(*p) && *p != Purpose::Notes)
         });
-        let value = if kind == FieldKind::Multiline || kind == FieldKind::SshPrivateKey {
+        let value = if raw {
             value.to_owned()
         } else {
             value.trim().to_owned()
@@ -393,6 +518,7 @@ impl Builder {
     /// 原样加入一个字段（结构化字段：环境变量、恢复码）。
     pub(crate) fn push(&mut self, section: Option<usize>, mut field: NewField) {
         if self.item.fields.len() >= MAX_FIELDS {
+            self.dropped_fields = self.dropped_fields.saturating_add(1);
             return;
         }
         field.label = clip(field.label.trim(), MAX_LABEL);
@@ -433,9 +559,20 @@ impl Builder {
 
     pub(crate) fn tag(&mut self, tag: &str) {
         let tag = clip(tag.trim(), MAX_TAG);
-        if !tag.is_empty() && !self.item.tags.contains(&tag) {
-            self.item.tags.push(tag);
+        if tag.is_empty() || self.tag_set.contains(&tag) {
+            return;
         }
+        if self.item.tags.len() >= MAX_TAGS {
+            self.dropped_tags = self.dropped_tags.saturating_add(1);
+            return;
+        }
+        self.tag_set.insert(tag.clone());
+        self.item.tags.push(tag);
+    }
+
+    /// 一个格式不对的字段（数据与字段类型不符）：不导入，在备注中说明。
+    pub(crate) const fn skip_field(&mut self) {
+        self.malformed_fields = self.malformed_fields.saturating_add(1);
     }
 
     pub(crate) const fn favorite(&mut self, on: bool) {
@@ -451,6 +588,34 @@ impl Builder {
             self.notes.push(format!(
                 "原文件中的 {} 个附件没有导入：Keevo 暂不支持从这个来源导入附件。",
                 self.item.attachments
+            ));
+        }
+        // 备注本身也是一个字段：字段已满时让出最后一个，用来说明没有导入的内容
+        if self.item.fields.len() >= MAX_FIELDS && self.item.fields.pop().is_some() {
+            self.dropped_fields = self.dropped_fields.saturating_add(1);
+        }
+        if self.dropped_fields > 0 {
+            self.notes.push(format!(
+                "原文件中还有 {} 个字段没有导入：一个条目最多 {MAX_FIELDS} 个字段。",
+                self.dropped_fields
+            ));
+        }
+        if self.dropped_sections > 0 {
+            self.notes.push(format!(
+                "原文件中还有 {} 个分区：一个条目最多 {MAX_SECTIONS} 个分区，这些分区中的字段放在了默认分区。",
+                self.dropped_sections
+            ));
+        }
+        if self.malformed_fields > 0 {
+            self.notes.push(format!(
+                "原文件中有 {} 个字段的格式不对（数据与字段类型不符），没有导入。",
+                self.malformed_fields
+            ));
+        }
+        if self.dropped_tags > 0 {
+            self.notes.push(format!(
+                "原文件中还有 {} 个标签没有导入：一个条目最多 {MAX_TAGS} 个标签。",
+                self.dropped_tags
             ));
         }
         let notes = self.notes.join("\n\n");

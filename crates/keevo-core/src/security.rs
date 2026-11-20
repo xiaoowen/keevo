@@ -14,7 +14,7 @@ use keevo_crypto::{Id128, sha1_for_breach_check, sha256};
 use keevo_format::{FieldData, FieldKind, ItemDoc, ItemType, Purpose, RecordKey, RecordValue};
 use zeroize::Zeroizing;
 
-use crate::error::Result;
+use crate::error::{CoreError, Result};
 use crate::strength::{self, Strength};
 use crate::vault::Vault;
 
@@ -201,6 +201,9 @@ impl Report {
     }
 }
 
+/// 泄露检查的前缀数按这个档位补齐（[`Breaches::prepare`]）。
+pub const BREACH_PREFIX_BUCKET: usize = 64;
+
 /// 泄露检查的结果：用户开启后，界面层按前缀查询 Have I Been Pwned，这里在本机比对。
 /// 完整的哈希不离开这里；结果只在内存中，锁定时随整个对象丢弃。
 #[derive(Default)]
@@ -230,28 +233,53 @@ fn hex_upper(bytes: &[u8]) -> String {
 }
 
 impl Breaches {
-    /// 准备一次检查：记下全部密码的 SHA-1，返回要查询的前缀（5 个十六进制字符，去重排序）。
+    /// 准备一次检查：记下全部密码的 SHA-1，返回要查询的前缀（5 个十六进制字符）。
+    ///
+    /// 只把前缀发给运营方仍会泄露一些元数据（第五轮预审 K16、`docs/governance.md` §5），这里尽量减少：
+    /// - 忽略了提醒的条目（`security_alerts = off`）不查询；
+    /// - 用随机的伪前缀补到 [`BREACH_PREFIX_BUCKET`] 的倍数，再打乱顺序：请求数只透露密码个数所在的档位，
+    ///   每次检查的前缀集合都不同，两次检查之间的差异不再对应"哪个密码改过"。
     ///
     /// # Errors
-    /// 保险库已锁定或读取失败。
+    /// 保险库已锁定、读取失败或随机数不可用。
     pub fn prepare(&mut self, vault: &Vault) -> Result<Vec<String>> {
         let mut wanted = HashSet::new();
         for (_, doc) in live_items(vault)? {
+            if ignored(&doc) {
+                continue;
+            }
             for password in passwords(&doc) {
                 wanted.insert(*sha1_for_breach_check(password.as_bytes()));
             }
         }
-        let mut prefixes: Vec<String> = wanted
+        let real: HashSet<u32> = wanted
             .iter()
-            .map(|h| hex_upper(h.get(..3).unwrap_or_default()))
-            .map(|p| p.chars().take(5).collect())
+            .map(|h| (u32::from(h[0]) << 12) | (u32::from(h[1]) << 4) | (u32::from(h[2]) >> 4))
             .collect();
-        prefixes.sort_unstable();
-        prefixes.dedup();
+        let target = real
+            .len()
+            .div_ceil(BREACH_PREFIX_BUCKET)
+            .saturating_mul(BREACH_PREFIX_BUCKET);
+        let mut all: Vec<u32> = real.iter().copied().collect();
+        let mut seen = real;
+        while all.len() < target {
+            let dummy = keevo_crypto::random_below(1 << 20)?;
+            if seen.insert(dummy) {
+                all.push(dummy);
+            }
+        }
+        // Fisher–Yates
+        for i in (1..all.len()).rev() {
+            let j = usize::try_from(keevo_crypto::random_below(
+                u32::try_from(i.saturating_add(1)).map_err(|_| CoreError::OutOfRange)?,
+            )?)
+            .map_err(|_| CoreError::OutOfRange)?;
+            all.swap(i, j);
+        }
         self.wanted = wanted;
         self.done.clear();
         self.counts.clear();
-        Ok(prefixes)
+        Ok(all.into_iter().map(|p| format!("{p:05X}")).collect())
     }
 
     /// 记下一个前缀的查询结果（Have I Been Pwned `range` 接口的响应正文：每行 `后缀:次数`，
@@ -823,7 +851,28 @@ mod tests {
         // 泄露检查：准备前缀，记录响应后，弱密码被标为已泄露
         let mut b = Breaches::default();
         let prefixes = b.prepare(&v).unwrap();
-        assert_eq!(prefixes.len(), 4, "4 个不同的密码");
+        // 第五轮预审 K16：忽略提醒的条目不查询；伪前缀补到 64 的倍数、打乱顺序，每次检查的集合都不同
+        assert_eq!(b.wanted.len(), 3, "3 个不同的密码（忽略提醒的条目不算）");
+        assert!(
+            !b.wanted.contains(&*sha1_for_breach_check(b"123456")),
+            "忽略提醒的条目不查询"
+        );
+        assert_eq!(prefixes.len(), BREACH_PREFIX_BUCKET);
+        let unique: HashSet<&String> = prefixes.iter().collect();
+        assert_eq!(unique.len(), prefixes.len(), "前缀不重复");
+        for h in &b.wanted {
+            assert!(prefixes.contains(&hex_upper(h)[..5].to_owned()));
+        }
+        let again: HashSet<String> = Breaches::default()
+            .prepare(&v)
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_ne!(
+            again,
+            prefixes.iter().cloned().collect::<HashSet<_>>(),
+            "每次的前缀集合不同"
+        );
         let hash = hex_upper(&*sha1_for_breach_check(b"password1"));
         for p in &prefixes {
             let body = if hash.starts_with(p.as_str()) {

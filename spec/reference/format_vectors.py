@@ -155,7 +155,7 @@ def enc_id(i: bytes) -> str:
 #   记录值 ("text", s) | ("bool", b) | ("int", n) | ("tag",) | ("section", label, order) | ("field", FieldValue)
 #   FieldValue = dict(section: bytes|None, order, kind, label, purpose: str|None, data)
 #   data = ("text", s) | ("kv", [(key, value, concealed)]) | ("codes", [(code, used)])
-#        | ("attachment", (id: bytes, name, size, added))
+#        | ("attachment", (id: bytes, name, size, added, sha256: bytes|None))
 #   记录版本 = (hlc: int, rev: bytes, value | None)
 #   记录键 = (kind, name)，section/field 的 name 是 16 字节 ID
 
@@ -167,8 +167,11 @@ def enc_data(d) -> str:
         items = [enc_obj([("key", enc_str(k)), ("value", enc_str(v)), ("concealed", enc_bool(c))]) for k, v, c in d[1]]
         return enc_obj([("kv", "[" + ",".join(items) + "]")])
     if d[0] == "attachment":
-        aid, name, size, added = d[1]
-        return enc_obj([("attachment", enc_obj([("id", enc_id(aid)), ("name", enc_str(name)), ("size", str(size)), ("added", str(added))]))])
+        aid, name, size, added, digest = d[1]
+        members = [("id", enc_id(aid)), ("name", enc_str(name)), ("size", str(size)), ("added", str(added))]
+        if digest is not None:
+            members.append(("sha256", enc_str(digest.hex())))
+        return enc_obj([("attachment", enc_obj(members))])
     items = [enc_obj([("code", enc_str(c)), ("used", enc_bool(u))]) for c, u in d[1]]
     return enc_obj([("codes", "[" + ",".join(items) + "]")])
 
@@ -220,9 +223,13 @@ def key_order(key):
 
 
 def doc_version(doc) -> int:
-    """条目详情的版本：任何记录版本（含并发版本）是 attachment 字段时为 2，否则为 1。"""
+    """条目详情的版本：任何记录版本（含并发版本）的字段类型是 attachment、或数据是附件引用时为 2，否则为 1。"""
     versions = list(doc["records"].values()) + [v for vs in doc["concurrent"].values() for v in vs]
-    has = any(v[2] is not None and v[2][0] == "field" and v[2][1]["kind"] == "attachment" for v in versions)
+    has = any(
+        v[2] is not None and v[2][0] == "field"
+        and (v[2][1]["kind"] == "attachment" or v[2][1]["data"][0] == "attachment")
+        for v in versions
+    )
     return 2 if has else 1
 
 
@@ -280,6 +287,12 @@ def s_id(x) -> bytes:
     return bytes.fromhex(x)
 
 
+def s_sha256(x) -> bytes:
+    if not isinstance(x, str) or len(x) != 64 or not set(x) <= HEX:
+        raise malformed()
+    return bytes.fromhex(x)
+
+
 def s_hlc(x) -> int:
     if not isinstance(x, str) or len(x) != 16 or not set(x) <= HEX:
         raise malformed()
@@ -319,8 +332,9 @@ def s_data(x):
             out.append((s_str(e["code"]), s_bool(e["used"])))
         return ("codes", out)
     if k == "attachment":
-        exact_keys(v, {"id", "name", "size", "added"})
-        return ("attachment", (s_id(v["id"]), s_str(v["name"]), s_i64(v["size"]), s_i64(v["added"])))
+        exact_keys(v, {"id", "name", "size", "added"}, {"sha256"})
+        digest = s_sha256(v["sha256"]) if "sha256" in v else None
+        return ("attachment", (s_id(v["id"]), s_str(v["name"]), s_i64(v["size"]), s_i64(v["added"]), digest))
     raise malformed()
 
 
@@ -409,7 +423,7 @@ def check_value(key, value) -> None:
         if f["data"][0] != expected:
             raise FormatError("value_kind_mismatch")
         if expected == "attachment":
-            _, _, size, added = f["data"][1]
+            _, _, size, added, _ = f["data"][1]
             if not (0 <= size <= MAX_SAFE and 0 <= added <= MAX_SAFE):
                 raise FormatError("value_too_large")
         if not valid_order(f["order"]):
@@ -933,7 +947,8 @@ def item_vectors() -> dict:
 def item_v2_vectors() -> dict:
     """条目详情 v2（vault-format.md §2.5）：attachment 字段。"""
     r0, r1 = det_id("rev:0"), det_id("rev:1")
-    att = ("attachment", (det_id("attachment:ca"), "ca-certificate.pem", 1843, BASE_MS))
+    ca_digest = hashlib.sha256(b"ca-certificate").digest()
+    att = ("attachment", (det_id("attachment:ca"), "ca-certificate.pem", 1843, BASE_MS, ca_digest))
     valid_docs = []
 
     def add_valid(name, doc):
@@ -954,8 +969,16 @@ def item_v2_vectors() -> dict:
     d2["concurrent"][F("证书")] = [(hlc(0), r0, field("0", "attachment", "a", data=att))]
     add_valid("attachment_only_in_concurrent", d2)
     e = new_doc("secure_note")
-    e["records"][F("空文件")] = (hlc(0), r0, field("0", "attachment", "empty.txt", data=("attachment", (det_id("attachment:e"), "", 0, 0))))
+    e["records"][F("空文件")] = (hlc(0), r0, field("0", "attachment", "empty.txt", data=("attachment", (det_id("attachment:e"), "", 0, 0, hashlib.sha256(b"").digest()))))
     add_valid("attachment_empty_name_zero_size", e)
+    # 边界：size 与 added 都可以是 2⁵³−1
+    m = new_doc("secure_note")
+    m["records"][F("大文件")] = (hlc(0), r0, field("0", "attachment", "big", data=("attachment", (det_id("attachment:m"), "big", MAX_SAFE, MAX_SAFE, None))))
+    add_valid("attachment_size_and_added_max_safe", m)
+    # sha256 可选：M1.5 草案期间写入的引用没有它
+    n = new_doc("secure_note")
+    n["records"][F("旧附件")] = (hlc(0), r0, field("0", "attachment", "old.txt", data=("attachment", (det_id("attachment:o"), "old.txt", 3, BASE_MS, None))))
+    add_valid("attachment_without_sha256", n)
 
     invalid = []
 
@@ -979,11 +1002,24 @@ def item_v2_vectors() -> dict:
     bad("attachment_member_order", with_att.replace('"size":1843,"added":' + str(BASE_MS), '"added":' + str(BASE_MS) + ',"size":1843', 1), "malformed")
     bad("attachment_size_beyond_safe", with_att.replace('"size":1843', '"size":' + str(MAX_SAFE + 1), 1), "value_too_large")
     bad("attachment_size_negative", with_att.replace('"size":1843', '"size":-1', 1), "value_too_large")
+    bad("attachment_added_beyond_safe", with_att.replace('"added":' + str(BASE_MS), '"added":' + str(MAX_SAFE + 1), 1), "value_too_large")
+    bad("attachment_added_negative", with_att.replace('"added":' + str(BASE_MS), '"added":-1', 1), "value_too_large")
+    hex_digest = ca_digest.hex()
+    bad("attachment_sha256_uppercase", with_att.replace(hex_digest, hex_digest.upper(), 1), "malformed")
+    bad("attachment_sha256_short", with_att.replace(hex_digest, hex_digest[:62], 1), "malformed")
+    bad("attachment_sha256_null", with_att.replace('"' + hex_digest + '"', "null", 1), "malformed")
+    bad("attachment_sha256_before_added", with_att.replace(
+        ',"added":' + str(BASE_MS) + ',"sha256":"' + hex_digest + '"',
+        ',"sha256":"' + hex_digest + '","added":' + str(BASE_MS), 1), "malformed")
     bad("attachment_kind_with_text_data", with_att.replace(
         enc_data(att), enc_data(("text", "x")), 1), "value_kind_mismatch")
     t = new_doc("secure_note")
     t["records"][F("x")] = (hlc(0), r0, field("0", "text", "x", data=att))
     bad("text_kind_with_attachment_data", enc_doc(t), "value_kind_mismatch")
+    # 同一份不一致的字段写成 "v":1：不是规范编码，与 v1 读取方的结果（malformed）相同
+    bad("v1_text_kind_with_attachment_data", enc_doc(t).replace('"v":2', '"v":1', 1), "malformed")
+    bad("v1_attachment_kind_with_text_data", with_att.replace(
+        enc_data(att), enc_data(("text", "x")), 1).replace('"v":2', '"v":1', 1), "malformed")
     return {"valid": valid_docs, "invalid": invalid}
 
 
