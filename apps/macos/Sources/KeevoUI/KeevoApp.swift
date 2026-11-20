@@ -95,7 +95,8 @@ private struct MenuBarLabel: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Image(systemName: model.phase == .unlocked ? "checkmark.shield" : "lock.shield")
+        // 与应用图标同一图形：已解锁为实心盾形，已锁定为盾形轮廓
+        Image(nsImage: BrandMark.menuBarImage(unlocked: model.phase == .unlocked))
             .accessibilityLabel(model.phase == .unlocked ? tr("Keevo 已解锁") : tr("Keevo 已锁定"))
             .onAppear { model.openMainWindow = { openWindow(id: "main") } }
     }

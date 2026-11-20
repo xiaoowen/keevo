@@ -144,7 +144,7 @@ private struct WelcomeStep: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        HeroIcon(systemImage: "key.horizontal.fill", tint: KV.Colors.fgOnAccent, background: KV.Colors.accentFill)
+        BrandLogo(size: 72)
         Headline(title: tr("欢迎使用 Keevo"), subtitle: tr("开源、只在你的设备上的密码管理器。"))
         VStack(alignment: .leading, spacing: 12) {
             promise("internaldrive", tr("数据只保存在这台 Mac 上"), tr("加密后存放在本机，Keevo 没有服务器。"))

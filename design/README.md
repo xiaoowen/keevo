@@ -90,7 +90,8 @@ python3 design/build_tokens.py --check  # CI：对比度达标且产物已更新
 | 组件 | macOS（`Components.swift`） | 扩展 | 规则 |
 |---|---|---|---|
 | 网站图标 | `SiteIcon` | `.site-icon`（`brand.ts`） | 见下文算法 |
-| 标志 | `HeroIcon`（锁屏、引导） | `.logo`（`brand.ts`） | 品牌色圆角方块中的白色盾形；输入框旁的图标用同一盾形 |
+| 标志 | `BrandLogo`、`BrandMark`（引导、菜单栏） | `.logo`（`brand.ts`） | 品牌色圆角方块中的白色盾形与钥匙孔；输入框旁的图标、菜单栏图标（已解锁为实心、已锁定为轮廓）用同一图形 |
+| 应用图标 | `apps/macos/Resources/AppIcon.icns` | `static/icons/icon-{16,32,48,128}.png` | 方案 A · 盾与钥匙孔（设计稿"品牌 · 应用图标"）。由 `design/build_icons.py` 从同一份几何生成，源文件 `design/icons/app-icon.svg` |
 | 秘密值 | `SecretText` | — | 默认圆点；显示需用户主动操作 |
 | 字符分色 | `classifiedText`、`CharClass` | — | 字母：`fg.primary`；数字：`secret.digit`；符号：`secret.symbol` |
 | 大字显示 | `LargeTypeView`、`LargeTypeButton` | — | 每字符一格，带序号与图例；入口按钮显示 "Aa" |

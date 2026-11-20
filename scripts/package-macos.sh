@@ -52,6 +52,8 @@ BUILD="$(git -C "$ROOT" rev-list --count HEAD)"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
 cp "$APP_SRC/.build/release/Keevo" "$APP/Contents/MacOS/Keevo"
+# 应用图标（design/build_icons.py 生成）
+cp "$APP_SRC/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 # 3. 放入已签名的 host（复制不改变签名），之后签名整个应用包，host 的签名作为嵌套代码被封存
 cp "$HOST_STAGE/keevo-native-host" "$APP/Contents/Helpers/keevo-native-host"
 cp "$HOST_STAGE/keevo" "$APP/Contents/Helpers/keevo"
@@ -69,6 +71,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleDevelopmentRegion</key><string>zh-Hans</string>
   <key>CFBundleDisplayName</key><string>Keevo</string>
   <key>CFBundleExecutable</key><string>Keevo</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>Keevo</string>

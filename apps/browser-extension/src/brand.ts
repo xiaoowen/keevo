@@ -6,6 +6,8 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 
 /** 盾形线条（20×20 视图框），与输入框旁的 Keevo 图标一致。 */
 export const SHIELD_PATH = "M10 2.6 4.4 4.8v4.4c0 3.6 2.4 6.6 5.6 7.8 3.2-1.2 5.6-4.2 5.6-7.8V4.8L10 2.6Z";
+/** 盾中的钥匙孔（填充，同一视图框；设计稿"品牌 · 应用图标"方案 A）。 */
+export const KEYHOLE_PATH = "M10 7.2a1.4 1.4 0 1 1 0 2.8 1.4 1.4 0 1 1 0-2.8ZM9.4 9.4h1.2l.4 2.8H9Z";
 
 function svg(size: number, viewBox: string): SVGSVGElement {
   const s = document.createElementNS(SVG_NS, "svg");
@@ -27,14 +29,21 @@ function stroke(d: string, width: number): SVGPathElement {
   return p;
 }
 
-/** Keevo 标志：品牌色圆角方块中的白色盾形。 */
+function fill(d: string): SVGPathElement {
+  const p = document.createElementNS(SVG_NS, "path");
+  p.setAttribute("d", d);
+  p.setAttribute("fill", "currentColor");
+  return p;
+}
+
+/** Keevo 标志：品牌色圆角方块中的白色盾形与钥匙孔（与应用图标同一图形）。 */
 export function logoMark(size = 20): HTMLElement {
   const box = document.createElement("span");
   box.className = "logo";
   box.style.width = `${size}px`;
   box.style.height = `${size}px`;
   const s = svg(Math.round(size * 0.62), "0 0 20 20");
-  s.append(stroke(SHIELD_PATH, 2));
+  s.append(stroke(SHIELD_PATH, 2), fill(KEYHOLE_PATH));
   box.append(s);
   box.setAttribute("aria-hidden", "true");
   return box;

@@ -177,6 +177,21 @@ public enum Snapshots {
         await shooter.shoot("export", sheet: true) { ExportSheet() }
         await shooter.shoot("export-plain", sheet: true) { ExportPlainSheet { _ in false } }
         await shooter.shoot("practice", sheet: true) { PracticeSheet() }
+        // 品牌标志：应用内标志与菜单栏图标（已解锁 / 已锁定）
+        await shooter.shoot("brand-mark", size: CGSize(width: 360, height: 140)) {
+            HStack(spacing: 28) {
+                BrandLogo(size: 72)
+                BrandLogo(size: 22)
+                ForEach([true, false], id: \.self) { unlocked in
+                    Image(nsImage: BrandMark.menuBarImage(unlocked: unlocked))
+                        .renderingMode(.template)
+                        .foregroundStyle(KV.Colors.fgPrimary)
+                        .scaleEffect(2)
+                }
+            }
+            .frame(width: 360, height: 140)
+            .background(KV.Colors.bgCanvas)
+        }
         await shooter.shoot("attachment-delete", sheet: true) { DeleteAttachmentSheet(name: "架构图.png") {} }
         await shooter.shoot("attachment-too-big", sheet: true) {
             TooBigAttachmentSheet(file: TooBigAttachment(name: "数据库备份.sql", size: 1_288_490_189))

@@ -166,7 +166,7 @@
 
   // ---- 图标
 
-  /** Keevo 标志中的盾形（与 brand.ts 的 SHIELD_PATH 相同；内容脚本不是模块，不能导入）。 */
+  /** Keevo 标志中的盾形与钥匙孔（与 brand.ts 的 SHIELD_PATH、KEYHOLE_PATH 相同；内容脚本不是模块，不能导入）。 */
   function shieldGlyph(): SVGSVGElement {
     const ns = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(ns, "svg");
@@ -180,7 +180,10 @@
     path.setAttribute("stroke-width", "2");
     path.setAttribute("stroke-linejoin", "round");
     path.setAttribute("d", "M10 2.6 4.4 4.8v4.4c0 3.6 2.4 6.6 5.6 7.8 3.2-1.2 5.6-4.2 5.6-7.8V4.8L10 2.6Z");
-    svg.append(path);
+    const keyhole = document.createElementNS(ns, "path");
+    keyhole.setAttribute("fill", "currentColor");
+    keyhole.setAttribute("d", "M10 7.2a1.4 1.4 0 1 1 0 2.8 1.4 1.4 0 1 1 0-2.8ZM9.4 9.4h1.2l.4 2.8H9Z");
+    svg.append(path, keyhole);
     return svg;
   }
 
