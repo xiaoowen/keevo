@@ -131,7 +131,13 @@ jobs:
           # cargo-fuzz 的 run 不接受 --locked：先单独确认锁文件是最新的
           cargo +nightly metadata --locked --format-version 1 > /dev/null
           for target in $(cargo +nightly fuzz list); do
-            cargo +nightly fuzz run "$target" -- -max_total_time=30
+            # 入库的种子（seeds/<目标>/）与默认语料目录一起读入
+            if [ -d "seeds/$target" ]; then
+              mkdir -p "corpus/$target"
+              cargo +nightly fuzz run "$target" "corpus/$target" "seeds/$target" -- -max_total_time=30
+            else
+              cargo +nightly fuzz run "$target" -- -max_total_time=30
+            fi
           done
 
   browser-extension:
@@ -152,5 +158,8 @@ jobs:
       - name: 安装 npm 依赖（锁文件，不运行安装脚本）
         working-directory: apps/browser-extension
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: 安装 Playwright 的 Chromium（真实浏览器测试用；不用系统中的 Google Chrome）
+        working-directory: apps/browser-extension
+        run: npx --yes playwright@1.62.1 install chromium
       - name: 构建并运行端到端测试
         run: scripts/build-extension.sh --test

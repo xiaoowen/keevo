@@ -3,8 +3,49 @@
 // 最小的 Chrome DevTools 协议客户端（管道模式：fd 3 写、fd 4 读，消息以 \0 分隔）。
 // 管道模式下可以用 Extensions.loadUnpacked 加载扩展（需要 --enable-unsafe-extension-debugging）；
 // 品牌版 Chrome 137 起不再接受 --load-extension 命令行参数。
+//
+// 浏览器默认用 Playwright 下载的 Chromium（Chrome for Testing，findChromium）。不用 /Applications 中的
+// Google Chrome：品牌版 Chrome 在 macOS 上每次启动都会把整个应用复制一份到系统临时目录
+// （…/X/com.google.Chrome.code_sign_clone/），进程被强行结束时不会删除，反复运行测试会占满磁盘。
+// 关闭浏览器时也先经 DevTools 协议正常退出（close），确实需要品牌版 Chrome 的测试（packaged.mjs）同样不留副本。
 
 import { spawn } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+/**
+ * Playwright 下载的 Chromium 的可执行文件；KEEVO_CHROME 可以指定其他浏览器。没有时返回 null（调用方跳过测试）。
+ * 安装：npx playwright install chromium（只下载一次，放在 Playwright 的缓存目录中）。
+ */
+export function findChromium() {
+  if (process.env.KEEVO_CHROME) return process.env.KEEVO_CHROME;
+  const cache =
+    process.env.PLAYWRIGHT_BROWSERS_PATH ??
+    (process.platform === "darwin" ? join(homedir(), "Library/Caches/ms-playwright") : join(homedir(), ".cache/ms-playwright"));
+  if (!existsSync(cache)) return null;
+  const revisions = readdirSync(cache)
+    .map((d) => /^chromium-(\d+)$/.exec(d))
+    .filter(Boolean)
+    .sort((a, b) => Number(b[1]) - Number(a[1]));
+  const candidates = [
+    "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+    "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+    "chrome-mac/Chromium.app/Contents/MacOS/Chromium",
+    "chrome-linux64/chrome",
+    "chrome-linux/chrome",
+  ];
+  for (const [dir] of revisions) {
+    for (const c of candidates) {
+      const path = join(cache, dir, c);
+      if (existsSync(path)) return path;
+    }
+  }
+  return null;
+}
+
+/** 没有找到浏览器时的提示。 */
+export const NO_CHROMIUM = "没有找到 Playwright 的 Chromium（安装：npx playwright install chromium；或用 KEEVO_CHROME 指定）";
 
 export async function launchChrome(chrome, args, env) {
   // 界面语言固定为中文：测试按中文文字断言（扩展按浏览器的界面语言选择中文或英文）
@@ -53,12 +94,17 @@ export async function launchChrome(chrome, args, env) {
       return () => listeners.delete(fn);
     },
     stderr: () => stderr,
-    /** 结束 Chrome 并等它退出（之后才能删除用户目录）。 */
-    close() {
-      if (proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve();
+    /**
+     * 结束 Chrome 并等它退出（之后才能删除用户目录）。先经 DevTools 协议正常退出：品牌版 Chrome 退出时才会删除
+     * 它在系统临时目录中的应用副本；5 秒内没有退出再强行结束。
+     */
+    async close() {
+      if (proc.exitCode !== null || proc.signalCode !== null) return;
       const exited = new Promise((r) => proc.once("exit", r));
-      proc.kill("SIGKILL");
-      return exited;
+      send("Browser.close").catch(() => undefined);
+      const timer = setTimeout(() => proc.kill("SIGKILL"), 5000);
+      await exited;
+      clearTimeout(timer);
     },
   };
 }

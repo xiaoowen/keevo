@@ -24,6 +24,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..", "..", "..");
 // host 清单中的路径必须是绝对路径
 const [APP, SMOKE] = process.argv.slice(2).map((p) => resolve(p));
+// 这个测试核对的正是"host 只接受品牌版 Chrome 作为父进程"（Google 的 Team ID），必须用 /Applications 中的
+// Google Chrome，不能换成 Playwright 的 Chromium。关闭时正常退出（cdp.mjs 的 close），不在临时目录留下应用副本。
 const CHROME = process.env.KEEVO_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const EXT_ID = "boojggkmhkakoacccigoiibnlkffcpof";
 const BUNDLED_HOST = join(APP, "Contents/Helpers/keevo-native-host");

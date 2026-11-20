@@ -1,0 +1,2346 @@
+{
+ "note": "真实网站登录页快照的清单（docs/roadmap.md §8 第 2 项）。采集：node apps/browser-extension/test/capture-sites.mjs；快照只保存在本机（snapshots/，git 忽略）。每个网站：group 为 mainstream（全球主流）、developer（开发者服务）、cn（国内）；steps 为采集前的点击（切换到密码登录等，不输入、不提交）；frame 为登录表单所在 iframe 的地址片段（采集该 iframe 的页面）；expect 为预期，格式同合成语料（corpus/README.md）；excluded 为不计入的原因（只看能否采集到登录表单，与识别结果无关）。",
+ "sites": [
+  {
+   "id": "google",
+   "group": "mainstream",
+   "name": "Google",
+   "url": "https://accounts.google.com/ServiceLogin",
+   "expect": {
+    "icons": {
+     "#identifierId": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#identifierId",
+      "expect": {
+       "#identifierId": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "facebook",
+   "group": "mainstream",
+   "name": "Facebook",
+   "url": "https://www.facebook.com/login/",
+   "expect": {
+    "icons": {
+     "#_R_c9l6neappb6amH1_": "login",
+     "#_R_cdl6neappb6amH1_": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#_R_c9l6neappb6amH1_",
+      "expect": {
+       "#_R_c9l6neappb6amH1_": "$U",
+       "#_R_cdl6neappb6amH1_": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "microsoft",
+   "group": "mainstream",
+   "name": "Microsoft 账户",
+   "url": "https://login.live.com/",
+   "expect": {
+    "icons": {
+     "#usernameEntry": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#usernameEntry",
+      "expect": {
+       "#usernameEntry": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "apple",
+   "group": "mainstream",
+   "name": "Apple 账户",
+   "url": "https://account.apple.com/sign-in",
+   "frame": "idmsa.apple.com",
+   "frameMode": "inplace",
+   "expect": {
+    "icons": {
+     "#account_name_text_field": "login",
+     "#password_text_field": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#account_name_text_field",
+      "expect": {
+       "#account_name_text_field": "$U",
+       "#password_text_field": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "amazon",
+   "group": "mainstream",
+   "name": "Amazon",
+   "url": "https://www.amazon.com/ap/signin?openid.pape.max_auth_age=0&openid.return_to=https%3A%2F%2Fwww.amazon.com%2F&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.assoc_handle=usflex&openid.mode=checkid_setup&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0",
+   "expect": {
+    "icons": {
+     "#ap_email_login": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#ap_email_login",
+      "expect": {
+       "#ap_email_login": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "yahoo",
+   "group": "mainstream",
+   "name": "Yahoo",
+   "url": "https://login.yahoo.com/",
+   "expect": {
+    "icons": {
+     "#username": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#username",
+      "expect": {
+       "#username": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "netflix",
+   "group": "mainstream",
+   "name": "Netflix",
+   "url": "https://www.netflix.com/login",
+   "expect": {
+    "icons": {
+     "#_R_lajal9laklallaqlamlemim_": "login",
+     "#_R_l6lal9laklallaqlamlemim_": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#_R_lajal9laklallaqlamlemim_",
+      "expect": {
+       "#_R_lajal9laklallaqlamlemim_": "$U",
+       "#_R_l6lal9laklallaqlamlemim_": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "linkedin",
+   "group": "mainstream",
+   "name": "LinkedIn",
+   "url": "https://www.linkedin.com/login",
+   "expect": {
+    "icons": {
+     "#_R_e3pptiejj35656j6_": "login",
+     "#_R_1lpptiejj35656j6_": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#_R_e3pptiejj35656j6_",
+      "expect": {
+       "#_R_e3pptiejj35656j6_": "$U",
+       "#_R_1lpptiejj35656j6_": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "x",
+   "group": "mainstream",
+   "name": "X",
+   "url": "https://x.com/i/flow/login",
+   "expect": {
+    "icons": {
+     "#jf-input-username_or_email": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#jf-input-username_or_email",
+      "expect": {
+       "#jf-input-username_or_email": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "instagram",
+   "group": "mainstream",
+   "name": "Instagram",
+   "url": "https://www.instagram.com/accounts/login/",
+   "excluded": "无头模式被人机验证拦下（Cloudflare、Akamai 等），有界面模式采集超时"
+  },
+  {
+   "id": "reddit",
+   "group": "mainstream",
+   "name": "Reddit",
+   "url": "https://www.reddit.com/login/",
+   "expect": {
+    "icons": {
+     "#login-username >>> input[name=\"username\"]": "login",
+     "#login-password >>> input[name=\"password\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#login-username >>> input[name=\"username\"]",
+      "expect": {
+       "#login-username >>> input[name=\"username\"]": "$U",
+       "#login-password >>> input[name=\"password\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "wikipedia",
+   "group": "mainstream",
+   "name": "Wikipedia",
+   "url": "https://en.wikipedia.org/w/index.php?title=Special:UserLogin",
+   "expect": {
+    "icons": {
+     "#wpName1": "login",
+     "#wpPassword1": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#wpName1",
+      "expect": {
+       "#wpName1": "$U",
+       "#wpPassword1": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "ebay",
+   "group": "mainstream",
+   "name": "eBay",
+   "url": "https://signin.ebay.com/",
+   "excluded": "无头模式被人机验证拦下（Cloudflare、Akamai 等），有界面模式采集超时"
+  },
+  {
+   "id": "paypal",
+   "group": "mainstream",
+   "name": "PayPal",
+   "url": "https://www.paypal.com/signin",
+   "excluded": "无头模式被人机验证拦下（Cloudflare、Akamai 等），有界面模式采集超时"
+  },
+  {
+   "id": "dropbox",
+   "group": "mainstream",
+   "name": "Dropbox",
+   "url": "https://www.dropbox.com/login",
+   "expect": {
+    "icons": {
+     "#susi_email9714070296349755": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#susi_email9714070296349755",
+      "expect": {
+       "#susi_email9714070296349755": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "zoom",
+   "group": "mainstream",
+   "name": "Zoom",
+   "url": "https://zoom.us/signin",
+   "expect": {
+    "icons": {
+     "#email": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#email",
+      "expect": {
+       "#email": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "adobe",
+   "group": "mainstream",
+   "name": "Adobe",
+   "url": "https://account.adobe.com/",
+   "expect": {
+    "icons": {
+     "#EmailPage-EmailField": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#EmailPage-EmailField",
+      "expect": {
+       "#EmailPage-EmailField": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "spotify",
+   "group": "mainstream",
+   "name": "Spotify",
+   "url": "https://accounts.spotify.com/en/login",
+   "expect": {
+    "icons": {
+     "#username": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#username",
+      "expect": {
+       "#username": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "twitch",
+   "group": "mainstream",
+   "name": "Twitch",
+   "url": "https://www.twitch.tv/login",
+   "expect": {
+    "icons": {
+     "#login-username": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#login-username",
+      "expect": {
+       "#login-username": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "pinterest",
+   "group": "mainstream",
+   "name": "Pinterest",
+   "url": "https://www.pinterest.com/login/",
+   "expect": {
+    "icons": {
+     "#email": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#email",
+      "expect": {
+       "#email": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "tiktok",
+   "group": "mainstream",
+   "name": "TikTok",
+   "url": "https://www.tiktok.com/login/phone-or-email/email",
+   "expect": {
+    "icons": {
+     "input[name=\"username\"]": "login",
+     "input[autocomplete=\"new-password\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[name=\"username\"]",
+      "expect": {
+       "input[name=\"username\"]": "$U",
+       "input[autocomplete=\"new-password\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "discord",
+   "group": "mainstream",
+   "name": "Discord",
+   "url": "https://discord.com/login",
+   "expect": {
+    "icons": {
+     "#uid_10": "login",
+     "#uid_12": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#uid_10",
+      "expect": {
+       "#uid_10": "$U",
+       "#uid_12": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "quora",
+   "group": "mainstream",
+   "name": "Quora",
+   "url": "https://www.quora.com/",
+   "expect": {
+    "icons": {
+     "#email": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#email",
+      "expect": {
+       "#email": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "booking",
+   "group": "mainstream",
+   "name": "Booking.com",
+   "url": "https://account.booking.com/sign-in",
+   "expect": {
+    "icons": {
+     "#username": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#username",
+      "expect": {
+       "#username": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "airbnb",
+   "group": "mainstream",
+   "name": "Airbnb",
+   "url": "https://www.airbnb.com/login",
+   "expect": {
+    "icons": {
+     "#phone-or-email": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#phone-or-email",
+      "expect": {
+       "#phone-or-email": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "etsy",
+   "group": "mainstream",
+   "name": "Etsy",
+   "url": "https://www.etsy.com/signin",
+   "excluded": "无头模式被人机验证拦下（Cloudflare、Akamai 等），有界面模式采集超时"
+  },
+  {
+   "id": "walmart",
+   "group": "mainstream",
+   "name": "Walmart",
+   "url": "https://www.walmart.com/account/login",
+   "expect": {
+    "icons": {
+     "input[name=\"Phone number or email (required)\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[name=\"Phone number or email (required)\"]",
+      "expect": {
+       "input[name=\"Phone number or email (required)\"]": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "nytimes",
+   "group": "mainstream",
+   "name": "The New York Times",
+   "url": "https://myaccount.nytimes.com/auth/login",
+   "excluded": "无头模式被人机验证拦下（Cloudflare、Akamai 等），有界面模式采集超时"
+  },
+  {
+   "id": "medium",
+   "group": "mainstream",
+   "name": "Medium",
+   "url": "https://medium.com/m/signin",
+   "steps": [
+    {
+     "text": "Sign in with email"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "input[type=\"email\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[type=\"email\"]",
+      "expect": {
+       "input[type=\"email\"]": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "tumblr",
+   "group": "mainstream",
+   "name": "Tumblr",
+   "url": "https://www.tumblr.com/login",
+   "expect": {
+    "icons": {
+     "input[name=\"email\"]": "login",
+     "input[name=\"password\"]": "login",
+     "input[name=\"q\"]": null
+    },
+    "fills": [
+     {
+      "anchor": "input[name=\"email\"]",
+      "expect": {
+       "input[name=\"email\"]": "$U",
+       "input[name=\"password\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "vimeo",
+   "group": "mainstream",
+   "name": "Vimeo",
+   "url": "https://vimeo.com/log_in",
+   "expect": {
+    "icons": {
+     "#unified_auth_email": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#unified_auth_email",
+      "expect": {
+       "#unified_auth_email": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "wordpress",
+   "group": "mainstream",
+   "name": "WordPress.com",
+   "url": "https://wordpress.com/log-in",
+   "expect": {
+    "icons": {
+     "#usernameOrEmail": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#usernameOrEmail",
+      "expect": {
+       "#usernameOrEmail": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "salesforce",
+   "group": "mainstream",
+   "name": "Salesforce",
+   "url": "https://login.salesforce.com/",
+   "expect": {
+    "icons": {
+     "input[name=\"identifier\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[name=\"identifier\"]",
+      "expect": {
+       "input[name=\"identifier\"]": "$U"
+      }
+     }
+    ]
+   },
+   "note": "页面用 shadow DOM 的模拟实现（LWC synthetic shadow），快照中是普通 DOM"
+  },
+  {
+   "id": "slack",
+   "group": "mainstream",
+   "name": "Slack",
+   "url": "https://slack.com/signin",
+   "expect": {
+    "icons": {
+     "#signup_email": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#signup_email",
+      "expect": {
+       "#signup_email": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "notion",
+   "group": "mainstream",
+   "name": "Notion",
+   "url": "https://www.notion.so/login",
+   "expect": {
+    "icons": {
+     "#\\:r5\\:": "login",
+     "input[autocomplete=\"current-password\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#\\:r5\\:",
+      "expect": {
+       "#\\:r5\\:": "$U",
+       "input[autocomplete=\"current-password\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "canva",
+   "group": "mainstream",
+   "name": "Canva",
+   "url": "https://www.canva.com/login",
+   "steps": [
+    {
+     "text": "Continue with email"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "#_r_2p_": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#_r_2p_",
+      "expect": {
+       "#_r_2p_": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "atlassian",
+   "group": "mainstream",
+   "name": "Atlassian",
+   "url": "https://id.atlassian.com/login",
+   "expect": {
+    "icons": {
+     "#username-_r0_": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#username-_r0_",
+      "expect": {
+       "#username-_r0_": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "yandex",
+   "group": "mainstream",
+   "name": "Yandex",
+   "url": "https://passport.yandex.com/auth",
+   "expect": {
+    "icons": {
+     "#react-aria-«R16ab»": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#react-aria-«R16ab»",
+      "expect": {
+       "#react-aria-«R16ab»": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "vk",
+   "group": "mainstream",
+   "name": "VK",
+   "url": "https://vk.com/login",
+   "steps": [
+    {
+     "text": "Other sign-in options"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "input[name=\"login\"]": "login",
+     "#search-\\:r0\\:": null
+    },
+    "fills": [
+     {
+      "anchor": "input[name=\"login\"]",
+      "expect": {
+       "input[name=\"login\"]": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "steam",
+   "group": "mainstream",
+   "name": "Steam",
+   "url": "https://store.steampowered.com/login/",
+   "expect": {
+    "icons": {
+     "#«R1lm8raqi»": "login",
+     "#«R1lm8raqiH1»": "login",
+     "input[name=\"term\"]": null
+    },
+    "fills": [
+     {
+      "anchor": "#«R1lm8raqi»",
+      "expect": {
+       "#«R1lm8raqi»": "$U",
+       "#«R1lm8raqiH1»": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "epicgames",
+   "group": "mainstream",
+   "name": "Epic Games",
+   "url": "https://www.epicgames.com/id/login/epic",
+   "expect": {
+    "icons": {
+     "#email": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#email",
+      "expect": {
+       "#email": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "duolingo",
+   "group": "mainstream",
+   "name": "Duolingo",
+   "url": "https://www.duolingo.com/log-in",
+   "expect": {
+    "icons": {
+     "#web-ui1": "login",
+     "#web-ui2": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#web-ui1",
+      "expect": {
+       "#web-ui1": "$U",
+       "#web-ui2": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "disneyplus",
+   "group": "mainstream",
+   "name": "Disney+",
+   "url": "https://www.disneyplus.com/login",
+   "expect": {
+    "icons": {
+     "#email": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#email",
+      "expect": {
+       "#email": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "shopify",
+   "group": "mainstream",
+   "name": "Shopify",
+   "url": "https://accounts.shopify.com/lookup",
+   "expect": {
+    "icons": {
+     "#account_email": "login",
+     "#account_password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#account_email",
+      "expect": {
+       "#account_email": "$U",
+       "#account_password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "mailchimp",
+   "group": "mainstream",
+   "name": "Mailchimp",
+   "url": "https://login.mailchimp.com/",
+   "expect": {
+    "icons": {
+     "#username": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#username",
+      "expect": {
+       "#username": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "coursera",
+   "group": "mainstream",
+   "name": "Coursera",
+   "url": "https://www.coursera.org/?authMode=login",
+   "expect": {
+    "icons": {
+     "#cds-react-aria887171213-\\:r4\\:": "login",
+     "#search-autocomplete-input": null
+    },
+    "fills": [
+     {
+      "anchor": "#cds-react-aria887171213-\\:r4\\:",
+      "expect": {
+       "#cds-react-aria887171213-\\:r4\\:": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "udemy",
+   "group": "mainstream",
+   "name": "Udemy",
+   "url": "https://www.udemy.com/join/login-popup/",
+   "expect": {
+    "icons": {
+     "#form-group--1": "login",
+     "#u297-search-form-autocomplete--4": null
+    },
+    "fills": [
+     {
+      "anchor": "#form-group--1",
+      "expect": {
+       "#form-group--1": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "proton",
+   "group": "mainstream",
+   "name": "Proton",
+   "url": "https://account.proton.me/login",
+   "expect": {
+    "icons": {
+     "#username": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#username",
+      "expect": {
+       "#username": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "indeed",
+   "group": "mainstream",
+   "name": "Indeed",
+   "url": "https://secure.indeed.com/auth",
+   "expect": {
+    "icons": {
+     "#ifl-InputFormField-\\:passport-ssr-Reqktala\\:": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#ifl-InputFormField-\\:passport-ssr-Reqktala\\:",
+      "expect": {
+       "#ifl-InputFormField-\\:passport-ssr-Reqktala\\:": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "bankofamerica",
+   "group": "mainstream",
+   "name": "Bank of America",
+   "url": "https://www.bankofamerica.com/",
+   "expect": {
+    "icons": {
+     "#oid": "login",
+     "#pass": "login",
+     "#nav-search-query": null
+    },
+    "fills": [
+     {
+      "anchor": "#oid",
+      "expect": {
+       "#oid": "$U",
+       "#pass": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "fandom",
+   "group": "mainstream",
+   "name": "Fandom",
+   "url": "https://auth.fandom.com/signin",
+   "expect": {
+    "icons": {
+     "#identifier": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#identifier",
+      "expect": {
+       "#identifier": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "samsung",
+   "group": "mainstream",
+   "name": "Samsung 账户",
+   "url": "https://account.samsung.com/",
+   "steps": [
+    {
+     "text": "Sign in"
+    },
+    {
+     "wait": 6000
+    }
+   ],
+   "expect": {
+    "icons": {
+     "#account": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#account",
+      "expect": {
+       "#account": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "github",
+   "group": "developer",
+   "name": "GitHub",
+   "url": "https://github.com/login",
+   "expect": {
+    "icons": {
+     "#login_field": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#login_field",
+      "expect": {
+       "#login_field": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "gitlab",
+   "group": "developer",
+   "name": "GitLab",
+   "url": "https://gitlab.com/users/sign_in",
+   "excluded": "无头模式被人机验证拦下（Cloudflare、Akamai 等），有界面模式采集超时"
+  },
+  {
+   "id": "aws",
+   "group": "developer",
+   "name": "AWS 控制台",
+   "url": "https://console.aws.amazon.com/",
+   "expect": {
+    "icons": {
+     "#username": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#username",
+      "expect": {
+       "#username": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "npm",
+   "group": "developer",
+   "name": "npm",
+   "url": "https://www.npmjs.com/login",
+   "expect": {
+    "icons": {
+     "#login_username": "login",
+     "#login_password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#login_username",
+      "expect": {
+       "#login_username": "$U",
+       "#login_password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "docker",
+   "group": "developer",
+   "name": "Docker",
+   "url": "https://app.docker.com/login",
+   "expect": {
+    "icons": {
+     "#username": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#username",
+      "expect": {
+       "#username": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "cloudflare",
+   "group": "developer",
+   "name": "Cloudflare",
+   "url": "https://dash.cloudflare.com/login",
+   "expect": {
+    "icons": {
+     "#email": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#email",
+      "expect": {
+       "#email": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "vercel",
+   "group": "developer",
+   "name": "Vercel",
+   "url": "https://vercel.com/login",
+   "expect": {
+    "icons": {
+     "#input-_R_mr5fd5ubr5u5dad6lb_": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#input-_R_mr5fd5ubr5u5dad6lb_",
+      "expect": {
+       "#input-_R_mr5fd5ubr5u5dad6lb_": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "netlify",
+   "group": "developer",
+   "name": "Netlify",
+   "url": "https://app.netlify.com/login",
+   "steps": [
+    {
+     "text": "Log in with email"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "#email": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#email",
+      "expect": {
+       "#email": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "heroku",
+   "group": "developer",
+   "name": "Heroku",
+   "url": "https://id.heroku.com/login",
+   "expect": {
+    "icons": {
+     "#email": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#email",
+      "expect": {
+       "#email": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "digitalocean",
+   "group": "developer",
+   "name": "DigitalOcean",
+   "url": "https://cloud.digitalocean.com/login",
+   "expect": {
+    "icons": {
+     "#email": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#email",
+      "expect": {
+       "#email": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "stackoverflow",
+   "group": "developer",
+   "name": "Stack Overflow",
+   "url": "https://stackoverflow.com/users/login",
+   "expect": {
+    "icons": {
+     "#email": "login",
+     "#password": "login",
+     "input[name=\"q\"]": null
+    },
+    "fills": [
+     {
+      "anchor": "#email",
+      "expect": {
+       "#email": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "jetbrains",
+   "group": "developer",
+   "name": "JetBrains 账户",
+   "url": "https://account.jetbrains.com/login",
+   "steps": [
+    {
+     "text": "Accept All"
+    },
+    {
+     "text": "Continue with email"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "#email": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#email",
+      "expect": {
+       "#email": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "pypi",
+   "group": "developer",
+   "name": "PyPI",
+   "url": "https://pypi.org/account/login/",
+   "expect": {
+    "icons": {
+     "#username": "login",
+     "#password": "login",
+     "#search": null
+    },
+    "fills": [
+     {
+      "anchor": "#username",
+      "expect": {
+       "#username": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "huggingface",
+   "group": "developer",
+   "name": "Hugging Face",
+   "url": "https://huggingface.co/login",
+   "expect": {
+    "icons": {
+     "input[name=\"username\"]": "login",
+     "input[name=\"password\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[name=\"username\"]",
+      "expect": {
+       "input[name=\"username\"]": "$U",
+       "input[name=\"password\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "openai",
+   "group": "developer",
+   "name": "OpenAI Platform",
+   "url": "https://platform.openai.com/login",
+   "expect": {
+    "icons": {
+     "#login-email": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#login-email",
+      "expect": {
+       "#login-email": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "anthropic",
+   "group": "developer",
+   "name": "Anthropic Console",
+   "url": "https://console.anthropic.com/login",
+   "expect": {
+    "icons": {
+     "#email": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#email",
+      "expect": {
+       "#email": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "sentry",
+   "group": "developer",
+   "name": "Sentry",
+   "url": "https://sentry.io/auth/login/",
+   "expect": {
+    "icons": {
+     "input[name=\"email\"]": "login",
+     "input[name=\"password\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[name=\"email\"]",
+      "expect": {
+       "input[name=\"email\"]": "$U",
+       "input[name=\"password\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "datadog",
+   "group": "developer",
+   "name": "Datadog",
+   "url": "https://app.datadoghq.com/account/login",
+   "expect": {
+    "icons": {
+     "#username": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#username",
+      "expect": {
+       "#username": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "grafana",
+   "group": "developer",
+   "name": "Grafana Cloud",
+   "url": "https://grafana.com/auth/sign-in",
+   "expect": {
+    "icons": {
+     "input[name=\"login\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[name=\"login\"]",
+      "expect": {
+       "input[name=\"login\"]": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "mongodb",
+   "group": "developer",
+   "name": "MongoDB Atlas",
+   "url": "https://account.mongodb.com/account/login",
+   "expect": {
+    "icons": {
+     "#username": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#username",
+      "expect": {
+       "#username": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "supabase",
+   "group": "developer",
+   "name": "Supabase",
+   "url": "https://supabase.com/dashboard/sign-in",
+   "expect": {
+    "icons": {
+     "#_R_kpd596daaq_-form-item": "login",
+     "#_R_2spd596daaq_-form-item": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#_R_kpd596daaq_-form-item",
+      "expect": {
+       "#_R_kpd596daaq_-form-item": "$U",
+       "#_R_2spd596daaq_-form-item": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "linode",
+   "group": "developer",
+   "name": "Linode",
+   "url": "https://login.linode.com/login",
+   "expect": {
+    "icons": {
+     "#username": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#username",
+      "expect": {
+       "#username": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "render",
+   "group": "developer",
+   "name": "Render",
+   "url": "https://dashboard.render.com/login",
+   "expect": {
+    "icons": {
+     "#auth-email": "login",
+     "#_r_6_": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#auth-email",
+      "expect": {
+       "#auth-email": "$U",
+       "#_r_6_": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "flyio",
+   "group": "developer",
+   "name": "Fly.io",
+   "url": "https://fly.io/app/sign-in",
+   "expect": {
+    "icons": {
+     "#sign-in-email": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#sign-in-email",
+      "expect": {
+       "#sign-in-email": "$U"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "postman",
+   "group": "developer",
+   "name": "Postman",
+   "url": "https://identity.getpostman.com/login",
+   "expect": {
+    "icons": {
+     "#username": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#username",
+      "expect": {
+       "#username": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "rubygems",
+   "group": "developer",
+   "name": "RubyGems",
+   "url": "https://rubygems.org/sign_in",
+   "expect": {
+    "icons": {
+     "#session_who": "login",
+     "#session_password": "login",
+     "#query": null
+    },
+    "fills": [
+     {
+      "anchor": "#session_who",
+      "expect": {
+       "#session_who": "$U",
+       "#session_password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "gitea",
+   "group": "developer",
+   "name": "Gitea（gitea.com）",
+   "url": "https://gitea.com/user/login",
+   "expect": {
+    "icons": {
+     "#user_name": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#user_name",
+      "expect": {
+       "#user_name": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "baidu",
+   "group": "cn",
+   "name": "百度",
+   "url": "https://passport.baidu.com/v2/?login",
+   "steps": [
+    {
+     "text": "用户名登录"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "#TANGRAM__PSP_3__userName": "login",
+     "#TANGRAM__PSP_3__password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#TANGRAM__PSP_3__userName",
+      "expect": {
+       "#TANGRAM__PSP_3__userName": "$U",
+       "#TANGRAM__PSP_3__password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "taobao",
+   "group": "cn",
+   "name": "淘宝",
+   "url": "https://login.taobao.com/",
+   "expect": {
+    "icons": {
+     "#fm-login-id": "login",
+     "#fm-login-password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#fm-login-id",
+      "expect": {
+       "#fm-login-id": "$U",
+       "#fm-login-password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "jd",
+   "group": "cn",
+   "name": "京东",
+   "url": "https://passport.jd.com/new/login.aspx",
+   "expect": {
+    "icons": {
+     "#loginname": "login",
+     "#nloginpwd": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#loginname",
+      "expect": {
+       "#loginname": "$U",
+       "#nloginpwd": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "qqmail",
+   "group": "cn",
+   "name": "QQ 邮箱",
+   "url": "https://mail.qq.com/",
+   "frame": "xui.ptlogin2.qq.com",
+   "steps": [
+    {
+     "text": "密码登录"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "#u": "login",
+     "#p": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#u",
+      "expect": {
+       "#u": "$U",
+       "#p": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "weibo",
+   "group": "cn",
+   "name": "微博",
+   "url": "https://passport.weibo.com/sso/signin",
+   "steps": [
+    {
+     "text": "账号登录"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "input[type=\"text\"]": "login",
+     "input[type=\"password\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[type=\"text\"]",
+      "expect": {
+       "input[type=\"text\"]": "$U",
+       "input[type=\"password\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "zhihu",
+   "group": "cn",
+   "name": "知乎",
+   "url": "https://www.zhihu.com/signin",
+   "steps": [
+    {
+     "text": "密码登录"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "input[name=\"username\"]": "login",
+     "input[name=\"password\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[name=\"username\"]",
+      "expect": {
+       "input[name=\"username\"]": "$U",
+       "input[name=\"password\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "bilibili",
+   "group": "cn",
+   "name": "哔哩哔哩",
+   "url": "https://passport.bilibili.com/login",
+   "expect": {
+    "icons": {
+     "input[type=\"text\"]": "login",
+     "input[type=\"password\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[type=\"text\"]",
+      "expect": {
+       "input[type=\"text\"]": "$U",
+       "input[type=\"password\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "douban",
+   "group": "cn",
+   "name": "豆瓣",
+   "url": "https://accounts.douban.com/passport/login",
+   "steps": [
+    {
+     "text": "密码登录"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "input[name=\"username\"]": "login",
+     "input[name=\"password\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[name=\"username\"]",
+      "expect": {
+       "input[name=\"username\"]": "$U",
+       "input[name=\"password\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "mail163",
+   "group": "cn",
+   "name": "网易邮箱",
+   "url": "https://mail.163.com/",
+   "frame": "dl.reg.163.com",
+   "frameMode": "inplace",
+   "expect": {
+    "icons": {
+     "#auto-id-1795177942178": "login",
+     "#auto-id-1795177942181": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#auto-id-1795177942178",
+      "expect": {
+       "#auto-id-1795177942178": "$U",
+       "#auto-id-1795177942181": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "csdn",
+   "group": "cn",
+   "name": "CSDN",
+   "url": "https://passport.csdn.net/login",
+   "excluded": "只有扫码、短信验证码与 App 登录，没有密码登录"
+  },
+  {
+   "id": "gitee",
+   "group": "cn",
+   "name": "Gitee",
+   "url": "https://gitee.com/login",
+   "expect": {
+    "icons": {
+     "input[placeholder=\"手机／邮箱／个人空间地址\"]": "login",
+     "#user_password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[placeholder=\"手机／邮箱／个人空间地址\"]",
+      "expect": {
+       "input[placeholder=\"手机／邮箱／个人空间地址\"]": "$U",
+       "#user_password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "aliyun",
+   "group": "cn",
+   "name": "阿里云",
+   "url": "https://account.aliyun.com/login/login.htm",
+   "frame": "passport.aliyun.com/havanaone/login",
+   "expect": {
+    "icons": {
+     "#fm-login-id": "login",
+     "#fm-login-password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#fm-login-id",
+      "expect": {
+       "#fm-login-id": "$U",
+       "#fm-login-password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "tencentcloud",
+   "group": "cn",
+   "name": "腾讯云",
+   "url": "https://cloud.tencent.com/login",
+   "steps": [
+    {
+     "text": "邮箱登录"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "input[name=\"mail\"]": "login",
+     "input[name=\"password\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[name=\"mail\"]",
+      "expect": {
+       "input[name=\"mail\"]": "$U",
+       "input[name=\"password\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "huawei",
+   "group": "cn",
+   "name": "华为账号",
+   "url": "https://id1.cloud.huawei.com/CAS/portal/loginAuth.html",
+   "expect": {
+    "icons": {
+     "input[placeholder=\"Phone/Email/Login ID\"]": "login",
+     "input[placeholder=\"Password\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[placeholder=\"Phone/Email/Login ID\"]",
+      "expect": {
+       "input[placeholder=\"Phone/Email/Login ID\"]": "$U",
+       "input[placeholder=\"Password\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "xiaomi",
+   "group": "cn",
+   "name": "小米账号",
+   "url": "https://account.xiaomi.com/fe/service/login/password",
+   "expect": {
+    "icons": {
+     "input[name=\"account\"]": "login",
+     "input[name=\"password\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[name=\"account\"]",
+      "expect": {
+       "input[name=\"account\"]": "$U",
+       "input[name=\"password\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "ctrip",
+   "group": "cn",
+   "name": "携程",
+   "url": "https://passport.ctrip.com/user/login",
+   "expect": {
+    "icons": {
+     "input[placeholder=\"国内手机号/用户名/邮箱/卡号\"]": "login",
+     "input[autocomplete=\"new-password\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[placeholder=\"国内手机号/用户名/邮箱/卡号\"]",
+      "expect": {
+       "input[placeholder=\"国内手机号/用户名/邮箱/卡号\"]": "$U",
+       "input[autocomplete=\"new-password\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "meituan",
+   "group": "cn",
+   "name": "美团",
+   "url": "https://passport.meituan.com/account/unitivelogin",
+   "expect": {
+    "icons": {
+     "#login-email": "login",
+     "#login-password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#login-email",
+      "expect": {
+       "#login-email": "$U",
+       "#login-password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "railway12306",
+   "group": "cn",
+   "name": "12306",
+   "url": "https://kyfw.12306.cn/otn/resources/login.html",
+   "expect": {
+    "icons": {
+     "#J-userName": "login",
+     "#J-password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#J-userName",
+      "expect": {
+       "#J-userName": "$U",
+       "#J-password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "jianshu",
+   "group": "cn",
+   "name": "简书",
+   "url": "https://www.jianshu.com/sign_in",
+   "expect": {
+    "icons": {
+     "#session_email_or_mobile_number": "login",
+     "#session_password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#session_email_or_mobile_number",
+      "expect": {
+       "#session_email_or_mobile_number": "$U",
+       "#session_password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "juejin",
+   "group": "cn",
+   "name": "稀土掘金",
+   "url": "https://juejin.cn/login",
+   "steps": [
+    {
+     "text": "密码登录"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "input[name=\"loginPhoneOrEmail\"]": "login",
+     "input[name=\"loginPassword\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[name=\"loginPhoneOrEmail\"]",
+      "expect": {
+       "input[name=\"loginPhoneOrEmail\"]": "$U",
+       "input[name=\"loginPassword\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "iqiyi",
+   "group": "cn",
+   "name": "爱奇艺",
+   "url": "https://www.iqiyi.com/iframe/loginreg",
+   "steps": [
+    {
+     "text": "其他方式登录"
+    },
+    {
+     "text": "账号密码登录"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "html > body > div:nth-of-type(2) > div > div:nth-of-type(1) > div > div:nth-of-type(1) > div:nth-of-type(1) > div > div:nth-of-type(1) > div:nth-of-type(2) > input": "login",
+     "input[type=\"password\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "html > body > div:nth-of-type(2) > div > div:nth-of-type(1) > div > div:nth-of-type(1) > div:nth-of-type(1) > div > div:nth-of-type(1) > div:nth-of-type(2) > input",
+      "expect": {
+       "html > body > div:nth-of-type(2) > div > div:nth-of-type(1) > div > div:nth-of-type(1) > div:nth-of-type(1) > div > div:nth-of-type(1) > div:nth-of-type(2) > input": "$U",
+       "input[type=\"password\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "alipay",
+   "group": "cn",
+   "name": "支付宝",
+   "url": "https://auth.alipay.com/login/index.htm",
+   "steps": [
+    {
+     "text": "账密登录"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "#J-input-user": "login",
+     "#password_rsainput": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#J-input-user",
+      "expect": {
+       "#J-input-user": "$U",
+       "#password_rsainput": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "feishu",
+   "group": "cn",
+   "name": "飞书",
+   "url": "https://passport.feishu.cn/accounts/page/login",
+   "excluded": "登录页需要应用参数，直接打开报\"无效的请求参数\""
+  },
+  {
+   "id": "segmentfault",
+   "group": "cn",
+   "name": "SegmentFault",
+   "url": "https://segmentfault.com/user/login",
+   "steps": [
+    {
+     "text": "密码登录"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "#mobileOrMail": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#mobileOrMail",
+      "expect": {
+       "#mobileOrMail": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "v2ex",
+   "group": "cn",
+   "name": "V2EX",
+   "url": "https://www.v2ex.com/signin",
+   "excluded": "无头模式被人机验证拦下（Cloudflare、Akamai 等），有界面模式采集超时"
+  },
+  {
+   "id": "oschina",
+   "group": "cn",
+   "name": "开源中国",
+   "url": "https://www.oschina.net/home/login",
+   "steps": [
+    {
+     "text": "密码登录"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "#form_item_account": "login",
+     "#form_item_password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#form_item_account",
+      "expect": {
+       "#form_item_account": "$U",
+       "#form_item_password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "suning",
+   "group": "cn",
+   "name": "苏宁易购",
+   "url": "https://passport.suning.com/ids/login",
+   "steps": [
+    {
+     "text": "账户登录"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "#userName": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#userName",
+      "expect": {
+       "#userName": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "sinamail",
+   "group": "cn",
+   "name": "新浪邮箱",
+   "url": "https://mail.sina.com.cn/",
+   "expect": {
+    "icons": {
+     "#account": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#account",
+      "expect": {
+       "#account": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "figma",
+   "group": "mainstream",
+   "name": "Figma",
+   "url": "https://www.figma.com/login",
+   "spare": true,
+   "expect": {
+    "icons": {
+     "#email": "login",
+     "#current-password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#email",
+      "expect": {
+       "#email": "$U",
+       "#current-password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "zoho",
+   "group": "mainstream",
+   "name": "Zoho",
+   "url": "https://accounts.zoho.com/signin",
+   "spare": true,
+   "expect": {
+    "icons": {
+     "#login_id": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#login_id",
+      "expect": {
+       "#login_id": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "box",
+   "group": "mainstream",
+   "name": "Box",
+   "url": "https://account.box.com/login",
+   "spare": true,
+   "excluded": "无头模式下返回空页面"
+  },
+  {
+   "id": "codeberg",
+   "group": "developer",
+   "name": "Codeberg",
+   "url": "https://codeberg.org/user/login",
+   "spare": true,
+   "expect": {
+    "icons": {
+     "#user_name": "login",
+     "#password": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#user_name",
+      "expect": {
+       "#user_name": "$U",
+       "#password": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "sourceforge",
+   "group": "developer",
+   "name": "SourceForge",
+   "url": "https://sourceforge.net/auth/",
+   "spare": true,
+   "expect": {
+    "icons": {
+     "#w-136\\.Xw4gqw7g7w5_CpFfDmsO8w4TCmCfCssKzAVrCssKpwonDnw": "login",
+     "#w-136\\.Xw4gvw6otw57CvVnDhcO9w4TCmCfCssKzAVrCssKpwonDnw": "login",
+     "#forge > div:nth-of-type(3) > div:nth-of-type(1) > section:nth-of-type(3) > nav > div:nth-of-type(2) > form > div > div > div > input": null
+    },
+    "fills": [
+     {
+      "anchor": "#w-136\\.Xw4gqw7g7w5_CpFfDmsO8w4TCmCfCssKzAVrCssKpwonDnw",
+      "expect": {
+       "#w-136\\.Xw4gqw7g7w5_CpFfDmsO8w4TCmCfCssKzAVrCssKpwonDnw": "$U",
+       "#w-136\\.Xw4gvw6otw57CvVnDhcO9w4TCmCfCssKzAVrCssKpwonDnw": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "ubuntuone",
+   "group": "developer",
+   "name": "Ubuntu One",
+   "url": "https://login.ubuntu.com/",
+   "spare": true,
+   "expect": {
+    "icons": {
+     "#login-form > div:nth-of-type(1) > input": "login",
+     "input[placeholder=\"Password\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#login-form > div:nth-of-type(1) > input",
+      "expect": {
+       "#login-form > div:nth-of-type(1) > input": "$U",
+       "input[placeholder=\"Password\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "exmail",
+   "group": "cn",
+   "name": "腾讯企业邮",
+   "url": "https://exmail.qq.com/login",
+   "spare": true,
+   "steps": [
+    {
+     "text": "其他方式登录"
+    },
+    {
+     "text": "账号密码"
+    }
+   ],
+   "expect": {
+    "icons": {
+     "#inputuin": "login",
+     "#pp": "login"
+    },
+    "fills": [
+     {
+      "anchor": "#inputuin",
+      "expect": {
+       "#inputuin": "$U",
+       "#pp": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "sohumail",
+   "group": "cn",
+   "name": "搜狐邮箱",
+   "url": "https://mail.sohu.com/",
+   "spare": true,
+   "expect": {
+    "icons": {
+     "input[placeholder=\"请输入您的邮箱\"]": "login",
+     "input[type=\"password\"]": "login"
+    },
+    "fills": [
+     {
+      "anchor": "input[placeholder=\"请输入您的邮箱\"]",
+      "expect": {
+       "input[placeholder=\"请输入您的邮箱\"]": "$U",
+       "input[type=\"password\"]": "$P"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "zhaopin",
+   "group": "cn",
+   "name": "智联招聘",
+   "url": "https://passport.zhaopin.com/login",
+   "spare": true,
+   "excluded": "只有短信验证码与微信扫码登录，没有密码登录"
+  }
+ ]
+}

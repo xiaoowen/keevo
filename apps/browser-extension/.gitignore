@@ -2,3 +2,5 @@ node_modules/
 dist/
 # 由 scripts/build-extension.sh 生成
 src/wasm/
+# 真实网站登录页快照只保存在本机（test/corpus/README.md）
+test/sites/snapshots/

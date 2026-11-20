@@ -4,7 +4,7 @@
 # 可用性测试、真实网站登录页快照与内部安全评审需要人工进行，不在这里。
 #
 # 用法：scripts/acceptance.sh [每个模糊测试目标的秒数，默认 60]
-#   正式验收时把秒数设为 86400 / 目标数，使全部目标合计连续运行 24 小时；也可以分多台机器并行。
+#   正式的 24 小时模糊测试改用 scripts/fuzz-soak.sh（分批并行，每个目标运行更久）。
 # 每一步都有时间上限：卡住时报告超时并失败，而不是一直等下去。
 set -euo pipefail
 
@@ -43,7 +43,12 @@ if cargo +nightly fuzz --version >/dev/null 2>&1; then
   (
     cd fuzz
     for target in $(cargo +nightly fuzz list); do
-      limit $((FUZZ_SECONDS + 600)) cargo +nightly fuzz run "$target" -- -max_total_time="$FUZZ_SECONDS" >"/tmp/keevo-fuzz-$target.log" 2>&1 \
+      seeds=()
+      if [ -d "seeds/$target" ]; then
+        mkdir -p "corpus/$target"
+        seeds=("corpus/$target" "seeds/$target")
+      fi
+      limit $((FUZZ_SECONDS + 600)) cargo +nightly fuzz run "$target" ${seeds[@]+"${seeds[@]}"} -- -max_total_time="$FUZZ_SECONDS" >"/tmp/keevo-fuzz-$target.log" 2>&1 \
         || { tail -30 "/tmp/keevo-fuzz-$target.log" >&2; fail "模糊测试 $target"; }
       echo "  · ${target}：$(grep -E '^Done' "/tmp/keevo-fuzz-$target.log" | tail -1)"
     done

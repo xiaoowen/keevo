@@ -13,19 +13,19 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { attach, click, launchChrome, waitFor } from "./cdp.mjs";
+import { attach, click, findChromium, launchChrome, NO_CHROMIUM, waitFor } from "./cdp.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..", "..", "..");
-const CHROME = process.env.KEEVO_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const CHROME = findChromium();
 const EXT_ID = "boojggkmhkakoacccigoiibnlkffcpof";
-if (!existsSync(CHROME)) {
-  console.log("没有找到 Chrome，跳过真实浏览器测试（可用 KEEVO_CHROME 指定）");
+if (!CHROME) {
+  console.log(`${NO_CHROMIUM}，跳过真实浏览器测试`);
   process.exit(0);
 }
 
@@ -148,10 +148,12 @@ const manifest = JSON.parse(readFileSync(join(ext, "manifest.json"), "utf8"));
 manifest.host_permissions = manifest.optional_host_permissions;
 writeFileSync(join(ext, "manifest.json"), JSON.stringify(manifest));
 
+// 测试用的是 Playwright 的 Chromium（Chrome for Testing，没有 Google 的 Team ID），debug 构建的 host 因此跳过
+// 父进程校验（只在 debug 构建生效）。真实 Chrome 的父进程校验由打包产物的测试 packaged.mjs 覆盖。
 const browser = await launchChrome(
   CHROME,
   ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", `--user-data-dir=${profile}`, "--window-size=1200,900", "about:blank"],
-  env,
+  { ...env, KEEVO_DEV_ALLOW_ANY_PARENT: "1" },
 );
 cleanups.push(() => browser.close());
 

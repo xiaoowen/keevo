@@ -1,0 +1,127 @@
+# 真实网站登录页的识别结果
+
+由 `node apps/browser-extension/test/corpus.mjs --record` 生成（2026-11-20）。快照只保存在本机，清单与预期见 [sites.json](sites.json)，说明见 [corpus/README.md](../corpus/README.md)。
+
+**识别率 78/105（74.3%）**，要求 ≥ 95%。一个页面上的图标与填充全部符合预期才算识别成功。
+
+| 网站 | 分组 | 快照日期 | 结果 |
+|---|---|---|---|
+| Google | 全球主流 | 2026-11-20 | ✓ |
+| Facebook | 全球主流 | 2026-11-20 | ✓ |
+| Microsoft 账户 | 全球主流 | 2026-11-20 | ✓ |
+| Apple 账户 | 全球主流 | 2026-11-20 | ✓ |
+| Amazon | 全球主流 | 2026-11-20 | ✗ 聚焦 #ap_email_login：图标应为 login，实际 null；从 #ap_email_login 的菜单填充：结果应为 filled，实际 no_password_field；#ap_email_login 应为 "corpus-user"，实际 "" |
+| Yahoo | 全球主流 | 2026-11-20 | ✗ 聚焦 #username：图标应为 login，实际 null；从 #username 的菜单填充：结果应为 filled，实际 no_password_field；#username 应为 "corpus-user"，实际 "" |
+| Netflix | 全球主流 | 2026-11-20 | ✓ |
+| LinkedIn | 全球主流 | 2026-11-20 | ✓ |
+| X | 全球主流 | 2026-11-20 | ✓ |
+| Reddit | 全球主流 | 2026-11-20 | ✗ 从 #login-username >>> input[name="username"] 的菜单填充：#login-password >>> input[name="password"] 应为 "corpus-pass"，实际 "" |
+| Wikipedia | 全球主流 | 2026-11-20 | ✓ |
+| Dropbox | 全球主流 | 2026-11-20 | ✓ |
+| Zoom | 全球主流 | 2026-11-20 | ✗ 聚焦 #email：图标应为 login，实际 null；从 #email 的菜单填充：结果应为 filled，实际 no_password_field；#email 应为 "corpus-user"，实际 "" |
+| Adobe | 全球主流 | 2026-11-20 | ✗ 聚焦 #EmailPage-EmailField：图标应为 login，实际 null；从 #EmailPage-EmailField 的菜单填充：结果应为 filled，实际 no_password_field；#EmailPage-EmailField 应为 "corpus-user"，实际 "" |
+| Spotify | 全球主流 | 2026-11-20 | ✓ |
+| Twitch | 全球主流 | 2026-11-20 | ✓ |
+| Pinterest | 全球主流 | 2026-11-20 | ✗ 聚焦 #email：图标应为 login，实际 null；从 #email 的菜单填充：#email 应为 "corpus-user"，实际 "" |
+| TikTok | 全球主流 | 2026-11-20 | ✗ 聚焦 input[autocomplete="new-password"]：图标应为 login，实际 null |
+| Discord | 全球主流 | 2026-11-20 | ✓ |
+| Quora | 全球主流 | 2026-11-20 | ✓ |
+| Booking.com | 全球主流 | 2026-11-20 | ✓ |
+| Airbnb | 全球主流 | 2026-11-20 | ✗ 聚焦 #phone-or-email：图标应为 login，实际 null；从 #phone-or-email 的菜单填充：结果应为 filled，实际 no_password_field；#phone-or-email 应为 "corpus-user"，实际 "" |
+| Walmart | 全球主流 | 2026-11-20 | ✗ 聚焦 input[name="Phone number or email (required)"]：图标应为 login，实际 null；从 input[name="Phone number or email (required)"] 的菜单填充：结果应为 filled，实际 no_password_field；input[name="Phone number or email (required)"] 应为 "corpus-user"，实际 "" |
+| Medium | 全球主流 | 2026-11-20 | ✗ 聚焦 input[type="email"]：图标应为 login，实际 null；从 input[type="email"] 的菜单填充：结果应为 filled，实际 no_password_field；input[type="email"] 应为 "corpus-user"，实际 "" |
+| Tumblr | 全球主流 | 2026-11-20 | ✓ |
+| Vimeo | 全球主流 | 2026-11-20 | ✓ |
+| WordPress.com | 全球主流 | 2026-11-20 | ✓ |
+| Salesforce | 全球主流 | 2026-11-20 | ✓ |
+| Slack | 全球主流 | 2026-11-20 | ✓ |
+| Notion | 全球主流 | 2026-11-20 | ✓ |
+| Canva | 全球主流 | 2026-11-20 | ✓ |
+| Atlassian | 全球主流 | 2026-11-20 | ✓ |
+| Yandex | 全球主流 | 2026-11-20 | ✓ |
+| VK | 全球主流 | 2026-11-20 | ✗ 聚焦 input[name="login"]：图标应为 login，实际 null；从 input[name="login"] 的菜单填充：结果应为 filled，实际 no_password_field；input[name="login"] 应为 "corpus-user"，实际 "+7 " |
+| Steam | 全球主流 | 2026-11-20 | ✓ |
+| Epic Games | 全球主流 | 2026-11-20 | ✓ |
+| Duolingo | 全球主流 | 2026-11-20 | ✓ |
+| Disney+ | 全球主流 | 2026-11-20 | ✗ 聚焦 #email：图标应为 login，实际 null；从 #email 的菜单填充：结果应为 filled，实际 no_password_field；#email 应为 "corpus-user"，实际 "" |
+| Shopify | 全球主流 | 2026-11-20 | ✓ |
+| Mailchimp | 全球主流 | 2026-11-20 | ✗ 聚焦 #username：图标应为 login，实际 null；从 #username 的菜单填充：结果应为 filled，实际 no_password_field；#username 应为 "corpus-user"，实际 "" |
+| Coursera | 全球主流 | 2026-11-20 | ✗ 聚焦 #cds-react-aria887171213-\:r4\:：图标应为 login，实际 null；从 #cds-react-aria887171213-\:r4\: 的菜单填充：结果应为 filled，实际 no_password_field；#cds-react-aria887171213-\:r4\: 应为 "corpus-user"，实际 "" |
+| Udemy | 全球主流 | 2026-11-20 | ✗ 聚焦 #form-group--1：图标应为 login，实际 null；从 #form-group--1 的菜单填充：结果应为 filled，实际 no_password_field；#form-group--1 应为 "corpus-user"，实际 "" |
+| Proton | 全球主流 | 2026-11-20 | ✓ |
+| Indeed | 全球主流 | 2026-11-20 | ✗ 聚焦 #ifl-InputFormField-\:passport-ssr-Reqktala\:：图标应为 login，实际 null；从 #ifl-InputFormField-\:passport-ssr-Reqktala\: 的菜单填充：结果应为 filled，实际 no_password_field；#ifl-InputFormField-\:passport-ssr-Reqktala\: 应为 "corpus-user"，实际 "" |
+| Bank of America | 全球主流 | 2026-11-20 | ✓ |
+| Fandom | 全球主流 | 2026-11-20 | ✓ |
+| Samsung 账户 | 全球主流 | 2026-11-20 | ✗ 聚焦 #account：图标应为 login，实际 null；从 #account 的菜单填充：结果应为 filled，实际 no_password_field；#account 应为 "corpus-user"，实际 "" |
+| GitHub | 开发者服务 | 2026-11-20 | ✓ |
+| AWS 控制台 | 开发者服务 | 2026-11-20 | ✓ |
+| npm | 开发者服务 | 2026-11-20 | ✓ |
+| Docker | 开发者服务 | 2026-11-20 | ✗ 聚焦 #username：图标应为 login，实际 null；从 #username 的菜单填充：结果应为 filled，实际 no_password_field；#username 应为 "corpus-user"，实际 "" |
+| Cloudflare | 开发者服务 | 2026-11-20 | ✓ |
+| Vercel | 开发者服务 | 2026-11-20 | ✗ 聚焦 #input-_R_mr5fd5ubr5u5dad6lb_：图标应为 login，实际 null；从 #input-_R_mr5fd5ubr5u5dad6lb_ 的菜单填充：结果应为 filled，实际 no_password_field；#input-_R_mr5fd5ubr5u5dad6lb_ 应为 "corpus-user"，实际 "" |
+| Netlify | 开发者服务 | 2026-11-20 | ✓ |
+| Heroku | 开发者服务 | 2026-11-20 | ✓ |
+| DigitalOcean | 开发者服务 | 2026-11-20 | ✓ |
+| Stack Overflow | 开发者服务 | 2026-11-20 | ✓ |
+| JetBrains 账户 | 开发者服务 | 2026-11-20 | ✓ |
+| PyPI | 开发者服务 | 2026-11-20 | ✓ |
+| Hugging Face | 开发者服务 | 2026-11-20 | ✓ |
+| OpenAI Platform | 开发者服务 | 2026-11-20 | ✗ 聚焦 #login-email：图标应为 login，实际 null；从 #login-email 的菜单填充：结果应为 filled，实际 no_password_field；#login-email 应为 "corpus-user"，实际 "" |
+| Anthropic Console | 开发者服务 | 2026-11-20 | ✗ 聚焦 #email：图标应为 login，实际 null；从 #email 的菜单填充：结果应为 filled，实际 no_password_field；#email 应为 "corpus-user"，实际 "" |
+| Sentry | 开发者服务 | 2026-11-20 | ✓ |
+| Datadog | 开发者服务 | 2026-11-20 | ✓ |
+| Grafana Cloud | 开发者服务 | 2026-11-20 | ✗ 聚焦 input[name="login"]：图标应为 login，实际 null；从 input[name="login"] 的菜单填充：结果应为 filled，实际 no_password_field；input[name="login"] 应为 "corpus-user"，实际 "" |
+| MongoDB Atlas | 开发者服务 | 2026-11-20 | ✗ 聚焦 #username：图标应为 login，实际 null；从 #username 的菜单填充：结果应为 filled，实际 no_password_field；#username 应为 "corpus-user"，实际 "" |
+| Supabase | 开发者服务 | 2026-11-20 | ✓ |
+| Linode | 开发者服务 | 2026-11-20 | ✗ 聚焦 #username：图标应为 login，实际 null；从 #username 的菜单填充：结果应为 filled，实际 no_password_field；#username 应为 "corpus-user"，实际 "" |
+| Render | 开发者服务 | 2026-11-20 | ✓ |
+| Fly.io | 开发者服务 | 2026-11-20 | ✓ |
+| Postman | 开发者服务 | 2026-11-20 | ✓ |
+| RubyGems | 开发者服务 | 2026-11-20 | ✓ |
+| Gitea（gitea.com） | 开发者服务 | 2026-11-20 | ✓ |
+| 百度 | 国内 | 2026-11-20 | ✓ |
+| 淘宝 | 国内 | 2026-11-20 | ✓ |
+| 京东 | 国内 | 2026-11-20 | ✓ |
+| QQ 邮箱 | 国内 | 2026-11-20 | ✓ |
+| 微博 | 国内 | 2026-11-20 | ✓ |
+| 知乎 | 国内 | 2026-11-20 | ✓ |
+| 哔哩哔哩 | 国内 | 2026-11-20 | ✓ |
+| 豆瓣 | 国内 | 2026-11-20 | ✓ |
+| 网易邮箱 | 国内 | 2026-11-20 | ✗ 聚焦 #auto-id-1795177942181：图标应为 login，实际 null |
+| Gitee | 国内 | 2026-11-20 | ✓ |
+| 阿里云 | 国内 | 2026-11-20 | ✓ |
+| 腾讯云 | 国内 | 2026-11-20 | ✓ |
+| 华为账号 | 国内 | 2026-11-20 | ✓ |
+| 小米账号 | 国内 | 2026-11-20 | ✓ |
+| 携程 | 国内 | 2026-11-20 | ✗ 聚焦 input[autocomplete="new-password"]：图标应为 login，实际 null |
+| 美团 | 国内 | 2026-11-20 | ✓ |
+| 12306 | 国内 | 2026-11-20 | ✗ 聚焦 #J-password：图标应为 login，实际 null |
+| 简书 | 国内 | 2026-11-20 | ✓ |
+| 稀土掘金 | 国内 | 2026-11-20 | ✓ |
+| 爱奇艺 | 国内 | 2026-11-20 | ✓ |
+| 支付宝 | 国内 | 2026-11-20 | ✓ |
+| SegmentFault | 国内 | 2026-11-20 | ✓ |
+| 开源中国 | 国内 | 2026-11-20 | ✓ |
+| 苏宁易购 | 国内 | 2026-11-20 | ✓ |
+| 新浪邮箱 | 国内 | 2026-11-20 | ✓ |
+| Figma | 全球主流 | 2026-11-20 | ✓ |
+| Zoho | 全球主流 | 2026-11-20 | ✓ |
+| Codeberg | 开发者服务 | 2026-11-20 | ✓ |
+| SourceForge | 开发者服务 | 2026-11-20 | ✓ |
+| Ubuntu One | 开发者服务 | 2026-11-20 | ✓ |
+| 腾讯企业邮 | 国内 | 2026-11-20 | ✓ |
+| 搜狐邮箱 | 国内 | 2026-11-20 | ✓ |
+
+**不计入的网站**（11 个，只看能否采集到登录表单，与识别结果无关）：
+
+- Instagram：无头模式被人机验证拦下（Cloudflare、Akamai 等），有界面模式采集超时
+- eBay：无头模式被人机验证拦下（Cloudflare、Akamai 等），有界面模式采集超时
+- PayPal：无头模式被人机验证拦下（Cloudflare、Akamai 等），有界面模式采集超时
+- Etsy：无头模式被人机验证拦下（Cloudflare、Akamai 等），有界面模式采集超时
+- The New York Times：无头模式被人机验证拦下（Cloudflare、Akamai 等），有界面模式采集超时
+- GitLab：无头模式被人机验证拦下（Cloudflare、Akamai 等），有界面模式采集超时
+- CSDN：只有扫码、短信验证码与 App 登录，没有密码登录
+- 飞书：登录页需要应用参数，直接打开报"无效的请求参数"
+- V2EX：无头模式被人机验证拦下（Cloudflare、Akamai 等），有界面模式采集超时
+- Box：无头模式下返回空页面
+- 智联招聘：只有短信验证码与微信扫码登录，没有密码登录
