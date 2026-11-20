@@ -1,5 +1,5 @@
 {
-  "spec": "spec/crypto.md §8.9（草案）",
+  "spec": "spec/crypto.md §8.9",
   "generator": "spec/reference/generate_vectors.py",
   "note": "所有字节串均为小写十六进制。测试输入由固定标签确定性派生，不是真实密钥。valid：读取方解开 VK 包裹的 AK、核对元数据与引用，得到长度为 content_len、SHA-256 为 content_sha256 的内容；meta 是元数据的明文，也是写入方应产生的规范编码。invalid：读取方必须报告篡改。",
   "valid": [

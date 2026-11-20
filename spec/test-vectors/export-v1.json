@@ -1,5 +1,5 @@
 {
-  "spec": "spec/export.md §3（草案）",
+  "spec": "spec/export.md §3",
   "generator": "spec/reference/generate_vectors.py",
   "note": "所有字节串均为小写十六进制。测试输入由固定标签确定性派生，不是真实口令。valid：用 password（以及 equivalent_password，NFKD 后相同）打开 file 得到 plaintext；写出方用 kdf_params 与 nonce 应产生同样的 file。aad 为 file 的前 62 字节，key 为 HKDF 之后的密钥。invalid：读取必须失败，error 为期望的错误：malformed、unsupported_version、kdf_invalid（KDF 参数不合法，crypto §5.2）、decryption_failed（口令错误与文件被改动不区分）。超出本机 KDF 预算的文件也被拒绝，那是读取方的本机策略，不在向量中。",
   "valid": [

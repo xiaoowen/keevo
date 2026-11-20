@@ -1,5 +1,7 @@
 # 2026-11-20 第五轮第五次确认评审的处理记录
 
+> **后注**：下面"R1"一节按份数给出的覆盖论证，[第六次确认评审](2026-11-20-model-review-round5-confirmation6.md)指出并不成立（T1–T5），"大写字母改成小写只会让估计更低""三份时第三份完好""差异不超过一半"等理由也不成立。处理见[第六次的处理记录](2026-11-20-model-review-round5-confirmation6-response.md)；强度估计现在明确为启发式的筛选，不保证完备（export §3）。
+
 - **评审报告**：[2026-11-20-model-review-round5-confirmation5.md](2026-11-20-model-review-round5-confirmation5.md)。由外部模型完成（与正式评审相同），核对[第四次确认评审的处理记录](2026-11-20-model-review-round5-confirmation4-response.md)。
 - **评审提交**：`2b78cd7`
 - **评审结论**：

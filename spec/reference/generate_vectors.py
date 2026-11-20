@@ -32,9 +32,9 @@ from nacl.bindings import (
 )
 
 OUTPUT = Path(__file__).resolve().parent.parent / "test-vectors" / "crypto-v1.json"
-# §8.9 附件（草案）：单独的文件，已冻结的 crypto-v1.json 不变
+# §8.9 附件（2026-11-20 冻结）：单独的文件，crypto-v1.json 不变
 ATTACHMENT_OUTPUT = OUTPUT.parent / "attachment-v1.json"
-# spec/export.md §3 加密导出文件（草案）
+# spec/export.md §3 加密导出文件（2026-11-20 冻结）
 EXPORT_OUTPUT = OUTPUT.parent / "export-v1.json"
 
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -443,7 +443,7 @@ def keyset_vectors() -> list:
     }]
 
 
-# ---------------------------------------------------------------- §8.9 附件（草案）
+# ---------------------------------------------------------------- §8.9 附件
 
 CHUNK_LEN = 65536
 
@@ -555,7 +555,7 @@ def attachment_vectors() -> dict:
                         ref_override={"sha256": hashlib.sha256(b"other").hexdigest()}),
     ]
     return {
-        "spec": "spec/crypto.md §8.9（草案）",
+        "spec": "spec/crypto.md §8.9",
         "generator": "spec/reference/generate_vectors.py",
         "note": "所有字节串均为小写十六进制。测试输入由固定标签确定性派生，不是真实密钥。valid：读取方解开 VK 包裹的 AK、"
                 "核对元数据与引用，得到长度为 content_len、SHA-256 为 content_sha256 的内容；meta 是元数据的明文，也是写入方"
@@ -565,7 +565,7 @@ def attachment_vectors() -> dict:
     }
 
 
-# ---------------------------------------------------------------- export.md §3 加密导出文件（草案）
+# ---------------------------------------------------------------- export.md §3 加密导出文件
 
 EXPORT_MAGIC = b"KEEVOEXP"
 
@@ -674,7 +674,7 @@ def export_vectors() -> dict:
     bad("kdf_unknown_algorithm", base[:9] + kdf_encode(0x02, M_MIN, T_MIN, 1, det("export/salt", 16)) + base[38:],
         "kdf_invalid")
     return {
-        "spec": "spec/export.md §3（草案）",
+        "spec": "spec/export.md §3",
         "generator": "spec/reference/generate_vectors.py",
         "note": "所有字节串均为小写十六进制。测试输入由固定标签确定性派生，不是真实口令。valid：用 password（以及 "
                 "equivalent_password，NFKD 后相同）打开 file 得到 plaintext；写出方用 kdf_params 与 nonce 应产生同样的 file。"

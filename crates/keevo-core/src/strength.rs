@@ -153,7 +153,8 @@ const MAX_COST_EVALS: usize = 16;
 /// 第二阶段（同一位置都被改动）最多比较总代价的匹配数。
 const MAX_WILD_EVALS: usize = 256;
 /// 两份在同一位置都被改动时，基础片段在这个位置的字符两份都没有，按这些字符逐个尝试：常见口令中出现的字符。
-/// 大写字母不必尝试：改成小写只会让估计更低（更保守）。
+/// 不尝试大写字母。只把这一个字母改成小写，估计不一定更低（确认评审 T4，已知局限）；全是大写的常见词由
+/// 第四种候选（常见词，按小写核对）覆盖。
 const COMMON_CHARS: &str = "abcdefghijklmnopqrstuvwxyz0123456789@$!#*._-";
 /// 两份之间最多允许的差异处数：两份的改动之和，再加上固定长度的切片在末尾多出的差异。
 const MAX_PAIR_DIFF: usize = MAX_EDITS + 2;
@@ -274,15 +275,17 @@ const FEW_COPIES: usize = 4;
 /// 近似周期（确认评审 N1、P1、Q1、Q2）：原文是同一片段的重复（至少两份），其中最多 [`MAX_EDITS`] 处改动（替换、
 /// 插入或删除，改动可以在任何一份中）。估计为：基础片段的猜测次数 × 重复次数 × 每处改动（位置数 × [`EDIT_CHARS`]）。
 ///
-/// 基础片段的候选有两个来源：
+/// 基础片段的候选有四个来源：
 /// 1. 长度为 `p`、出现次数最多的片段，它的重复要覆盖原文的绝大部分（份数多时，总有完好的两份）；
 /// 2. 份数不超过 [`FEW_COPIES`] 时，每一份所在的位置，前后各错开最多 [`MAX_EDITS`] 个字符（份数少、又有改动时，
 ///    完全相同的两份可能不存在）。只用于不超过 [`MAX_ANALYZED`] 个字符的基础片段；
 /// 3. 两三份、每一份都有改动时，从第一份与另一份的差异中还原（[`between`]，确认评审 R1）。
 ///
-/// 这三种来源覆盖"重复至少两份、最多 [`MAX_EDITS`] 处改动"的全部情形（基础片段不超过 [`MAX_ANALYZED`] 个字符）：
-/// 五份以上总有完好的两份（来源 1）；四份总有完好的一份（来源 2）；两三份可能没有完好的一份，这时基础片段夹在
-/// 某两份之间，或者两份在同一位置都被改动（来源 3）。
+/// 4. 基础片段是词典中排名靠前的词时，直接核对（[`common_word_candidates`]，确认评审 T1–T3）：两份改成相同的
+///    字符、在不同位置删除、三份在同一位置都被改动时，基础片段不在原文中，也不在两份之间。
+///
+/// 这些来源是启发式的，**不保证完备**：份数多时出现最多的片段可能是被改动的那个（确认评审 T5c），两份的差异
+/// 不超过一半、跳过已找到周期的倍数都是为性能所做的剪枝（T5a、T5b）。见 export §3。
 ///
 /// 对每个候选，在没有改动时的对齐位置前后 [`MAX_EDITS`] 个相位上（周期很短时是全部相位）求带状编辑距离。
 /// 匹配成功的按（改动处数, 周期）排序，取前 [`MAX_COST_EVALS`] 个按**总代价**比较，取最小的：改动最少的解释不一定
@@ -398,6 +401,14 @@ fn near_period_estimate(chars: &[char], limit: f64) -> Option<(f64, Option<Analy
             }
         }
     }
+    // 4. 常见词（确认评审 T1–T3）
+    let words = common_word_candidates(chars, longest);
+    let limit = best.as_ref().map_or(limit, |b| b.0);
+    if let Some(found) = cheapest(chars, words, limit, None, MAX_COST_EVALS)
+        && best.as_ref().is_none_or(|b| found.0 < b.0)
+    {
+        best = Some(found);
+    }
     // 第一阶段：不含未知字符的候选
     let limit = best.as_ref().map_or(limit, |b| b.0);
     if let Some(found) = cheapest(chars, found, limit, None, MAX_COST_EVALS)
@@ -420,6 +431,113 @@ fn near_period_estimate(chars: &[char], limit: f64) -> Option<(f64, Option<Analy
         }
     }
     best
+}
+
+/// 常见词的候选只看各词典中排名不超过它的词。没有完好的一份时，每一份都有改动，至少两处，按词典排名的代价至少
+/// 排名 × 2 × (95n)²；可导出的口令至少 10 个字符，这时是 排名 × 1.805 × 10⁶，排名超过约 5540 的词不可能低于
+/// 最高档门槛。更长的口令上限更低，按 n 另算（[`common_word_candidates`]）。
+const MAX_COMMON_RANK: usize = 6000;
+
+/// 长度 → 这个长度的常见词与排名。
+type WordsByLen = HashMap<usize, Vec<(Vec<char>, usize)>>;
+
+/// 各词典中排名不超过 [`MAX_COMMON_RANK`] 的词，按长度分组（同一个词取最低的排名），组内按排名排序。
+fn common_words_by_len() -> &'static WordsByLen {
+    static WORDS: OnceLock<WordsByLen> = OnceLock::new();
+    WORDS.get_or_init(|| {
+        let mut best: HashMap<&'static str, usize> = HashMap::new();
+        for (_, text) in &DICTS {
+            for (rank, word) in text.lines().enumerate().take(MAX_COMMON_RANK) {
+                let rank = rank.saturating_add(1);
+                best.entry(word)
+                    .and_modify(|r| *r = (*r).min(rank))
+                    .or_insert(rank);
+            }
+        }
+        let mut by_len: WordsByLen = HashMap::new();
+        for (word, rank) in best {
+            let chars: Vec<char> = word.chars().collect();
+            by_len.entry(chars.len()).or_default().push((chars, rank));
+        }
+        for list in by_len.values_mut() {
+            list.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
+        }
+        by_len
+    })
+}
+
+/// 第四种候选（确认评审 T1–T3）：基础片段就是词典中排名靠前的一个词，每一份都可能有改动——包括两份改成相同的
+/// 字符、在不同位置删除、三份在同一位置都被改动。这些情形下基础片段不在原文中，也不在两份之间，但它是一个常见词，
+/// 可以直接核对。
+///
+/// 先看原文在结构上是否像重复：错开一个周期的前后两段，差异不超过 [`MAX_EDITS`] + 1，也不超过这两段长度的一半
+/// （两三份、每份最多两处改动时成立；随机字符几乎处处不同，所以强口令在这里就结束了）。再取长度相近、排名足够低的词核对编辑距离。按小写比较：
+/// 词典中的词是小写的，大小写不同不算改动，估计只会更低（更保守）。
+fn common_word_candidates(chars: &[char], longest: usize) -> Vec<(usize, usize, Vec<char>)> {
+    let n = chars.len();
+    let rank_limit = TOP_SCORE_GUESSES / (2.0 * (to_f64(n) * EDIT_CHARS).powi(2));
+    if rank_limit < 1.0 {
+        return Vec::new();
+    }
+    let lower: Vec<char> = chars
+        .iter()
+        .map(|c| c.to_lowercase().next().unwrap_or(*c))
+        .collect();
+    let words = common_words_by_len();
+    let low = (n.saturating_sub(MAX_EDITS) / 3).max(1);
+    let mut lengths: Vec<usize> = Vec::new();
+    for p in low..=longest.min(n.saturating_sub(1)) {
+        let (Some(a), Some(b)) = (lower.get(..n - p), lower.get(p..)) else {
+            continue;
+        };
+        // 比较的两段很短时，"差异不多"对任何输入都成立，所以也要求差异不超过一半；差异还必须小于周期本身，
+        // 否则带状对齐可以漂回错开 0 的位置，拿原文和它自己比
+        let limit = (MAX_EDITS + 1).min(a.len().div_ceil(2)).min(p - 1);
+        if limit == 0 || periodic_edit_distance_within(a, b, 0, limit).is_none() {
+            continue;
+        }
+        for len in p.saturating_sub(MAX_EDITS).max(1)..=p.saturating_add(MAX_EDITS) {
+            if !lengths.contains(&len) {
+                lengths.push(len);
+            }
+        }
+    }
+    let per_edit = to_f64(n) * EDIT_CHARS;
+    let mut keyed: Vec<(f64, usize, usize, &[char])> = Vec::new();
+    for len in lengths {
+        for (word, rank) in words.get(&len).map(Vec::as_slice).unwrap_or_default() {
+            if to_f64(*rank) > rank_limit {
+                break;
+            }
+            let phases: Vec<usize> = if len <= 2 * MAX_EDITS + 1 {
+                (0..len).collect()
+            } else {
+                (0..=2 * MAX_EDITS)
+                    .map(|shift| (len * (MAX_EDITS + 1) + shift - MAX_EDITS) % len)
+                    .collect()
+            };
+            let Some(edits) = phases
+                .into_iter()
+                .filter_map(|phase| periodic_edit_distance(&lower, word, phase))
+                .min()
+            else {
+                continue;
+            };
+            let key = to_f64(*rank)
+                * to_f64(n.div_ceil(len))
+                * per_edit.powi(i32::try_from(edits).unwrap_or(i32::MAX));
+            keyed.push((key, edits, len, word.as_slice()));
+        }
+    }
+    // 交给 [`cheapest`] 的是词本身（不按相位旋转：模型按词本身计，旋转的选择数不计入，只会更低），按排名估计的
+    // 总代价取最便宜的几个；`cheapest` 按改动处数排序后只比较前 [`MAX_COST_EVALS`] 个，不能让排名靠后的词挤掉
+    // 排名靠前的
+    keyed.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.3.cmp(b.3)));
+    keyed
+        .into_iter()
+        .take(MAX_COST_EVALS)
+        .map(|(_, edits, len, word)| (edits, len, word.to_vec()))
+        .collect()
 }
 
 /// 对还原出的基础片段（与原文的开头对齐）核对编辑距离，成功的记下：(改动处数, 周期, 基础片段)。
@@ -1792,6 +1910,289 @@ fn match_warning(m: &Match, sole: bool) -> Option<Warning> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::float_cmp, clippy::print_stderr)]
 mod tests {
+    /// 常见词变体的模型代价：基础片段的估计 × 份数 × 每处改动（位置数 × 95），改动处数按大小写敏感的编辑距离。
+    fn review5i_model(chars: &[char], base: &[char]) -> Option<f64> {
+        let edits = super::periodic_edit_distance(chars, base, 0)?;
+        Some(
+            super::base_estimate(base).0
+                * super::to_f64(chars.len().div_ceil(base.len()))
+                * (super::to_f64(chars.len()) * 95.0).powi(i32::try_from(edits).unwrap()),
+        )
+    }
+
+    /// 一个常见词在"重复两三份、每一份都有改动"下的各种变体：相同替换、相同插入、三份同位置替换或删除、
+    /// 不同位置删除、替换加删除、两份删除加一份完好。
+    fn review5i_variants(word: &[char]) -> Vec<Vec<char>> {
+        let p = word.len();
+        let sub = |i: usize, x: char| {
+            let mut v = word.to_vec();
+            v[i] = x;
+            v
+        };
+        let del = |i: usize| {
+            let mut v = word.to_vec();
+            v.remove(i);
+            v
+        };
+        let ins = |i: usize, x: char| {
+            let mut v = word.to_vec();
+            v.insert(i, x);
+            v
+        };
+        let mut out = Vec::new();
+        for i in 0..p {
+            for x in ['%', '1', 'q'] {
+                out.push([sub(i, x), sub(i, x)].concat());
+                out.push([sub(i, x), sub(i, x), sub(i, x)].concat());
+                out.push([ins(i, x), ins(i, x)].concat());
+            }
+            out.push([sub(i, '%'), sub(i, '#'), sub(i, '&')].concat());
+            out.push([del(i), del(i), del(i)].concat());
+            for j in (0..p).filter(|j| *j != i) {
+                out.push([del(i), del(j)].concat());
+                out.push([sub(i, '%'), del(j)].concat());
+                out.push([del(i), del(j), word.to_vec()].concat());
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn review5i_common_word_variants_are_rejected() {
+        // 每一类一个代表（debug 构建下逐个估计很慢）；整族的核对见下面的 release 测试
+        for (word, password) in [
+            ("password", "pa%swordpa%sword"),
+            ("development", "develo%pmentdevelo%pment"),
+            ("DEVELOPMENT", "DEVEOPMENTDEVELPMENT"),
+            ("mary", "mar%mar#mar&"),
+            ("development", "deveopmentdevelpmentdevelopment"),
+        ] {
+            let base: Vec<char> = word.chars().collect();
+            let chars: Vec<char> = password.chars().collect();
+            let model = review5i_model(&chars, &base).unwrap();
+            assert!(model < 1e10 && chars.len() >= 10, "{password}: {model}");
+            assert!(
+                !crate::export::export_password_ok(password),
+                "{password}: model {model}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "release 构建下约 1 分钟：常见词变体的整族核对"]
+    fn review5i_common_word_variant_family_is_rejected() {
+        let words = super::common_words_by_len();
+        let mut checked = 0usize;
+        let mut accepted = Vec::new();
+        for len in 4..=12 {
+            let list = words.get(&len).unwrap();
+            // 每个长度取排名最靠前的 4 个，再按排名均匀取 9 个（直到排名上限）
+            let step = (list.len() / 10).max(1);
+            for (word, _) in list.iter().take(4).chain(list.iter().step_by(step).skip(1)) {
+                for upper in [false, true] {
+                    let base: Vec<char> = if upper {
+                        word.iter().map(char::to_ascii_uppercase).collect()
+                    } else {
+                        word.clone()
+                    };
+                    for chars in review5i_variants(&base) {
+                        let Some(model) = review5i_model(&chars, &base) else {
+                            continue;
+                        };
+                        if chars.len() < 10 || model >= 1e10 {
+                            continue;
+                        }
+                        checked += 1;
+                        let password: String = chars.iter().collect();
+                        if crate::export::export_password_ok(&password) {
+                            accepted.push((password, model));
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("checked {checked}, accepted {}", accepted.len());
+        assert!(checked > 20_000);
+        assert!(
+            accepted.is_empty(),
+            "{:?}",
+            accepted.get(..accepted.len().min(10))
+        );
+    }
+
+    fn review5h_assert_rejected(word: &str, password: &str, edits: usize, g: f64, bound: f64) {
+        let base: Vec<char> = word.chars().collect();
+        let chars: Vec<char> = password.chars().collect();
+        assert_eq!(super::base_estimate(&base).0, g);
+        assert_eq!(super::periodic_edit_distance(&chars, &base, 0), Some(edits));
+        let model = g
+            * super::to_f64(chars.len().div_ceil(base.len()))
+            * (super::to_f64(chars.len()) * 95.0).powi(i32::try_from(edits).unwrap());
+        assert_eq!(model, bound);
+        assert!(model < 1e10);
+        assert!(chars.len() >= 10);
+        let actual = crate::export::export_password_strength(password);
+        eprintln!("{password}: g={g}, model={model}, actual={actual:?}");
+        assert!(
+            !crate::export::export_password_ok(password),
+            "low-cost repeated common base must reject export"
+        );
+    }
+
+    #[test]
+    fn review5h_t1_identical_substitutions_are_rejected() {
+        let copy: Vec<char> = "deve%opment".chars().collect();
+        // Equal damaged columns never enter the unknown-character enumeration.
+        assert!(super::between(&copy, &copy, true).is_empty());
+        review5h_assert_rejected(
+            "development",
+            "deve%opmentdeve%opment",
+            2,
+            225.0,
+            1_965_645_000.0,
+        );
+    }
+
+    #[test]
+    fn review5h_t2_different_deletions_are_rejected() {
+        let a: Vec<char> = "deveopment".chars().collect();
+        let b: Vec<char> = "develpment".chars().collect();
+        let base: Vec<char> = "development".chars().collect();
+        // One substitution is shorter than the path through the original base
+        // (one insertion and one deletion). Its candidates all lack a character.
+        let columns = super::align(&a, &b).unwrap();
+        assert_eq!(columns.iter().filter(|(x, y)| x != y).count(), 1);
+        assert!(!super::between(&a, &b, false).contains(&base));
+        review5h_assert_rejected(
+            "development",
+            "deveopmentdevelpment",
+            2,
+            225.0,
+            1_624_500_000.0,
+        );
+    }
+
+    #[test]
+    #[ignore = "已知局限（确认评审 T5a，不阻塞）：两份差异不超过一半是性能上的剪枝，不能由最多三处改动推出"]
+    fn review5h_t5a_half_difference_limit_preserves_the_original_base() {
+        let base: Vec<char> = "mary".chars().collect();
+        let a: Vec<char> = "%#ry".chars().collect();
+        let b: Vec<char> = "ma&y".chars().collect();
+        let text: Vec<char> = a.iter().chain(&b).copied().collect();
+        assert_eq!(super::periodic_edit_distance(&text, &base, 0), Some(3));
+        let model = super::base_estimate(&base).0 * 2.0 * (8.0_f64 * 95.0).powi(3);
+        assert_eq!(model, 1_755_904_000.0);
+        // This is a proof counterexample only: length 8 already forbids export.
+        assert!(!crate::export::export_password_ok("%#ryma&y"));
+        assert!(
+            super::between(&a, &b, false).contains(&base),
+            "three disjoint changes need not be at most half of p"
+        );
+    }
+
+    #[test]
+    #[ignore = "已知局限（确认评审 T5b，不阻塞）：跳过已找到周期的倍数是剪枝，不是代价上的支配"]
+    fn review5h_t5b_shorter_period_is_not_a_cost_dominance_proof() {
+        let chars: Vec<char> = "123121123921".chars().collect();
+        let short: Vec<char> = "123".chars().collect();
+        let long: Vec<char> = "123321".chars().collect();
+        assert_eq!(super::periodic_edit_distance(&chars, &short, 0), Some(3));
+        assert_eq!(super::periodic_edit_distance(&chars, &long, 0), Some(2));
+        let short_cost = super::base_estimate(&short).0 * 4.0 * (12.0_f64 * 95.0).powi(3);
+        let long_cost = super::base_estimate(&long).0 * 2.0 * (12.0_f64 * 95.0).powi(2);
+        eprintln!("short={short_cost}, long={long_cost}");
+        assert!(long_cost < 1e10);
+        // Other estimators reject this sample; the pruning rationale still fails.
+        assert!(!crate::export::export_password_ok("123121123921"));
+        assert!(
+            short_cost <= long_cost,
+            "divisibility alone must not discard a cheaper explanation"
+        );
+    }
+
+    #[test]
+    #[ignore = "已知局限（确认评审 T5c，不阻塞）：出现次数最多的片段不一定是最便宜的基础片段"]
+    fn review5h_t5c_most_frequent_does_not_imply_cheapest_base() {
+        let chars: Vec<char> = "m%rym%rym%rymarymary".chars().collect();
+        let base: Vec<char> = "mary".chars().collect();
+        let (start, count) = super::most_frequent(&chars, 4).unwrap();
+        assert_eq!((start, count), (0, 3));
+        let selected = &chars[start..start + 4];
+        assert_eq!(super::periodic_edit_distance(&chars, &base, 0), Some(3));
+        assert_eq!(super::periodic_edit_distance(&chars, selected, 0), Some(2));
+        let original = super::base_estimate(&base).0 * 5.0 * (20.0_f64 * 95.0).powi(3);
+        let chosen = super::base_estimate(selected).0 * 5.0 * (20.0_f64 * 95.0).powi(2);
+        eprintln!("intact base={original}, most frequent={chosen}");
+        assert!(original >= 1e10); // Outside the freeze-blocking cost range.
+        assert!(
+            chosen <= original,
+            "two intact copies do not ensure that the most frequent candidate covers them cheaply"
+        );
+    }
+
+    #[test]
+    #[ignore = "release measurement; no timing assertion"]
+    fn review5h_c1_release_performance_samples() {
+        let _ = super::estimate("warm dictionaries");
+        for (label, password) in [
+            ("R1", "pa!sword123#assword123".to_owned()),
+            (
+                "two wild substitutions",
+                "pa!sword123pa#sword123".to_owned(),
+            ),
+            ("T1", "deve%opmentdeve%opment".to_owned()),
+            ("T2", "deveopmentdevelpment".to_owned()),
+            ("T3", "m%rym#rym&ry".to_owned()),
+            ("uppercase", "DEVE%OPMENTDEVE#OPMENT".to_owned()),
+            (
+                "above threshold, two copies",
+                "le%mein123!le#mein123!".to_owned(),
+            ),
+            (
+                "above threshold, three copies",
+                "le%mein123!le#mein123!le&mein123!".to_owned(),
+            ),
+        ] {
+            let mut times = Vec::new();
+            for _ in 0..7 {
+                let started = std::time::Instant::now();
+                let actual = std::hint::black_box(crate::export::export_password_strength(
+                    std::hint::black_box(&password),
+                ));
+                times.push(started.elapsed());
+                assert!(actual.guesses.is_finite());
+            }
+            times.sort_unstable();
+            eprintln!("{label}: median={:?}, max={:?}", times[3], times[6]);
+        }
+    }
+
+    #[test]
+    #[ignore = "已知局限（确认评审 T4，不阻塞）：只把未知字母改成小写不一定让估计更低"]
+    fn review5h_t4_lowercasing_only_the_unknown_letter_is_not_conservative() {
+        let base: Vec<char> = "DEVELOPMENT".chars().collect();
+        let lower_one: Vec<char> = "DEVElOPMENT".chars().collect();
+        let password = "DEVE%OPMENTDEVE#OPMENT";
+        let chars: Vec<char> = password.chars().collect();
+        let g = super::base_estimate(&base).0;
+        let changed_g = super::base_estimate(&lower_one).0;
+        assert_eq!(super::periodic_edit_distance(&chars, &base, 0), Some(2));
+        let model = g * 2.0 * (22.0_f64 * 95.0).powi(2);
+        let actual = crate::export::export_password_strength(password);
+        eprintln!("{password}: g={g}, lower_one={changed_g}, model={model}, actual={actual:?}");
+        assert!(model < 1e10);
+        assert!(!crate::export::export_password_ok(password));
+        assert!(
+            changed_g <= g,
+            "the documented one-letter lowercase monotonicity does not hold"
+        );
+    }
+
+    #[test]
+    fn review5h_t3_three_copies_can_all_lose_the_same_character() {
+        review5h_assert_rejected("mary", "m%rym#rym&ry", 3, 2.0, 8_889_264_000.0);
+    }
+
     #[test]
     fn review5g_r1_damaged_copies_below_model_threshold_are_rejected() {
         let base: Vec<char> = "password123".chars().collect();
