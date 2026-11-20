@@ -1,8 +1,8 @@
 //! 第五轮正式评审（2026-11-20，外部模型，`docs/reviews/2026-11-20-model-review-round5.md`）的反例测试。
 //! 每个测试断言"应当成立"的行为：在修复之前的实现上失败，证实了对应的发现；修复之后作为回归测试。
 //! 与评审补丁的差异见处理记录（L5、L8 按处理记录选择的语义调整了断言）。`review5c_`、`review5d_`、`review5e_`
-//! 开头的测试来自第五轮的确认评审（`docs/reviews/2026-11-20-model-review-round5-confirmation*.md`）；`review5f_`
-//! 开头的在 `strength.rs` 的测试模块中。
+//! 开头的测试来自第五轮的确认评审（`docs/reviews/2026-11-20-model-review-round5-confirmation*.md`）；`review5f_`、
+//! `review5g_` 开头的在 `strength.rs` 的测试模块中。
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::print_stderr)]
 
 use crate::{Edit, NewField, Vault};

@@ -150,6 +150,124 @@ const EDIT_CHARS: f64 = 95.0;
 const MAX_PERIOD_CANDIDATES: usize = 32;
 /// 近似周期中，最多比较总代价的匹配数。
 const MAX_COST_EVALS: usize = 16;
+/// 第二阶段（同一位置都被改动）最多比较总代价的匹配数。
+const MAX_WILD_EVALS: usize = 256;
+/// 两份在同一位置都被改动时，基础片段在这个位置的字符两份都没有，按这些字符逐个尝试：常见口令中出现的字符。
+/// 大写字母不必尝试：改成小写只会让估计更低（更保守）。
+const COMMON_CHARS: &str = "abcdefghijklmnopqrstuvwxyz0123456789@$!#*._-";
+/// 两份之间最多允许的差异处数：两份的改动之和，再加上固定长度的切片在末尾多出的差异。
+const MAX_PAIR_DIFF: usize = MAX_EDITS + 2;
+/// 一对候选最多还原出的基础片段数。
+const MAX_BETWEEN: usize = 4096;
+
+/// 夹在两份 `a`、`b` 之间的基础片段（确认评审 R1）：先求两份的对齐（编辑距离不超过 [`MAX_PAIR_DIFF`]）；
+/// 每处差异取 `a` 的一侧或 `b` 的一侧，枚举全部组合。`wild` 时改为两份在同一位置都被改动的情形：基础片段在这个
+/// 位置的字符两份都没有，对每处替换逐个尝试 [`COMMON_CHARS`] 中的字符（每个片段最多一处）。
+fn between(a: &[char], b: &[char], wild: bool) -> Vec<Vec<char>> {
+    // 两份同一个基础片段只在少数几处不同；任意两段随机字符几乎处处不同。差异超过一半的不是两份（否则很短的
+    // 片段总能"配上"，每个强口令都要做一遍还原）。先用带状距离快速排除，对绝大多数输入这里就结束了
+    let limit = MAX_PAIR_DIFF.min(a.len() / 2);
+    if limit == 0 || periodic_edit_distance_within(a, b, 0, limit).is_none() {
+        return Vec::new();
+    }
+    let Some(columns) = align(a, b) else {
+        return Vec::new();
+    };
+    let diffs: Vec<usize> = columns
+        .iter()
+        .enumerate()
+        .filter(|(_, (x, y))| x != y)
+        .map(|(i, _)| i)
+        .collect();
+    if diffs.is_empty() || diffs.len() > limit {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for mask in 0u32..(1 << diffs.len()) {
+        let take_b = |col: usize| {
+            diffs
+                .iter()
+                .position(|d| *d == col)
+                .is_some_and(|bit| mask & (1 << bit) != 0)
+        };
+        let build = |wild: Option<(usize, char)>| -> Vec<char> {
+            columns
+                .iter()
+                .enumerate()
+                .filter_map(|(col, (x, y))| match wild {
+                    Some((w, c)) if w == col => Some(c),
+                    _ => {
+                        if take_b(col) {
+                            *y
+                        } else {
+                            *x
+                        }
+                    }
+                })
+                .collect()
+        };
+        if !wild {
+            out.push(build(None));
+            continue;
+        }
+        for &col in &diffs {
+            if let Some((Some(_), Some(_))) = columns.get(col) {
+                for c in COMMON_CHARS.chars() {
+                    out.push(build(Some((col, c))));
+                }
+            }
+        }
+        if out.len() >= MAX_BETWEEN {
+            break;
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// 两段字符的最短编辑路径（完整动态规划与回溯）：每一列是 (a 的字符, b 的字符)，`None` 表示这一侧没有字符。
+/// 只用于不超过约 [`MAX_ANALYZED`] 个字符的片段。
+fn align(a: &[char], b: &[char]) -> Option<Vec<(Option<char>, Option<char>)>> {
+    let (n, m) = (a.len(), b.len());
+    let w = m + 1;
+    let mut d = vec![0usize; (n + 1) * w];
+    for i in 0..=n {
+        *d.get_mut(i * w)? = i;
+    }
+    for j in 0..=m {
+        *d.get_mut(j)? = j;
+    }
+    for i in 1..=n {
+        for j in 1..=m {
+            let sub = d.get((i - 1) * w + j - 1)? + usize::from(a.get(i - 1) != b.get(j - 1));
+            let del = d.get((i - 1) * w + j)? + 1;
+            let ins = d.get(i * w + j - 1)? + 1;
+            *d.get_mut(i * w + j)? = sub.min(del).min(ins);
+        }
+    }
+    let mut columns = Vec::new();
+    let (mut i, mut j) = (n, m);
+    while i > 0 || j > 0 {
+        let here = *d.get(i * w + j)?;
+        if i > 0
+            && j > 0
+            && here == d.get((i - 1) * w + j - 1)? + usize::from(a.get(i - 1) != b.get(j - 1))
+        {
+            columns.push((a.get(i - 1).copied(), b.get(j - 1).copied()));
+            i -= 1;
+            j -= 1;
+        } else if i > 0 && here == d.get((i - 1) * w + j)? + 1 {
+            columns.push((a.get(i - 1).copied(), None));
+            i -= 1;
+        } else {
+            columns.push((None, b.get(j - 1).copied()));
+            j -= 1;
+        }
+    }
+    columns.reverse();
+    Some(columns)
+}
 /// 重复份数不超过这么多时，另外把每一份的位置都当作基础片段的候选（这时完全相同的两份可能不存在）。
 const FEW_COPIES: usize = 4;
 
@@ -159,7 +277,12 @@ const FEW_COPIES: usize = 4;
 /// 基础片段的候选有两个来源：
 /// 1. 长度为 `p`、出现次数最多的片段，它的重复要覆盖原文的绝大部分（份数多时，总有完好的两份）；
 /// 2. 份数不超过 [`FEW_COPIES`] 时，每一份所在的位置，前后各错开最多 [`MAX_EDITS`] 个字符（份数少、又有改动时，
-///    完全相同的两份可能不存在）。只用于不超过 [`MAX_ANALYZED`] 个字符的基础片段。
+///    完全相同的两份可能不存在）。只用于不超过 [`MAX_ANALYZED`] 个字符的基础片段；
+/// 3. 两三份、每一份都有改动时，从第一份与另一份的差异中还原（[`between`]，确认评审 R1）。
+///
+/// 这三种来源覆盖"重复至少两份、最多 [`MAX_EDITS`] 处改动"的全部情形（基础片段不超过 [`MAX_ANALYZED`] 个字符）：
+/// 五份以上总有完好的两份（来源 1）；四份总有完好的一份（来源 2）；两三份可能没有完好的一份，这时基础片段夹在
+/// 某两份之间，或者两份在同一位置都被改动（来源 3）。
 ///
 /// 对每个候选，在没有改动时的对齐位置前后 [`MAX_EDITS`] 个相位上（周期很短时是全部相位）求带状编辑距离。
 /// 匹配成功的按（改动处数, 周期）排序，取前 [`MAX_COST_EVALS`] 个按**总代价**比较，取最小的：改动最少的解释不一定
@@ -239,11 +362,100 @@ fn near_period_estimate(chars: &[char], limit: f64) -> Option<(f64, Option<Analy
             }
         }
     }
+    // 已经找到的周期：它们的倍数作为第三种来源是多余的（同一个解释，基础片段更长、代价更高）
+    let periods: Vec<usize> = found.iter().map(|f| f.1).collect();
+    let mut best = cheapest(chars, found, limit, None, MAX_COST_EVALS);
+    // 3. 两三份、每一份都有改动：基础片段从第一份与另一份的差异中还原。这样的解释每一份都有改动，至少两处，
+    //    代价至少 2 × (n × 95)² > 10⁶，不会让密码落到弱密码（0–1 分）或主密码的下限以下，只影响能否导出（4 分）。
+    //    因此只在估计仍在最高档时进行（debug 构建下逐个还原很慢）
+    if best.as_ref().map_or(limit, |b| b.0).min(limit) < TOP_SCORE_GUESSES {
+        return best;
+    }
+    let mut found = Vec::new();
+    let mut pairs: Vec<(Vec<char>, Vec<char>)> = Vec::new();
+    {
+        let low = (n.saturating_sub(MAX_EDITS) / 3).max(1);
+        for p in low..=longest.min(n).min(MAX_ANALYZED) {
+            if periods.iter().any(|q| *q < p && p % q == 0) {
+                continue;
+            }
+            let Some(first) = chars.get(..p) else {
+                continue;
+            };
+            for copy in 1usize..3 {
+                let slot = copy.saturating_mul(p);
+                for start in slot.saturating_sub(MAX_EDITS)..=slot.saturating_add(MAX_EDITS) {
+                    let Some(other) = chars.get(start..start.saturating_add(p)) else {
+                        continue;
+                    };
+                    let bases = between(first, other, false);
+                    // 两份在同一位置都被改动，只可能是正好两份：三份时第三份在那个位置是完好的
+                    if !bases.is_empty() && p.saturating_mul(2).saturating_add(MAX_EDITS) >= n {
+                        pairs.push((first.to_vec(), other.to_vec()));
+                    }
+                    verify_bases(chars, bases, &mut found);
+                }
+            }
+        }
+    }
+    // 第一阶段：不含未知字符的候选
+    let limit = best.as_ref().map_or(limit, |b| b.0);
+    if let Some(found) = cheapest(chars, found, limit, None, MAX_COST_EVALS)
+        && best.as_ref().is_none_or(|b| found.0 < b.0)
+    {
+        best = Some(found);
+    }
+    // 第二阶段：两份在同一位置都被改动时，逐个尝试那个位置的字符。只在还没有低于最高档门槛时进行，
+    // 一旦低于门槛就停下：能否导出已经确定
+    if best.as_ref().is_none_or(|b| b.0 >= TOP_SCORE_GUESSES) && !pairs.is_empty() {
+        let mut wild = Vec::new();
+        for (first, other) in &pairs {
+            verify_bases(chars, between(first, other, true), &mut wild);
+        }
+        let limit = best.as_ref().map_or(limit, |b| b.0);
+        if let Some(found) = cheapest(chars, wild, limit, Some(TOP_SCORE_GUESSES), MAX_WILD_EVALS)
+            && best.as_ref().is_none_or(|b| found.0 < b.0)
+        {
+            best = Some(found);
+        }
+    }
+    best
+}
+
+/// 对还原出的基础片段（与原文的开头对齐）核对编辑距离，成功的记下：(改动处数, 周期, 基础片段)。
+fn verify_bases(chars: &[char], bases: Vec<Vec<char>>, found: &mut Vec<(usize, usize, Vec<char>)>) {
+    for base in bases {
+        let len = base.len();
+        if len == 0 {
+            continue;
+        }
+        for shift in 0..=2 * MAX_EDITS {
+            let phase = (len * (MAX_EDITS + 1) + shift - MAX_EDITS) % len;
+            if let Some(edits) = periodic_edit_distance(chars, &base, phase) {
+                let rotated: Vec<char> = (0..len)
+                    .filter_map(|k| base.get((phase + k) % len).copied())
+                    .collect();
+                found.push((edits, len, rotated));
+            }
+        }
+    }
+}
+
+/// 在匹配成功的解释中按总代价取最小：按（改动处数, 周期）排序，最多估计 `evals` 个基础片段。代价下限（重复次数
+/// × 改动的代价）已经达到 `min(limit, 门槛)` 的不再估计。`stop_below` 不为空时，一旦低于它就停下。
+fn cheapest(
+    chars: &[char],
+    mut found: Vec<(usize, usize, Vec<char>)>,
+    limit: f64,
+    stop_below: Option<f64>,
+    evals: usize,
+) -> Option<(f64, Option<Analysis>)> {
+    let n = chars.len();
     found.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)).then_with(|| a.2.cmp(&b.2)));
     found.dedup();
     let per_edit = to_f64(n) * EDIT_CHARS;
     let mut best: Option<(f64, Option<Analysis>)> = None;
-    for (edits, p, rotated) in found.into_iter().take(MAX_COST_EVALS) {
+    for (edits, p, rotated) in found.into_iter().take(evals) {
         let edit_cost = per_edit.powi(i32::try_from(edits).unwrap_or(i32::MAX));
         let floor = to_f64(n.div_ceil(p)) * edit_cost;
         let target = best.as_ref().map_or(limit, |b| b.0).min(TOP_SCORE_GUESSES);
@@ -254,6 +466,9 @@ fn near_period_estimate(chars: &[char], limit: f64) -> Option<(f64, Option<Analy
         let guesses = (g * floor).min(f64::MAX);
         if best.as_ref().is_none_or(|b| guesses < b.0) {
             best = Some((guesses, analysis));
+        }
+        if stop_below.is_some_and(|stop| best.as_ref().is_some_and(|b| b.0 < stop)) {
+            break;
         }
     }
     best
@@ -309,11 +524,20 @@ fn most_frequent(chars: &[char], p: usize) -> Option<(usize, usize)> {
 /// 原文与"`base` 从 `phase` 开始无限重复"之间的编辑距离（替换、插入、删除各算一处；重复的长度可以与原文不同，
 /// 最后一份可以不完整）。只算到 [`MAX_EDITS`]，超过时返回 `None`。带状动态规划，O(n × MAX_EDITS)。
 fn periodic_edit_distance(text: &[char], base: &[char], phase: usize) -> Option<usize> {
+    periodic_edit_distance_within(text, base, phase, MAX_EDITS)
+}
+
+/// 与 [`periodic_edit_distance`] 相同，只算到 `k`。
+fn periodic_edit_distance_within(
+    text: &[char],
+    base: &[char],
+    phase: usize,
+    k: usize,
+) -> Option<usize> {
     let p = base.len();
     if p == 0 {
         return None;
     }
-    let k = MAX_EDITS;
     let width = 2 * k + 1;
     let inf = usize::MAX / 4;
     let pattern = |j: usize| base.get((phase + j) % p);
@@ -1569,6 +1793,87 @@ fn match_warning(m: &Match, sole: bool) -> Option<Warning> {
 #[allow(clippy::unwrap_used, clippy::float_cmp, clippy::print_stderr)]
 mod tests {
     #[test]
+    fn review5g_r1_damaged_copies_below_model_threshold_are_rejected() {
+        let base: Vec<char> = "password123".chars().collect();
+        let mut password = "password123".repeat(2);
+        password.replace_range(2..3, "!");
+        password.replace_range(11..12, "#");
+        assert_eq!(password, "pa!sword123#assword123");
+        let chars: Vec<char> = password.chars().collect();
+        // 每个候选长度的原文窗口都带有改动，连旋转后的完好基础片段也取不到。
+        assert!(
+            chars
+                .windows(base.len())
+                .all(|w| w.contains(&'!') || w.contains(&'#'))
+        );
+        assert_eq!(super::periodic_edit_distance(&chars, &base, 0), Some(2));
+        let g = super::base_estimate(&base).0;
+        let bound = g * 2.0 * (super::to_f64(chars.len()) * 95.0).powi(2);
+        assert_eq!(g, 596.0);
+        assert_eq!(bound, 5_206_775_200.0);
+        assert!(bound < 1e10);
+        let near = super::near_period_estimate(&chars, f64::MAX).map(|v| v.0);
+        let actual = crate::export::export_password_strength(&password);
+        let allowed = crate::export::export_password_ok(&password);
+        eprintln!("{password}: model={bound}, near={near:?}, actual={actual:?}, allowed={allowed}");
+        assert!(
+            !allowed,
+            "two low-cost substitutions must not permit export"
+        );
+    }
+
+    #[test]
+    fn review5g_c1_intact_common_base_variants_respect_model_threshold() {
+        let mut checked = 0usize;
+        for base in ["password123", "password", "letmein", "qwerty", "123456"] {
+            let g = super::estimate(base).guesses;
+            let p = base.len();
+            for copies in [2, 3, 4] {
+                for kind in 0..4 {
+                    for i in 0..p {
+                        for j in 0..p - 1 {
+                            let mut chars: Vec<char> = base.repeat(copies).chars().collect();
+                            match kind {
+                                0 => {
+                                    chars.remove(i);
+                                    chars[j] = '!';
+                                }
+                                1 => {
+                                    chars.remove(i);
+                                    chars.remove(j);
+                                }
+                                2 => {
+                                    chars.insert(i, '!');
+                                    chars[j] = '#';
+                                }
+                                _ => {
+                                    chars[i] = '!';
+                                    chars[j] = '#';
+                                }
+                            }
+                            let bound = g
+                                * super::to_f64(chars.len().div_ceil(p))
+                                * (super::to_f64(chars.len()) * 95.0).powi(2);
+                            if bound >= 1e10 {
+                                continue;
+                            }
+                            let password: String = chars.into_iter().collect();
+                            let actual = crate::export::export_password_strength(&password);
+                            checked += 1;
+                            assert!(
+                                actual.score < 4,
+                                "base={base}, copies={copies}, kind={kind}, i={i}, j={j}, password={password}, model={bound}, actual={actual:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("intact-base low-cost variants checked={checked}");
+        assert!(checked > 100);
+    }
+
+    #[test]
     fn review5f_q1_two_copies_with_one_substitution_are_rejected() {
         let base: Vec<char> = "password123".chars().collect();
         let mut failures = Vec::new();
@@ -1819,6 +2124,18 @@ mod tests {
                 chars[pos] = '%';
                 out.push((chars.into_iter().collect(), Some(1)));
             }
+            // 每一份都有改动：前两份在不同位置各替换一个字符（确认评审 R1），以及在同一位置替换成不同的字符
+            if n >= 2 {
+                let p = base.chars().count();
+                let mut damaged: Vec<char> = plain.chars().collect();
+                damaged[1] = '%';
+                damaged[p + p / 2] = '#';
+                out.push((damaged.into_iter().collect(), Some(2)));
+                let mut same: Vec<char> = plain.chars().collect();
+                same[2] = '%';
+                same[p + 2] = '#';
+                out.push((same.into_iter().collect(), Some(2)));
+            }
             // 删掉开头一个字符、再替换一个字符：从常见口令的相位看是两处改动（确认评审 Q2）
             let mut shifted: Vec<char> = plain.chars().skip(1).collect();
             shifted[2] = '!';
@@ -1856,9 +2173,11 @@ mod tests {
         }
         assert!(below > 100, "{below}");
         // 对其他基础片段，估计不超过模型上限：重复本身不再虚增
-        for base in ["letmein123!", "Tr0ub4dor&3"] {
+        // 这些变体按模型本来就在门槛之上，估计要把各种还原都做完，debug 构建下慢；这里只取一个代表（release 构建下
+        // 每个不超过 30 ms）
+        for base in ["letmein123!"] {
             let g = estimate(base).guesses;
-            for n in [3, 10] {
+            for n in [3] {
                 for (v, edits) in variants_of(base, n) {
                     let Some(1) = edits else { continue };
                     let len = to_f64(v.chars().count());
