@@ -238,10 +238,12 @@ impl KeevoVault {
         let only = vault_id.as_deref().map(parse_id).transpose()?;
         // 每次导出都要求刚刚为导出重新验证过（第五轮预审 K15）：加密导出也一样，拿到文件和导出密码的人就能
         // 读出全部条目。标记只由 reverify_for_export 签发，用一次即作废，其他用途的重新验证不算
+        // 标记绑定签发时的解锁代次：锁定后又解锁过，即使还在两分钟之内也作废（第五轮评审 L8）
+        let epoch = self.vault().unlock_epoch();
         let fresh = self
             .reverified()
             .take()
-            .is_some_and(|at| at.elapsed() <= REVERIFY_WINDOW);
+            .is_some_and(|(at, issued)| at.elapsed() <= REVERIFY_WINDOW && Some(issued) == epoch);
         if !fresh {
             return Err(KeevoError::InvalidInput {
                 message: "reverify".into(),
@@ -296,6 +298,14 @@ pub fn export_password_ok(password: String) -> bool {
     export::export_password_ok(&password)
 }
 
+/// 导出密码的强度，按进入 KDF 的 NFKD 规范化形式评估（导出界面的强度条）。
+#[uniffi::export]
+#[must_use]
+pub fn export_password_strength(password: String) -> crate::PasswordStrengthInfo {
+    let password = zeroize::Zeroizing::new(password);
+    crate::security::strength_info(&export::export_password_strength(&password))
+}
+
 #[uniffi::export]
 impl KeevoVault {
     /// 为导出重新验证用户（`password` 为 `None` 时用 Touch ID，会弹出提示，请在后台线程调用）。通过后签发一个
@@ -308,8 +318,12 @@ impl KeevoVault {
             keevo_core::Reverify::TouchId,
             keevo_core::Reverify::Password,
         );
-        self.vault().reverify(proof)?;
-        *self.reverified() = Some(Instant::now());
+        let epoch = {
+            let mut vault = self.vault();
+            vault.reverify(proof)?;
+            vault.unlock_epoch().ok_or(keevo_core::CoreError::Locked)?
+        };
+        *self.reverified() = Some((Instant::now(), epoch));
         Ok(())
     }
 }
@@ -318,6 +332,7 @@ impl KeevoVault {
     /// 测试用：记下"刚刚为导出重新验证过"（`reverify_for_export` 成功时做的就是这件事）。
     #[cfg(test)]
     pub(crate) fn note_export_reverified(&self) {
-        *self.reverified() = Some(Instant::now());
+        let epoch = self.vault().unlock_epoch().unwrap_or_default();
+        *self.reverified() = Some((Instant::now(), epoch));
     }
 }

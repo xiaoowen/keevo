@@ -913,6 +913,7 @@ dependencies = [
  "keevo-ipc",
  "keevo-service",
  "keevo-ssh",
+ "rusqlite",
  "serde_json",
  "uniffi",
  "zeroize",

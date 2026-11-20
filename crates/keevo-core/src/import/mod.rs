@@ -27,8 +27,8 @@ use crate::vault::{NewField, Vault};
 pub const MAX_FILE_LEN: usize = 512 * 1024 * 1024;
 /// 条目数上限。
 pub const MAX_ITEMS: usize = 50_000;
-/// 解析 JSON 之前允许的节点数（约每个值一个）。`serde_json::Value` 的每个节点在内存中约 30–80 字节，
-/// 因此解析树至多约 200 MB：压缩文件不能把几十 KB 放大成数 GB（第五轮预审 K10）。
+/// 解析 JSON 之前允许的节点数（约每个值一个）。解析树的大小因此有上限，压缩文件不能把几十 KB 放大成数 GB
+/// （第五轮预审 K10）。这是**有界**而不是低内存：输入文件、解压后的数据、解析树与输出的条目可能同时在内存中。
 pub const MAX_JSON_NODES: usize = 4_000_000;
 /// 一个条目的字段数上限（`spec/revisions.md` §7.1 的记录键上限为 4096）。
 const MAX_FIELDS: usize = 1000;
@@ -402,9 +402,20 @@ fn clip(s: &str, max: usize) -> String {
     s.get(..end).unwrap_or_default().to_owned()
 }
 
-/// 逐步构造一个 [`Imported`]。空值不生成字段。
+/// 逐步构造一个 [`Imported`]。
+///
+/// 两种模式：
+/// - **规整**（[`Builder::new`]，其他来源）：去掉名称与普通值的首尾空白，名称超长时截断并在备注中说明，空值不生成
+///   字段，同名分区合并，字段、分区、标签有个数上限；
+/// - **原样**（[`Builder::exact`]，Keevo 自己的导出文件）：名称、值、空值与分区的位置都原样保留，同名的分区不合并
+///   （`spec/export.md` §2；第五轮评审 L6）。上限只有格式本身的上限，由写入时检查。
+///
+/// 两种模式都不改变秘密值与多行文本（包括备注）。
 pub(crate) struct Builder {
     item: Imported,
+    exact: bool,
+    /// 规整模式下被截断的名称数，在备注中说明。
+    clipped: usize,
     notes: Vec<String>,
     /// 分区名 → 序号（去重用；第五轮预审 K9：线性查找使去重成为平方复杂度）。
     section_index: HashMap<String, usize>,
@@ -419,11 +430,21 @@ pub(crate) struct Builder {
 
 impl Builder {
     pub(crate) fn new(item_type: ItemType, title: &str) -> Self {
+        let mut b = Self::exact(item_type, "");
+        b.exact = false;
+        b.item.title = b.name(title, MAX_LABEL);
+        b
+    }
+
+    /// 原样模式（Keevo 自己的导出文件）。
+    pub(crate) fn exact(item_type: ItemType, title: &str) -> Self {
         Self {
+            exact: true,
+            clipped: 0,
             item: Imported {
                 item_type,
                 original: None,
-                title: clip(title.trim(), MAX_LABEL),
+                title: title.to_owned(),
                 sections: Vec::new(),
                 fields: Vec::new(),
                 tags: Vec::new(),
@@ -446,9 +467,27 @@ impl Builder {
         self
     }
 
-    /// 分区；同名的分区合并，空名称为默认分区。超过 [`MAX_SECTIONS`] 个时，其余分区的字段放进默认分区。
+    /// 名称（标题、字段名、分区名、标签）：规整模式去掉首尾空白，超过 `max` 字节时截断并计数；原样模式不变。
+    fn name(&mut self, s: &str, max: usize) -> String {
+        if self.exact {
+            return s.to_owned();
+        }
+        let trimmed = s.trim();
+        let out = clip(trimmed, max);
+        if out.len() < trimmed.len() {
+            self.clipped = self.clipped.saturating_add(1);
+        }
+        out
+    }
+
+    /// 分区。规整模式：同名的分区合并，空名称为默认分区，超过 [`MAX_SECTIONS`] 个时其余分区的字段放进默认分区。
+    /// 原样模式：每次调用都是一个新的分区（分区以位置为身份）。
     pub(crate) fn section(&mut self, label: &str) -> Option<usize> {
-        let label = clip(label.trim(), MAX_LABEL);
+        if self.exact {
+            self.item.sections.push(label.to_owned());
+            return Some(self.item.sections.len().saturating_sub(1));
+        }
+        let label = self.name(label, MAX_LABEL);
         if label.is_empty() {
             return None;
         }
@@ -473,7 +512,19 @@ impl Builder {
         purpose: Option<Purpose>,
         value: &str,
     ) {
-        // 秘密值原样保留，首尾的空格也是密码的一部分（第五轮预审 K8）；其余的值去掉首尾空白
+        if self.exact {
+            self.item.fields.push((
+                section,
+                NewField {
+                    kind,
+                    label: label.to_owned(),
+                    purpose,
+                    data: FieldData::Text(SecretString::new(value.to_owned())),
+                },
+            ));
+            return;
+        }
+        // 秘密值与多行文本原样保留，首尾的空格也是值的一部分（第五轮预审 K8）；其余的值去掉首尾空白
         let raw = matches!(
             kind,
             FieldKind::Concealed | FieldKind::Multiline | FieldKind::SshPrivateKey
@@ -485,7 +536,7 @@ impl Builder {
             self.dropped_fields = self.dropped_fields.saturating_add(1);
             return;
         }
-        let label = clip(label.trim(), MAX_LABEL);
+        let label = self.name(label, MAX_LABEL);
         let label = if label.is_empty() {
             default_label(kind).to_owned()
         } else {
@@ -504,6 +555,9 @@ impl Builder {
         } else {
             value.trim().to_owned()
         };
+        if value.len() > MAX_TEXT {
+            self.clipped = self.clipped.saturating_add(1);
+        }
         self.item.fields.push((
             section,
             NewField {
@@ -517,11 +571,11 @@ impl Builder {
 
     /// 原样加入一个字段（结构化字段：环境变量、恢复码）。
     pub(crate) fn push(&mut self, section: Option<usize>, mut field: NewField) {
-        if self.item.fields.len() >= MAX_FIELDS {
+        if !self.exact && self.item.fields.len() >= MAX_FIELDS {
             self.dropped_fields = self.dropped_fields.saturating_add(1);
             return;
         }
-        field.label = clip(field.label.trim(), MAX_LABEL);
+        field.label = self.name(&field.label, MAX_LABEL);
         self.item.fields.push((section, field));
     }
 
@@ -551,18 +605,19 @@ impl Builder {
         }
     }
 
+    /// 备注：原样保留，包括首尾的空白（第五轮评审 L6）。
     pub(crate) fn note(&mut self, text: &str) {
         if !text.trim().is_empty() {
-            self.notes.push(text.trim_end().to_owned());
+            self.notes.push(text.to_owned());
         }
     }
 
     pub(crate) fn tag(&mut self, tag: &str) {
-        let tag = clip(tag.trim(), MAX_TAG);
+        let tag = self.name(tag, MAX_TAG);
         if tag.is_empty() || self.tag_set.contains(&tag) {
             return;
         }
-        if self.item.tags.len() >= MAX_TAGS {
+        if !self.exact && self.item.tags.len() >= MAX_TAGS {
             self.dropped_tags = self.dropped_tags.saturating_add(1);
             return;
         }
@@ -590,8 +645,18 @@ impl Builder {
                 self.item.attachments
             ));
         }
+        if self.clipped > 0 {
+            self.notes.push(format!(
+                "原文件中有 {} 个名称或值超过长度上限，导入时截断了。",
+                self.clipped
+            ));
+        }
         // 备注本身也是一个字段：字段已满时让出最后一个，用来说明没有导入的内容
-        if self.item.fields.len() >= MAX_FIELDS && self.item.fields.pop().is_some() {
+        if !self.exact
+            && !self.notes.is_empty()
+            && self.item.fields.len() >= MAX_FIELDS
+            && self.item.fields.pop().is_some()
+        {
             self.dropped_fields = self.dropped_fields.saturating_add(1);
         }
         if self.dropped_fields > 0 {
@@ -624,13 +689,15 @@ impl Builder {
         } else {
             "备注"
         };
-        self.add(
-            None,
-            FieldKind::Multiline,
-            label,
-            Some(Purpose::Notes),
-            &notes,
-        );
+        if !notes.is_empty() {
+            self.add(
+                None,
+                FieldKind::Multiline,
+                label,
+                Some(Purpose::Notes),
+                &notes,
+            );
+        }
         if self.item.title.is_empty() {
             self.item.title = self
                 .item

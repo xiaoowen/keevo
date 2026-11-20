@@ -93,7 +93,7 @@ fn r5_rebuild_leaves_attachment_content() {
     let r = v
         .add_attachment(old, "id_ed25519", b"-----BEGIN OPENSSH PRIVATE KEY-----", 1)
         .unwrap();
-    let new = v.rebuild_item(old, &[]).unwrap();
+    let new = v.rebuild_item(old, &[]).unwrap().item_id;
     let refs = attachment_ids_in(&v, new);
     let residue = v.store_for_tests().attachments_of(&old).unwrap();
     println!(

@@ -3,15 +3,16 @@
 //! 1. 只读打开，关闭触发器、视图与不可信的 schema（`SQLITE_DBCONFIG_DEFENSIVE`），拒绝任何触发器、视图、
 //!    虚拟表与生成列，只认 Keevo 自己的表与列；
 //! 2. 在一个由 Keevo 新建的临时数据库中逐行导入，每一列按与读取时相同的规则检查长度与取值（`spec/crypto.md`
-//!    §8.5、§8.9）；父修订必须存在，头修订由修订图重算，不信任备份中的 `head` 表；修订的保存时间不超过恢复前的
-//!    有效时间（`spec/revisions.md` §7.2），被篡改的备份不能让清理提前生效；
+//!    §8.5、§8.9）；修订图必须是 DAG，按拓扑顺序写入，头修订由修订图重算，不信任备份中的 `head` 表与 `seq`；
+//!    保存时间不取备份中的值（[`copy_revisions`]），恢复不会让清理提前生效；
 //! 3. 临时数据库中写入恢复前的本机状态（`meta` 与 `local_record`）；
 //! 4. 用 SQLite 在线备份接口一次性把临时数据库换入主数据库：单个写事务，中途失败时主数据库保持原样。
 //!
-//! 第五轮预审（2026-11-20）K1、K2。备份的内容本身仍然没有认证：能改写备份的人可以删去新的修订，让条目回到旧版本，
-//! 这与"恢复一份旧备份"的效果相同。对整个备份做认证在 M2 随同步格式定义。
+//! 第五轮预审 K1、K2，第五轮评审 L2、L3（2026-11-20）。这些检查只保证恢复出的数据库满足 Keevo 的存储不变量，
+//! **不认证内容**：能改写备份的人仍可以删去对象或修订、换掉未认证的明文列，或拿一份更旧的备份来用。
+//! 对整个备份做认证在 M2 随同步格式定义。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use keevo_crypto::Id128;
@@ -231,6 +232,12 @@ impl Store {
             let snapshot = source.unchecked_transaction()?;
             let tx = staged.conn.transaction()?;
             let account = read_account(&snapshot)?;
+            // 只接受同一个账户的备份；在读取所用的同一个快照中核对（第五轮评审 B1）
+            if let Some(current) = self.account()?
+                && current.id != account.id
+            {
+                return Err(corrupt("backup belongs to another account"));
+            }
             tx.execute(
                 "INSERT INTO account (id, format_version, epoch, kdf_params, keyset_ct) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
@@ -241,7 +248,7 @@ impl Store {
                     account.keyset_ct
                 ],
             )?;
-            copy_revisions(&snapshot, &tx, version, effective)?;
+            copy_revisions(&snapshot, &tx, &self.conn, effective)?;
             copy_attachments(&snapshot, &tx, version)?;
             let devices: i64 =
                 snapshot.query_row("SELECT count(*) FROM device", [], |r| r.get(0))?;
@@ -328,23 +335,22 @@ impl Drop for Cleanup {
     }
 }
 
-/// 逐行导入修订，检查长度与取值；父修订必须存在；头修订由修订图重算。
+/// 逐行导入修订（第五轮评审 L2、L3）：
+/// - 每一列先按读取时的规则检查类型与长度，不读入内容；墓碑与已清理的修订不带内容；
+/// - 修订图必须是 DAG：父修订在同一对象中，不以自己为父，没有环；同一对象的类型一致；
+/// - 按拓扑顺序写入（同一层按备份中的 `seq`），不信任备份中的 `seq`：读取修订图时父修订总在前面；
+/// - 头修订由修订图重算，头修订不能是已清理的修订；
+/// - 保存时间不取备份中的值：当前数据库中有同一修订时沿用它的保存时间（可信），否则记为恢复前的有效时间，
+///   即"刚收到"。因此恢复不会让任何历史提前满足清理条件，只会更晚。
 fn copy_revisions(
     src: &rusqlite::Transaction<'_>,
     dst: &rusqlite::Transaction<'_>,
-    version: u32,
+    current: &Connection,
     effective: i64,
 ) -> Result<()> {
     let env = keevo_crypto::MAX_ENVELOPE_LEN;
     let parents = MAX_PARENTS * 16;
     let tomb_parents = MAX_TOMBSTONE_PARENTS * 16;
-    let stored = if version >= 3 { "stored_ms" } else { "0" };
-    let stored_check = if version >= 3 {
-        "OR typeof(stored_ms) != 'integer' OR stored_ms < 0"
-    } else {
-        ""
-    };
-    // 先在不读取内容的情况下检查每一列（与 check_sizes 相同的规则），再读取
     let bad: i64 = src.query_row(
         &format!(
             "SELECT count(*) FROM revision WHERE
@@ -360,8 +366,7 @@ fn copy_revisions(
                OR (overview_ct IS NOT NULL AND (typeof(overview_ct) != 'blob' OR length(overview_ct) > {env}))
                OR (details_ct IS NOT NULL AND (typeof(details_ct) != 'blob' OR length(details_ct) > {env}))
                OR ((deleted OR pruned) AND (wrapped_key_ct IS NOT NULL OR overview_ct IS NOT NULL OR details_ct IS NOT NULL))
-               OR (NOT (deleted OR pruned) AND (wrapped_key_ct IS NULL OR overview_ct IS NULL))
-               {stored_check}",
+               OR (NOT (deleted OR pruned) AND (wrapped_key_ct IS NULL OR overview_ct IS NULL))",
             vault = ObjectKind::Vault.code(),
             item = ObjectKind::Item.code(),
         ),
@@ -371,69 +376,156 @@ fn copy_revisions(
     if bad != 0 {
         return Err(corrupt("backup revision exceeds its limits"));
     }
-    let mut known: HashSet<(Vec<u8>, Vec<u8>)> = HashSet::new();
-    let mut edges: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::new();
+    let mixed: i64 = src.query_row(
+        "SELECT count(*) FROM (SELECT object_id FROM revision GROUP BY object_id
+                               HAVING count(DISTINCT object_type) > 1)",
+        [],
+        |r| r.get(0),
+    )?;
+    if mixed != 0 {
+        return Err(corrupt("backup object changes its type"));
+    }
+
+    // 1. 读入修订图（不含内容），同时把整行放进临时表，之后按拓扑顺序取出
+    struct Node {
+        rev: [u8; 16],
+        object: [u8; 16],
+        parents: Vec<[u8; 16]>,
+        seq: i64,
+        pruned: bool,
+    }
+    dst.execute_batch(
+        "CREATE TEMP TABLE import_revision (
+           rev_id BLOB PRIMARY KEY, object_id BLOB, object_type INTEGER, vault_id BLOB, origin_device BLOB,
+           origin_seq INTEGER, wrapped_key_ct BLOB, overview_ct BLOB, details_ct BLOB, deleted INTEGER, pruned INTEGER)",
+    )?;
+    let mut nodes: Vec<Node> = Vec::new();
     {
-        let mut stmt = src.prepare(&format!(
+        let mut stmt = src.prepare(
             "SELECT rev_id, object_id, object_type, vault_id, parents, origin_device, origin_seq,
-                    wrapped_key_ct, overview_ct, details_ct, deleted, pruned, {stored}
-             FROM revision ORDER BY seq"
-        ))?;
-        let mut insert = dst.prepare(
-            "INSERT INTO revision (rev_id, object_id, object_type, vault_id, parents, origin_device, origin_seq,
-                                   wrapped_key_ct, overview_ct, details_ct, deleted, pruned, stored_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                    wrapped_key_ct, overview_ct, details_ct, deleted, pruned, seq
+             FROM revision ORDER BY seq",
+        )?;
+        let mut stage = dst.prepare(
+            "INSERT INTO import_revision VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )?;
         let mut rows = stmt.query([])?;
         while let Some(r) = rows.next()? {
-            let rev_id: Vec<u8> = r.get(0)?;
-            let object_id: Vec<u8> = r.get(1)?;
-            let parents: Vec<u8> = r.get(4)?;
-            let deleted: bool = r.get(10)?;
+            let rev: [u8; 16] = *id_from(&r.get::<_, Vec<u8>>(0)?)?.as_bytes();
+            let object: [u8; 16] = *id_from(&r.get::<_, Vec<u8>>(1)?)?.as_bytes();
+            let mut parent_ids: Vec<[u8; 16]> = decode_ids(&r.get::<_, Vec<u8>>(4)?)?
+                .iter()
+                .map(|p| *p.as_bytes())
+                .collect();
+            // 父修订是集合：与写入时（insert_one）相同，先排序去重
+            parent_ids.sort_unstable();
+            parent_ids.dedup();
             let pruned: bool = r.get(11)?;
-            let wrapped: Option<Vec<u8>> = r.get(7)?;
-            let overview: Option<Vec<u8>> = r.get(8)?;
-            let details: Option<Vec<u8>> = r.get(9)?;
-            // 保存时间不超过恢复前的有效时间：被篡改的备份不能让清理提前生效（第五轮预审 K1）
-            let stored_ms: i64 = r.get::<_, i64>(12)?.clamp(0, effective);
-            insert.execute(params![
-                rev_id,
-                object_id,
+            let inserted = stage.execute(params![
+                rev.as_slice(),
+                object.as_slice(),
                 r.get::<_, i64>(2)?,
                 r.get::<_, Vec<u8>>(3)?,
-                parents,
                 r.get::<_, Vec<u8>>(5)?,
                 r.get::<_, Option<i64>>(6)?,
-                wrapped,
-                overview,
-                details,
-                deleted,
+                r.get::<_, Option<Vec<u8>>>(7)?,
+                r.get::<_, Option<Vec<u8>>>(8)?,
+                r.get::<_, Option<Vec<u8>>>(9)?,
+                r.get::<_, bool>(10)?,
                 pruned,
-                stored_ms,
-            ])?;
-            if !known.insert((object_id.clone(), rev_id.clone())) {
+            ]);
+            if inserted.is_err() {
                 return Err(corrupt("duplicate revision in backup"));
             }
-            edges.push((object_id, rev_id, parents));
+            nodes.push(Node {
+                rev,
+                object,
+                parents: parent_ids,
+                seq: r.get(12)?,
+                pruned,
+            });
         }
     }
-    // 父修订必须存在于同一对象中；头修订 = 没有子修订的修订
-    let mut has_child: HashSet<(Vec<u8>, Vec<u8>)> = HashSet::new();
-    for (object_id, _, parents) in &edges {
-        for p in decode_ids(parents)? {
-            let key = (object_id.clone(), p.as_bytes().to_vec());
-            if !known.contains(&key) {
-                return Err(corrupt("backup revision has a missing parent"));
+
+    // 2. 拓扑排序（Kahn）：父修订必须在同一对象中；有环（含以自己为父）时有修订永远排不进来
+    let index: HashMap<([u8; 16], [u8; 16]), usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| ((n.object, n.rev), i))
+        .collect();
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
+    let mut waiting: Vec<usize> = vec![0; nodes.len()];
+    for (i, n) in nodes.iter().enumerate() {
+        for p in &n.parents {
+            let parent = *index
+                .get(&(n.object, *p))
+                .ok_or_else(|| corrupt("backup revision has a missing parent"))?;
+            if let (Some(c), Some(w)) = (children.get_mut(parent), waiting.get_mut(i)) {
+                c.push(i);
+                *w = w.saturating_add(1);
             }
-            has_child.insert(key);
         }
     }
-    let mut insert_head = dst.prepare("INSERT INTO head (object_id, rev_id) VALUES (?1, ?2)")?;
-    for (object_id, rev_id, _) in &edges {
-        if !has_child.contains(&(object_id.clone(), rev_id.clone())) {
-            insert_head.execute(params![object_id, rev_id])?;
+    let mut ready: std::collections::BTreeSet<(i64, usize)> = nodes
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| waiting.get(*i) == Some(&0))
+        .map(|(i, n)| (n.seq, i))
+        .collect();
+    let mut order: Vec<usize> = Vec::with_capacity(nodes.len());
+    while let Some((_, i)) = ready.pop_first() {
+        order.push(i);
+        for &c in children.get(i).map(Vec::as_slice).unwrap_or_default() {
+            if let Some(w) = waiting.get_mut(c) {
+                *w = w.saturating_sub(1);
+                if *w == 0 {
+                    ready.insert((nodes.get(c).map_or(0, |n| n.seq), c));
+                }
+            }
         }
     }
+    if order.len() != nodes.len() {
+        return Err(corrupt("backup revision graph has a cycle"));
+    }
+
+    // 3. 保存时间：恢复前的数据库中有同一修订时沿用它的（可信）；否则记为刚收到
+    let trusted: HashMap<Vec<u8>, (Vec<u8>, i64)> = {
+        let mut stmt = current.prepare("SELECT rev_id, object_id, stored_ms FROM revision")?;
+        stmt.query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+
+    // 4. 按拓扑顺序写入，头修订 = 没有子修订的修订
+    {
+        let mut insert = dst.prepare(
+            "INSERT INTO revision (rev_id, object_id, object_type, vault_id, parents, origin_device, origin_seq,
+                                   wrapped_key_ct, overview_ct, details_ct, deleted, pruned, stored_ms)
+             SELECT rev_id, object_id, object_type, vault_id, ?2, origin_device, origin_seq,
+                    wrapped_key_ct, overview_ct, details_ct, deleted, pruned, ?3
+             FROM import_revision WHERE rev_id = ?1",
+        )?;
+        let mut insert_head =
+            dst.prepare("INSERT INTO head (object_id, rev_id) VALUES (?1, ?2)")?;
+        for &i in &order {
+            let Some(n) = nodes.get(i) else { continue };
+            let stored = match trusted.get(n.rev.as_slice()) {
+                Some((object, ms)) if object.as_slice() == n.object.as_slice() => {
+                    (*ms).clamp(0, effective)
+                }
+                _ => effective,
+            };
+            let parents: Vec<u8> = n.parents.iter().flatten().copied().collect();
+            insert.execute(params![n.rev.as_slice(), parents, stored])?;
+            if children.get(i).is_none_or(Vec::is_empty) {
+                // 头修订永远不会被清理（spec/revisions.md §7.2）
+                if n.pruned {
+                    return Err(corrupt("backup head revision has been pruned"));
+                }
+                insert_head.execute(params![n.object.as_slice(), n.rev.as_slice()])?;
+            }
+        }
+    }
+    dst.execute_batch("DROP TABLE import_revision")?;
     Ok(())
 }
 

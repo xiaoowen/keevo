@@ -17,8 +17,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::OnceLock;
 
-/// 只分析这么多个字符；之后的部分按暴力枚举计入。
+/// 每段分析这么多个字符（[`estimate`]）。
 pub const MAX_ANALYZED: usize = 64;
+/// 最多分析这么多段（1024 个字符）；之后的部分不计入，只会低估。
+const MAX_WINDOWS: usize = 16;
 
 const BRUTEFORCE_CARDINALITY: f64 = 10.0;
 const MIN_GUESSES_BEFORE_GROWING_SEQUENCE: f64 = 10_000.0;
@@ -85,32 +87,53 @@ pub enum Warning {
 #[must_use]
 pub fn estimate(password: &str) -> Strength {
     let chars: Vec<char> = password.chars().collect();
-    let (head, tail) = chars.split_at(chars.len().min(MAX_ANALYZED));
-    let matches = omnimatch(head);
-    let result = most_guessable(head, matches, false);
-    // 超出分析范围的部分按暴力枚举计入
-    let guesses = if tail.is_empty() {
-        result.guesses
+    // 分段分析：每段 MAX_ANALYZED 个字符，各段的猜测次数相乘。与前面某处完全相同的段（整段重复或周期性的模式）
+    // 只算 ×2。此前超出 64 个字符的部分按每字符 10 种计入，长的重复口令被当作随机（第五轮评审 L1）
+    let mut guesses = 1.0_f64;
+    let mut first: Option<Analysis> = None;
+    let windows: Vec<(usize, &[char])> = if chars.is_empty() {
+        vec![(0, &chars[..])]
     } else {
-        let extra = BRUTEFORCE_CARDINALITY.powi(i32::try_from(tail.len()).unwrap_or(i32::MAX));
-        (result.guesses * extra).min(f64::MAX)
+        chars
+            .chunks(MAX_ANALYZED)
+            .take(MAX_WINDOWS)
+            .enumerate()
+            .map(|(i, w)| (i * MAX_ANALYZED, w))
+            .collect()
     };
+    for (start, w) in windows {
+        if occurs_before(&chars, start, w) {
+            guesses = (guesses * 2.0).min(f64::MAX);
+            continue;
+        }
+        let result = most_guessable(w, omnimatch(w), false);
+        guesses = (guesses * result.guesses).min(f64::MAX);
+        if first.is_none() {
+            first = Some(result);
+        }
+    }
     let score = guesses_to_score(guesses);
-    let warning = if score > 2 || result.sequence.is_empty() {
-        None
-    } else {
-        let longest = result
-            .sequence
-            .iter()
-            .max_by_key(|m| (m.len(), core::cmp::Reverse(m.i)))
-            .cloned();
-        longest.and_then(|m| match_warning(&m, result.sequence.len() == 1))
+    let warning = match &first {
+        Some(result) if score <= 2 && !result.sequence.is_empty() => {
+            let longest = result
+                .sequence
+                .iter()
+                .max_by_key(|m| (m.len(), core::cmp::Reverse(m.i)))
+                .cloned();
+            longest.and_then(|m| match_warning(&m, result.sequence.len() == 1))
+        }
+        _ => None,
     };
     Strength {
         guesses,
         score,
         warning,
     }
+}
+
+/// `window`（从 `start` 开始）是否在更早的位置出现过（可以与自身重叠，因此周期性的模式也算）。
+fn occurs_before(chars: &[char], start: usize, window: &[char]) -> bool {
+    (0..start).any(|pos| chars.get(pos..pos + window.len()) == Some(window))
 }
 
 #[allow(
@@ -1292,9 +1315,22 @@ mod tests {
     #[test]
     fn handles_unicode_and_long_input() {
         assert!(estimate("密码").score <= 2);
+        // 长的重复模式不因为长就算强（第五轮评审 L1）
         let long: String = "x7".repeat(200);
         let s = estimate(&long);
-        assert!(s.guesses.is_finite() && s.score >= 3, "{s:?}");
+        assert!(s.guesses.is_finite() && s.score <= 2, "{s:?}");
+        for repeated in ["a".repeat(80), "abc".repeat(100), "password".repeat(10)] {
+            assert!(estimate(&repeated).score <= 2, "{repeated}");
+        }
+        // 真正随机的长口令仍然很强；很长的输入也很快算完
+        let random = "q7Lm2Xv9Rk4Tz8Wc1Hn6Jp3Bd5Fg0YstR8vN2kQ9wL4mZ7xP1cH6jB3dF5gY0sA";
+        assert_eq!(estimate(random).score, 4);
+        let huge: String = (0..100_000u32)
+            .map(|i| char::from_u32(0x4e00 + (i * 7919) % 20_000).unwrap_or('x'))
+            .collect();
+        let started = std::time::Instant::now();
+        let _ = estimate(&huge);
+        assert!(started.elapsed().as_secs() < 5);
         // 很多种 l33t 字符也能很快算完
         let noisy = "4@8({[<3691!|7|0$5+%2".repeat(3);
         let _ = estimate(&noisy);

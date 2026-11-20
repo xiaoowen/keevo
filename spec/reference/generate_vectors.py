@@ -8,7 +8,7 @@
 
 用法：
   python3 -m venv .venv && .venv/bin/pip install --require-hashes -r spec/reference/requirements.txt
-  .venv/bin/python spec/reference/generate_vectors.py            # 写入 spec/test-vectors/crypto-v1.json 与 attachment-v1.json
+  .venv/bin/python spec/reference/generate_vectors.py            # 写入 spec/test-vectors/crypto-v1.json、attachment-v1.json 与 export-v1.json
   .venv/bin/python spec/reference/generate_vectors.py --check    # 只校验已提交的文件是否一致
 
 所有输入都由固定标签确定性派生，因此输出可复现，CI 会比对生成结果。
@@ -34,6 +34,8 @@ from nacl.bindings import (
 OUTPUT = Path(__file__).resolve().parent.parent / "test-vectors" / "crypto-v1.json"
 # §8.9 附件（草案）：单独的文件，已冻结的 crypto-v1.json 不变
 ATTACHMENT_OUTPUT = OUTPUT.parent / "attachment-v1.json"
+# spec/export.md §3 加密导出文件（草案）
+EXPORT_OUTPUT = OUTPUT.parent / "export-v1.json"
 
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 ZERO16 = bytes(16)
@@ -563,6 +565,123 @@ def attachment_vectors() -> dict:
     }
 
 
+# ---------------------------------------------------------------- export.md §3 加密导出文件（草案）
+
+EXPORT_MAGIC = b"KEEVOEXP"
+
+
+def export_key(password: str, kdf: bytes) -> bytes:
+    """k = Argon2id(NFKD(导出密码), KdfParams)；key = HKDF-SHA256(k, salt = 空, info = "keevo/v1/export")。"""
+    alg, m, t, p = kdf[0], *struct.unpack(">III", kdf[1:13])
+    assert alg == KDF_ALG_ARGON2ID
+    salt = kdf[13:29]
+    pw = unicodedata.normalize("NFKD", password).encode("utf-8")
+    assert pw, "口令不能为空"
+    k = hash_secret_raw(pw, salt, time_cost=t, memory_cost=m, parallelism=p, hash_len=32, type=Type.ID, version=19)
+    return hkdf_sha256(k, b"", b"keevo/v1/export", 32)
+
+
+def export_seal(password: str, kdf: bytes, nonce: bytes, plaintext: bytes) -> bytes:
+    header = EXPORT_MAGIC + b"\x01" + kdf + nonce
+    assert len(header) == 62
+    return header + crypto_aead_xchacha20poly1305_ietf_encrypt(plaintext, header, nonce, export_key(password, kdf))
+
+
+def export_open(password: str, data: bytes) -> bytes:
+    """读取规则（不含本机 KDF 预算，那是读取方的本机策略，crypto §5.3）。返回明文，或抛出带错误码的 ValueError。"""
+    if not data.startswith(EXPORT_MAGIC) or len(data) < 9:
+        raise ValueError("malformed")
+    if data[8] != 0x01:
+        raise ValueError("unsupported_version")
+    if len(data) < 62 + 16:
+        raise ValueError("malformed")
+    kdf = data[9:38]
+    if kdf_validate(kdf) is not None:
+        raise ValueError("kdf_invalid")
+    header, body = data[:62], data[62:]
+    try:
+        return crypto_aead_xchacha20poly1305_ietf_decrypt(body, header, data[38:62], export_key(password, kdf))
+    except Exception:  # noqa: BLE001 — libsodium 的认证失败
+        raise ValueError("decryption_failed") from None
+
+
+def export_vectors() -> dict:
+    # 规范允许的最小参数，测试快；写出方实际使用默认参数（crypto §5.2）
+    kdf = kdf_encode(KDF_ALG_ARGON2ID, M_MIN, T_MIN, 1, det("export/salt", 16))
+    plain = json.dumps({"format": "keevo-export", "version": 1, "exported_at": "2026-11-20T00:00:00Z",
+                        "vaults": [{"name": "个人", "items": [{"type": "login", "title": "GitHub", "fields": [
+                            {"kind": "concealed", "label": "密码", "purpose": "password", "value": "  correct horse  "}]}]}]},
+                       ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    valid = []
+    for name, password, equivalent, plaintext in [
+        ("json_items", "plum orbit cactus velvet 41", None, plain),
+        # 全角与半角的口令 NFKD 之后相同，两者都能打开
+        ("nfkd_equivalent", "ｐｌｕｍ orbit cactus velvet ４１", "plum orbit cactus velvet 41", plain),
+        ("empty_plaintext", "plum orbit cactus velvet 41", None, b""),
+    ]:
+        nonce = det(f"export/{name}/nonce", 24)
+        data = export_seal(password, kdf, nonce, plaintext)
+        assert export_open(password, data) == plaintext
+        case = {
+            "name": name,
+            "password": password,
+            "kdf_params": kdf.hex(),
+            "nonce": nonce.hex(),
+            "aad": data[:62].hex(),
+            "key": export_key(password, kdf).hex(),
+            "plaintext": plaintext.hex(),
+            "file": data.hex(),
+        }
+        if equivalent is not None:
+            assert export_open(equivalent, data) == plaintext
+            case["equivalent_password"] = equivalent
+        valid.append(case)
+
+    base = bytes.fromhex(valid[0]["file"])
+    password = valid[0]["password"]
+    invalid = []
+
+    def bad(name: str, data: bytes, error: str, pw: str = password):
+        try:
+            export_open(pw, data)
+        except ValueError as e:
+            assert str(e) == error, (name, str(e), error)
+        else:
+            raise AssertionError(f"{name} 应当失败")
+        invalid.append({"name": name, "password": pw, "file": data.hex(), "error": error})
+
+    def flip(i: int) -> bytes:
+        b = bytearray(base)
+        b[i] ^= 0x01
+        return bytes(b)
+
+    bad("wrong_password", base, "decryption_failed", "plum orbit cactus velvet 42")
+    bad("magic_changed", flip(0), "malformed")
+    bad("version_2", base[:8] + b"\x02" + base[9:], "unsupported_version")
+    bad("salt_changed", flip(9 + 13), "decryption_failed")
+    bad("nonce_changed", flip(38), "decryption_failed")
+    bad("ciphertext_changed", flip(62), "decryption_failed")
+    bad("tag_changed", flip(len(base) - 1), "decryption_failed")
+    bad("truncated_before_tag", base[:62 + 15], "malformed")
+    bad("kdf_t_below_minimum", base[:9] + kdf_encode(KDF_ALG_ARGON2ID, M_MIN, T_MIN - 1, 1, det("export/salt", 16)) + base[38:],
+        "kdf_invalid")
+    return {
+        "spec": "spec/export.md §3（草案）",
+        "generator": "spec/reference/generate_vectors.py",
+        "note": "所有字节串均为小写十六进制。测试输入由固定标签确定性派生，不是真实口令。valid：用 password（以及 "
+                "equivalent_password，NFKD 后相同）打开 file 得到 plaintext；写出方用 kdf_params 与 nonce 应产生同样的 file。"
+                "aad 为 file 的前 62 字节，key 为 HKDF 之后的密钥。invalid：读取必须失败，error 为期望的错误：malformed、"
+                "unsupported_version、kdf_invalid（KDF 参数不合法，crypto §5.2）、decryption_failed（口令错误与文件被改动不区分）。"
+                "超出本机 KDF 预算的文件也被拒绝，那是读取方的本机策略，不在向量中。",
+        "valid": valid,
+        "invalid": invalid,
+    }
+
+
+def build_export() -> str:
+    return json.dumps(export_vectors(), ensure_ascii=False, indent=2) + "\n"
+
+
 def build_attachment() -> str:
     return json.dumps(attachment_vectors(), ensure_ascii=False, indent=2) + "\n"
 
@@ -588,7 +707,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true", help="只比对，不写入")
     args = parser.parse_args()
-    outputs = [(OUTPUT, build()), (ATTACHMENT_OUTPUT, build_attachment())]
+    outputs = [(OUTPUT, build()), (ATTACHMENT_OUTPUT, build_attachment()), (EXPORT_OUTPUT, build_export())]
     if args.check:
         stale = [p for p, content in outputs if not p.exists() or p.read_text(encoding="utf-8") != content]
         for p in stale:

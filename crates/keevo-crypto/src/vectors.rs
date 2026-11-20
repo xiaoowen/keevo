@@ -204,3 +204,60 @@ fn keyset() {
         );
     }
 }
+
+/// 加密导出文件（`spec/export.md` §3，草案）：独立实现生成的 `export-v1.json`。写出逐字节相同；
+/// NFKD 等价的口令都能打开；反例按期望的错误失败。
+#[test]
+fn export_files() {
+    const EXPORT: &str = include_str!("../../../spec/test-vectors/export-v1.json");
+    let doc: Value = serde_json::from_str(EXPORT).unwrap();
+    for case in doc["valid"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let password = case["password"].as_str().unwrap();
+        let params = KdfParams::decode(&bytes(&case["kdf_params"])).unwrap();
+        let plaintext = bytes(&case["plaintext"]);
+        let file = bytes(&case["file"]);
+        let sealed = crate::export::seal_export_with_nonce(
+            password,
+            &params,
+            &plaintext,
+            arr(&case["nonce"]),
+        )
+        .unwrap();
+        assert_eq!(sealed, file, "{name}: 写出");
+        assert_eq!(&file[..62], bytes(&case["aad"]).as_slice(), "{name}: AAD");
+        assert_eq!(
+            crate::open_export(password, &file).unwrap().as_slice(),
+            plaintext.as_slice(),
+            "{name}"
+        );
+        if let Some(other) = case.get("equivalent_password").and_then(Value::as_str) {
+            assert_eq!(
+                crate::open_export(other, &file).unwrap().as_slice(),
+                plaintext.as_slice(),
+                "{name}: NFKD 等价的口令"
+            );
+        }
+    }
+    let invalid = doc["invalid"].as_array().unwrap();
+    assert!(invalid.len() >= 8);
+    for case in invalid {
+        let name = case["name"].as_str().unwrap();
+        let err = crate::open_export(case["password"].as_str().unwrap(), &bytes(&case["file"]))
+            .err()
+            .unwrap_or_else(|| panic!("{name} 应当失败"));
+        let ok = match case["error"].as_str().unwrap() {
+            "malformed" => err == CryptoError::Malformed,
+            "unsupported_version" => err == CryptoError::UnsupportedVersion,
+            "decryption_failed" => err == CryptoError::DecryptionFailed,
+            "kdf_invalid" => matches!(
+                err,
+                CryptoError::KdfBelowMinimum
+                    | CryptoError::KdfAboveMaximum
+                    | CryptoError::UnsupportedAlgorithm
+            ),
+            other => panic!("未知的错误码 {other}"),
+        };
+        assert!(ok, "{name}: {err:?}");
+    }
+}

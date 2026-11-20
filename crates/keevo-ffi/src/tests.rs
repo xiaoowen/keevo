@@ -2,6 +2,72 @@ use std::path::PathBuf;
 
 use super::*;
 
+#[test]
+fn review5_l8_failed_restore_leaves_state_consistent() {
+    let f = Fixture::new();
+    let id = f.login("fixture");
+    let detail = f.vault.item(id).unwrap();
+    let password = detail
+        .fields
+        .iter()
+        .find(|x| x.purpose.as_deref() == Some("password"))
+        .unwrap();
+    let backups = f.dir.join("backups").to_string_lossy().into_owned();
+    let backup = f
+        .vault
+        .create_backup(backups.clone(), "manual".into())
+        .unwrap();
+    // 通过结构与账户的初步检查，在逐行恢复阶段失败。
+    rusqlite::Connection::open(&backup.path)
+        .unwrap()
+        .execute(
+            "UPDATE revision SET parents = zeroblob(16) WHERE object_type = 3",
+            [],
+        )
+        .unwrap();
+    assert!(f.vault.check_backup(backup.path.clone()).is_ok());
+    f.vault.note_export_reverified();
+    assert!(f.vault.restore_backup(backup.path, backups).is_err());
+    // 处理记录选择的语义：恢复失败时什么都不改变（docs/sync.md §2）。核心与 FFI 的状态必须一致：
+    // 核心仍然解锁，句柄仍然有效；不能出现"核心已锁定、句柄与导出验证仍然存活"的中间状态
+    assert!(f.vault.items().is_ok(), "恢复失败后保持原来的解锁状态");
+    assert!(
+        !password.value.is_empty(),
+        "核心没有锁定，已发出的句柄照常可用"
+    );
+}
+
+#[test]
+fn review5_l8_failed_restore_invalidates_export_reverification() {
+    let f = Fixture::new();
+    f.login("fixture");
+    let backups = f.dir.join("backups").to_string_lossy().into_owned();
+    let backup = f
+        .vault
+        .create_backup(backups.clone(), "manual".into())
+        .unwrap();
+    rusqlite::Connection::open(&backup.path)
+        .unwrap()
+        .execute(
+            "UPDATE revision SET parents = zeroblob(16) WHERE object_type = 3",
+            [],
+        )
+        .unwrap();
+    f.vault.note_export_reverified();
+    assert!(f.vault.restore_backup(backup.path, backups).is_err());
+    f.vault.unlock("pw".into(), f.secret_key.clone()).unwrap();
+    let result = f.vault.export_vault(
+        f.dir.join("after.json").to_string_lossy().into_owned(),
+        "json".into(),
+        None,
+        None,
+    );
+    assert!(
+        result.is_err(),
+        "恢复失败导致锁定，重新解锁后不得复用上一次解锁会话的导出验证"
+    );
+}
+
 /// 规范允许的最小 KDF 参数，加快测试。
 fn fast_params() -> KdfParams {
     KdfParams::new(KdfParams::MIN_M_KIB, KdfParams::MIN_T, 1, [5u8; 16]).unwrap()
@@ -1294,7 +1360,7 @@ fn security_center() {
         let body = if *p == hash[..5] {
             format!("{}:17043\r\n", &hash[5..])
         } else {
-            String::new()
+            "0000000000000000000000000000000000A:0\r\n".to_owned()
         };
         assert!(f.vault.record_breach_range(p.clone(), body));
     }

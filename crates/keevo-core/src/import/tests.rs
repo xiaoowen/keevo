@@ -352,8 +352,13 @@ fn builder_limits() {
     b.tag("x");
     let item = b.finish();
     assert_eq!(item.title.len(), MAX_LABEL);
-    assert_eq!(item.fields.len(), 2);
+    assert_eq!(item.fields.len(), 3, "两个密码，加上说明截断的备注");
     assert_eq!(item.fields[1].1.purpose, None, "同一用途只保留第一个");
+    assert!(
+        item.text_of(Purpose::Notes)
+            .is_some_and(|n| n.contains("1 个名称或值超过长度上限")),
+        "截断不是静默的（第五轮评审 L6）"
+    );
     assert_eq!(item.tags, ["x"]);
     assert_eq!(clip("你好世界", 7), "你好");
     assert_eq!(date_from_days(0), "1970-01-01");

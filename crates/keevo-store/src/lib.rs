@@ -424,9 +424,7 @@ impl Store {
     /// # Errors
     /// SQLite 错误；密文超长时返回 [`StoreError::TooLarge`]。
     pub fn put_local_record(&mut self, kind: &str, id: &[u8], ct: &[u8]) -> Result<()> {
-        if ct.len() > MAX_LOCAL_RECORD_CT || id.len() > 64 {
-            return Err(StoreError::TooLarge);
-        }
+        check_local_record(id, ct)?;
         self.conn.execute(
             "INSERT INTO local_record (kind, id, ct) VALUES (?1, ?2, ?3)
              ON CONFLICT(kind, id) DO UPDATE SET ct = excluded.ct",
@@ -552,32 +550,48 @@ impl Store {
     /// # Errors
     /// 同 [`Store::insert_revision`]；任何一个失败时整个事务回滚。
     pub fn insert_revisions(&mut self, rows: &[RevisionRow]) -> Result<()> {
-        self.insert_revisions_with(rows, &AttachmentChanges::default())
+        self.insert_revisions_with(rows, &WriteExtras::default())
     }
 
-    /// 与 [`Store::insert_revisions`] 相同，并在同一个事务中增删附件（第五轮预审 K6）：添加附件时附件与引用它的
-    /// 修订一起写入；永久删除时墓碑与附件的删除一起发生。任何一步失败时什么都不改变。
+    /// 与 [`Store::insert_revisions`] 相同，并在同一个事务中写入 `extras`（第五轮预审 K6、第五轮评审 L4）：添加附件时
+    /// 附件与引用它的修订一起写入；永久删除时墓碑、附件的删除与本机授权的撤销一起发生。任何一步失败时什么都不改变。
     ///
     /// # Errors
-    /// 同 [`Store::insert_revisions`] 与 [`Store::insert_attachment`]。
+    /// 同 [`Store::insert_revisions`]、[`Store::insert_attachment`] 与 [`Store::put_local_record`]。
     pub fn insert_revisions_with(
         &mut self,
         rows: &[RevisionRow],
-        changes: &AttachmentChanges<'_>,
+        extras: &WriteExtras<'_>,
     ) -> Result<()> {
-        for (row, chunks) in &changes.add {
+        for (row, chunks) in &extras.add_attachments {
             check_attachment(row, chunks)?;
+        }
+        for (_, id, ct) in &extras.put_local {
+            check_local_record(id, ct)?;
         }
         let stored =
             i64::try_from(self.effective_now()?).map_err(|_| StoreError::Corrupt("clock"))?;
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(item_id) = &changes.delete_all_of {
+        if let Some(item_id) = &extras.delete_attachments_of {
             delete_attachments_of(&tx, item_id)?;
         }
-        for (row, chunks) in &changes.add {
+        for (row, chunks) in &extras.add_attachments {
             insert_attachment_tx(&tx, row, chunks)?;
+        }
+        for (kind, id) in &extras.delete_local {
+            tx.execute(
+                "DELETE FROM local_record WHERE kind = ?1 AND id = ?2",
+                params![kind, id],
+            )?;
+        }
+        for (kind, id, ct) in &extras.put_local {
+            tx.execute(
+                "INSERT INTO local_record (kind, id, ct) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(kind, id) DO UPDATE SET ct = excluded.ct",
+                params![kind, id, ct],
+            )?;
         }
         for row in rows {
             insert_one(&tx, row, stored)?;
@@ -964,6 +978,20 @@ impl Store {
         Ok(Some((row, chunks.into_iter().map(|(_, ct)| ct).collect())))
     }
 
+    /// 有附件的全部条目（去重）。用于解锁后的附件回收（第五轮评审 L5）。
+    ///
+    /// # Errors
+    /// SQLite 错误。
+    pub fn items_with_attachments(&self) -> Result<Vec<Id128>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT item_id FROM attachment WHERE length(item_id) = 16 ORDER BY item_id",
+        )?;
+        let ids: Vec<Vec<u8>> = stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<core::result::Result<_, _>>()?;
+        ids.iter().map(|b| id_from(b)).collect()
+    }
+
     /// 条目的全部附件 ID。
     ///
     /// # Errors
@@ -1138,13 +1166,24 @@ pub use restore::BackupSummary;
 mod tests;
 
 /// 在给定事务中写入一个修订（不提交）。
-/// 与修订一起写入的附件变化（[`Store::insert_revisions_with`]）。
+/// 与修订在同一个事务中写入的其他变化（[`Store::insert_revisions_with`]）。
 #[derive(Debug, Default)]
-pub struct AttachmentChanges<'a> {
+pub struct WriteExtras<'a> {
     /// 新增的附件与它们的块。
-    pub add: Vec<(&'a AttachmentRow, &'a [Vec<u8>])>,
+    pub add_attachments: Vec<(&'a AttachmentRow, &'a [Vec<u8>])>,
     /// 先删除这个条目的全部附件（永久删除）。
-    pub delete_all_of: Option<Id128>,
+    pub delete_attachments_of: Option<Id128>,
+    /// 删除的本机记录（种类、ID），例如永久删除时撤销 SSH Agent 的授权（第五轮评审 L4）。
+    pub delete_local: Vec<(&'a str, Vec<u8>)>,
+    /// 写入的本机记录（种类、ID、密文），例如重建时把授权移到新条目。
+    pub put_local: Vec<(&'a str, Vec<u8>, Vec<u8>)>,
+}
+
+fn check_local_record(id: &[u8], ct: &[u8]) -> Result<()> {
+    if ct.len() > MAX_LOCAL_RECORD_CT || id.len() > 64 {
+        return Err(StoreError::TooLarge);
+    }
+    Ok(())
 }
 
 /// 附件各部分的长度（`spec/crypto.md` §8.9）。写入与读取用同一套规则，写进去的东西一定读得出来。

@@ -66,6 +66,67 @@ fn base_doc(rev: Id128) -> ItemDoc {
 }
 
 #[test]
+fn review5_v1_mixed_heads_and_attachment_concurrent_are_deterministic() {
+    use crate::{AttachmentRef, FieldData, FieldKind, FieldValue};
+    let key = RecordKey::Field(id(40));
+    let mut repo = Repo::default();
+    repo.commit(id(1), &[], id(100), Some(base_doc(id(1))));
+    let mut a = base_doc(id(1));
+    a.set(
+        key.clone(),
+        RecordValue::Field(FieldValue {
+            section: None,
+            order: "0".into(),
+            kind: FieldKind::Attachment,
+            label: "fixture".into(),
+            purpose: None,
+            data: FieldData::Attachment(AttachmentRef {
+                id: id(80),
+                name: "fixture.txt".into(),
+                size: 0,
+                added: 0,
+                sha256: Some(keevo_crypto::sha256(b"")),
+            }),
+        }),
+        Hlc(20),
+        id(2),
+    )
+    .unwrap();
+    a = ItemDoc::decode(&a.encode_for_write().unwrap()).unwrap();
+    assert_eq!(a.version(), 2);
+    repo.commit(id(2), &[id(1)], id(100), Some(a));
+    let mut b = base_doc(id(1));
+    b.set(
+        key.clone(),
+        RecordValue::Field(FieldValue {
+            section: None,
+            order: "0".into(),
+            kind: FieldKind::Text,
+            label: "fixture".into(),
+            purpose: None,
+            data: FieldData::Text("text wins but must retain attachment".into()),
+        }),
+        Hlc(30),
+        id(3),
+    )
+    .unwrap();
+    b = ItemDoc::decode(&b.encode_for_write().unwrap()).unwrap();
+    assert_eq!(b.version(), 1);
+    repo.commit(id(3), &[id(1)], id(101), Some(b));
+    let forward = repo.merge(&[id(2), id(3)]).doc.unwrap();
+    let reverse = repo.merge(&[id(3), id(2)]).doc.unwrap();
+    assert_eq!(forward, reverse);
+    assert_eq!(forward.version(), 2, "只有并发版本带附件时也必须是 v2");
+    assert_eq!(
+        ItemDoc::decode(&forward.encode_for_write().unwrap()).unwrap(),
+        forward
+    );
+    let mut resolved = forward;
+    resolved.delete(key, Hlc(40), id(4)).unwrap();
+    assert_eq!(resolved.version(), 1, "全部附件版本被新墓碑覆盖后回到 v1");
+}
+
+#[test]
 fn causally_later_wins_even_with_smaller_hlc() {
     let mut repo = Repo::default();
     repo.commit(id(1), &[], id(100), Some(base_doc(id(1))));

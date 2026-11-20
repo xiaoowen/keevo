@@ -75,7 +75,10 @@ extension AppModel {
                     group.addTask { (prefix, try await Self.fetchRange(prefix)) }
                 }
                 while let (prefix, body) = try await group.next() {
-                    _ = vault.recordBreachRange(prefix: prefix, body: body)
+                    // 格式不对的响应不算查过（第五轮评审 L7）：整次检查报告失败，结果不显示为"没有泄露"
+                    guard vault.recordBreachRange(prefix: prefix, body: body) else {
+                        throw URLError(.cannotParseResponse)
+                    }
                     if let next = pending.first {
                         pending.removeFirst()
                         group.addTask { (next, try await Self.fetchRange(next)) }
@@ -101,7 +104,10 @@ extension AppModel {
         request.setValue("true", forHTTPHeaderField: "Add-Padding")
         request.setValue("Keevo", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await breachSession.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200, let body = String(data: data, encoding: .utf8) else {
+        // 带填充的响应约 30–40 KB；远超这个大小的不是正常响应
+        guard (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 1 << 20,
+              let body = String(data: data, encoding: .utf8)
+        else {
             throw URLError(.badServerResponse)
         }
         return body

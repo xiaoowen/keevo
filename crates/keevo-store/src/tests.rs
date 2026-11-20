@@ -1,5 +1,81 @@
 use super::*;
 
+#[test]
+fn review5_l2_restore_must_not_age_fresh_history() {
+    let dir = std::env::temp_dir().join(format!(
+        "keevo-review5-time-{}",
+        Id128::random().unwrap().to_hex()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _cleanup = Cleanup(dir.clone());
+    let mut store = Store::open(&dir.join("vault.sqlite")).unwrap();
+    store
+        .create_account(&AccountRow {
+            id: id(1),
+            format_version: 1,
+            epoch: 1,
+            kdf_params: vec![1; 29],
+            keyset_ct: vec![2; 400],
+        })
+        .unwrap();
+    // 原库合法运行了 100 天，然后刚写下 25 个修订。
+    store.pass_running_time(100 * 86_400_000).unwrap();
+    for n in 1..=25 {
+        let parents = if n == 1 { vec![] } else { vec![n - 1] };
+        store.insert_revision(&rev(n, &parents)).unwrap();
+    }
+    assert_eq!(store.prune(&id(50), 20, 90 * 86_400_000).unwrap(), 0);
+    let backup = dir.join("backup.sqlite");
+    store.backup_to(&backup).unwrap();
+    // 攻击者只降低一个时间；没有删除密文、修订或关系，没有密钥。
+    Connection::open(&backup)
+        .unwrap()
+        .execute(
+            "UPDATE revision SET stored_ms = 0 WHERE rev_id = ?1",
+            params![id(1).as_bytes()],
+        )
+        .unwrap();
+    store.restore_from(&backup).unwrap();
+    assert_eq!(
+        store.prune(&id(50), 20, 90 * 86_400_000).unwrap(),
+        0,
+        "未满 90 天的修订不能因备份的未认证时间而立即被清理"
+    );
+}
+
+#[test]
+fn review5_l3_restore_rejects_parent_cycle() {
+    let dir = std::env::temp_dir().join(format!(
+        "keevo-review5-cycle-{}",
+        Id128::random().unwrap().to_hex()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _cleanup = Cleanup(dir.clone());
+    let mut store = Store::open(&dir.join("vault.sqlite")).unwrap();
+    store
+        .create_account(&AccountRow {
+            id: id(1),
+            format_version: 1,
+            epoch: 1,
+            kdf_params: vec![1; 29],
+            keyset_ct: vec![2; 400],
+        })
+        .unwrap();
+    store.insert_revision(&rev(1, &[])).unwrap();
+    store.insert_revision(&rev(2, &[1])).unwrap();
+    let backup = dir.join("backup.sqlite");
+    store.backup_to(&backup).unwrap();
+    Connection::open(&backup)
+        .unwrap()
+        .execute("UPDATE revision SET parents = rev_id", [])
+        .unwrap();
+    let result = store.restore_from(&backup);
+    assert!(
+        result.is_err(),
+        "修订图必须是 DAG；父节点存在并不排除自环，恢复不得成功并使所有头消失"
+    );
+}
+
 struct Cleanup(std::path::PathBuf);
 impl Drop for Cleanup {
     fn drop(&mut self) {

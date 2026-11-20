@@ -11,8 +11,10 @@ use keevo_format::{ItemDoc, ItemType, RecordKey, RecordValue};
 
 /// M1.4 的条目属性名（已弃用：只在迁移时读取）。
 pub const ATTRIBUTE: &str = "ssh_agent";
-/// 本机记录的种类。
+/// 本机记录的种类。明文是 ASCII 文本：[`AgentPolicy::as_str`] 之一，或 [`OFF`]。
 pub const LOCAL_KIND: &str = "ssh_agent";
+/// 本机记录中"明确关闭"的值：用户选择不在 Agent 中提供。
+pub const OFF: &str = "off";
 
 /// 一把密钥在 Agent 中的授权策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

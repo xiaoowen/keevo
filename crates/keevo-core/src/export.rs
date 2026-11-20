@@ -46,13 +46,26 @@ pub struct Exported {
     pub count: usize,
 }
 
-/// 导出密码是否可用（`docs/export.md`）：至少 [`MIN_EXPORT_PASSWORD_CHARS`] 个字符、不全是空白，强度达到"很强"
+/// 导出密码是否可用（`spec/export.md` §3）：NFKD 规范化之后至少 [`MIN_EXPORT_PASSWORD_CHARS`] 个字符、不全是空白，强度达到"很强"
 /// （[`crate::strength::estimate`] 4 分）。导出文件只受这个密码保护，没有账户密钥这一层（第五轮预审 K4）。
 #[must_use]
 pub fn export_password_ok(password: &str) -> bool {
-    password.chars().count() >= MIN_EXPORT_PASSWORD_CHARS
-        && !password.trim().is_empty()
-        && crate::strength::estimate(password).score >= 4
+    // 按实际进入 KDF 的口令判断：NFKD 规范化之后（spec/crypto.md §6；第五轮评审 L1）
+    let normalized = normalized(password);
+    normalized.chars().count() >= MIN_EXPORT_PASSWORD_CHARS
+        && !normalized.trim().is_empty()
+        && crate::strength::estimate(&normalized).score >= 4
+}
+
+/// 导出密码的强度，按 NFKD 规范化之后的口令评估（界面的强度条用它）。
+#[must_use]
+pub fn export_password_strength(password: &str) -> crate::strength::Strength {
+    crate::strength::estimate(&normalized(password))
+}
+
+fn normalized(password: &str) -> Zeroizing<String> {
+    use unicode_normalization::UnicodeNormalization;
+    Zeroizing::new(password.nfkd().collect())
 }
 
 /// 导出密码的最少字符数。

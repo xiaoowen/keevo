@@ -321,8 +321,8 @@ impl KeevoVault {
             set(None, "注释", key.comment(), FieldKind::Text);
         }
         vault.update_item(item_id, edits)?;
-        // 新生成或导入的密钥默认为每次确认（spec/ssh-agent.md §4.1）
-        if !vault.ssh_agent_policies()?.contains_key(&item_id) {
+        // 新生成或导入的密钥默认为每次确认（spec/ssh-agent.md §4.1）；用户已经做过决定（含关闭）的保持不变
+        if !vault.ssh_agent_decided(item_id)? {
             vault.set_ssh_agent_policy(item_id, Some(AgentPolicy::Ask))?;
         }
         Ok(())

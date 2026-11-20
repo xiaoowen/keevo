@@ -625,6 +625,7 @@ let englishTableJSON = #"""
  "最近 {} 份": "Last {}",
  "最近使用（SSH）": "Recent Use (SSH)",
  "最近删除": "Recently Deleted",
+ "有 {} 个附件已损坏，没有保留：{}": "{} attachments were damaged and weren't kept: {}",
  "有待处理的冲突": "Has unresolved conflicts",
  "有撤销没能写入数据库，重启 Keevo 后可能失效。下次解锁时会自动重试。": "A revocation couldn't be written to the database and may be lost if Keevo restarts. Keevo retries the next time you unlock.",
  "有效期": "Valid",

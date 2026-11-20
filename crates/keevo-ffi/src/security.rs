@@ -42,7 +42,7 @@ pub struct PasswordStrengthInfo {
     pub warning_detail: Option<String>,
 }
 
-fn strength_info(s: &Strength) -> PasswordStrengthInfo {
+pub(crate) fn strength_info(s: &Strength) -> PasswordStrengthInfo {
     let (warning, detail) = match &s.warning {
         None => (None, None),
         Some(w) => {
@@ -267,7 +267,8 @@ impl KeevoVault {
         let mut info = ItemSecurity {
             strength: item.strength.as_ref().map(strength_info),
             reused_with: Vec::new(),
-            breach_count: report.breach_checked.then_some(0),
+            // 只有这个条目现在的密码都查过，才能说"没有出现在泄露中"（第五轮评审 L7）
+            breach_count: item.breach_checked.then_some(0),
             totp_domain: None,
             others: Vec::new(),
             ignored: item.ignored,

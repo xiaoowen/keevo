@@ -654,9 +654,13 @@ final class AppModel {
     /// 重建为新条目（spec/revisions.md §7.1），返回新条目的 ID。
     func rebuild(itemId: String) throws -> String? {
         guard let vault else { return nil }
-        let id = try vault.rebuildItem(itemId: itemId, drop: [])
+        let result = try vault.rebuildItem(itemId: itemId, drop: [])
         try reload()
-        return id
+        if !result.skippedAttachments.isEmpty {
+            // 内容已损坏、读不出的附件没有保留：告诉用户是哪些（第五轮评审问题 5）
+            showToast(tr("有 {} 个附件已损坏，没有保留：{}", "\(result.skippedAttachments.count)", result.skippedAttachments.joined(separator: tr("、"))))
+        }
+        return result.itemId
     }
 
     // MARK: - 内部

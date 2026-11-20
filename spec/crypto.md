@@ -1,6 +1,6 @@
 # Keevo 加密规范
 
-- **版本**：1.6
+- **版本**：1.7
 - **状态**：**已冻结**（2026-11-18，经四轮模型评审，[处理记录](../docs/reviews/)）。冻结范围与版本规则见 [README.md](README.md)。§8.7 本机密钥包裹与 §8.8 本机记录是本机格式，不参与同步，不在冻结范围内。§8.9 附件（M1.5）是草案，评审后冻结。
 - **参考实现**：`crates/keevo-crypto`（Rust）
 - **独立实现**：`spec/reference/generate_vectors.py`（Python，基于 argon2-cffi 与 libsodium），用来生成测试向量。
@@ -428,7 +428,7 @@ ciphertext ‖ tag = XChaCha20-Poly1305(key, nonce, plaintext, aad)
 ```
 
 - `kind`：1–32 个 ASCII 小写字母或下划线，例如 `pairing`；`id`：1–64 字节，例如扩展的静态公钥。两者都进入 AAD，密文不能被换到另一条记录上。
-- 明文是 UTF-8 JSON，最多 64 KiB；`nonce` 每次写入随机生成。
+- 明文是 UTF-8 JSON，最多 64 KiB；`nonce` 每次写入随机生成。例外：种类 `ssh_agent` 的明文是 ASCII 文本 `ask`、`session`、`unlocked` 或 `off`，不带引号（`ssh-agent.md` §4.1）。
 - 存放在本机数据库的 `local_records` 表中（schema v4），读写都需要已解锁（要用 ASK）。
 - **保护范围**：
   - **提供**：没有 ASK 的进程既读不出记录，也伪造不了新记录，与条目相同。这是配对记录不放在只用 Secure Enclave 包裹的文件里的原因（`ipc.md` §4.2）。
@@ -485,8 +485,9 @@ ctx(part, index, binding) = { object_type = Attachment (0x04), part, part_index 
   - 只有不再被任何留有内容的修订引用的附件才删除：引用它的历史版本都已清理，或条目已永久删除。
   - 永久删除要等合并结果为"已删除"、且这个删除已因果稳定才算数（与墓碑的清理条件相同，`revisions.md` §6 第 4 条）。M1 只有一台设备，永久删除写入即稳定。
   - 永久删除的墓碑与附件的删除在同一个事务中进行。
+  - 回收失败不影响已经提交的编辑，每次解锁后重新判断（`revisions.md` §7.3）。打开数据库时删除无主附件的规则只适用于 M1 单机。
 - **重建**（`revisions.md` §7.1）：新条目中的附件复制为新的附件（见"只封装一次"），旧条目的附件随旧条目的永久删除
-  一起删除。读不出的附件不保留引用。
+  一起删除。读取附件时遇到数据库错误，重建中止，什么都不改变；内容已损坏或缺失、永远读不出的附件不保留，并告诉用户是哪些。
 
 ## 9. 枚举
 
@@ -550,3 +551,4 @@ ctx(part, index, binding) = { object_type = Attachment (0x04), part, part_index 
 | 1.4 | 2026-11-19 | §3 的适用范围新增导入 OpenSSH 私钥时的 bcrypt_pbkdf 与 AES-CTR（只做解密）。共享格式与测试向量不变 |
 | 1.5 | 2026-11-19 | 新增 §8.9 附件（草案）：附件密钥由 VK 包裹，元数据与内容用信封 v1 封装，内容按 64 KiB 分块，块序号与总块数进入 AAD。没有引入新的密码学构造；`object_type = Attachment`、`part = Chunk` 早已分配，现有信封向量 `attachment_chunk` 覆盖其 AAD 编码。已冻结的格式不变。另：导入 Bitwarden 有密码保护的导出（PBKDF2 / Argon2id、AES-CBC + HMAC，只做解密）与 Keevo 导出文件（`export.md`）使用的原语都在 `keevo-crypto` 中 |
 | 1.6 | 2026-11-20 | 按第五轮预审修订 §8.9（草案）：各部分的精确长度，读入前检查（K3、S1）；"只封装一次"与内容承诺（K13、S2）；元数据只接受规范编码、与引用一致（K12、S3）；回收以"没有引用"或"永久删除已因果稳定"为条件（K14、S4）；重建与换保险库都复制为新附件（K5、K23）；明文元数据（K19）。新增独立实现生成的附件测试向量 `attachment-v1.json`。已冻结的格式与 `crypto-v1.json` 不变 |
+| 1.7 | 2026-11-20 | 按第五轮评审：§8.9 回收失败可恢复、打开时删除无主附件只适用于 M1（C4、L5）；重建时区分暂时性错误与永远读不出的附件（问题 5）；§8.8 写明 `ssh_agent` 种类的明文是 ASCII 文本（C5）。字节格式与测试向量不变 |

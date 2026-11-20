@@ -1011,7 +1011,8 @@ pub struct KeevoVault {
     /// 等待确认的导入（解析结果），锁定时丢弃。
     pending_import: Mutex<Option<import::Pending>>,
     /// 最近一次重新验证用户的时间（明文导出用，用一次即清除），锁定时清除。
-    reverified: Mutex<Option<std::time::Instant>>,
+    /// 为导出重新验证的时间与当时的解锁代次（`reverify_for_export`）。
+    reverified: Mutex<Option<(std::time::Instant, u64)>>,
 }
 
 impl KeevoVault {
@@ -1040,7 +1041,7 @@ impl KeevoVault {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn reverified(&self) -> MutexGuard<'_, Option<std::time::Instant>> {
+    fn reverified(&self) -> MutexGuard<'_, Option<(std::time::Instant, u64)>> {
         self.reverified
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1500,19 +1501,25 @@ impl KeevoVault {
             .compact_item(parse_id(&item_id)?, &keep, &remove)?)
     }
 
-    /// 重建（`spec/revisions.md` §7.1）：用于 [`KeevoError::ItemNeedsRebuild`]，返回新条目的 ID。
+    /// 重建（`spec/revisions.md` §7.1）：用于 [`KeevoError::ItemNeedsRebuild`]。返回新条目的 ID，以及内容已损坏、
+    /// 没有保留的附件（界面应告诉用户）。
     ///
     /// # Errors
     /// 复制后仍超出上限时返回错误，需要在 `drop` 中选出更多不保留的键。
-    pub fn rebuild_item(&self, item_id: String, drop: Vec<String>) -> Result<String, KeevoError> {
+    pub fn rebuild_item(
+        &self,
+        item_id: String,
+        drop: Vec<String>,
+    ) -> Result<RebuildResult, KeevoError> {
         let drop = drop
             .iter()
             .map(|k| parse_key(k))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(self
-            .vault()
-            .rebuild_item(parse_id(&item_id)?, &drop)?
-            .to_hex())
+        let rebuilt = self.vault().rebuild_item(parse_id(&item_id)?, &drop)?;
+        Ok(RebuildResult {
+            item_id: rebuilt.item_id.to_hex(),
+            skipped_attachments: rebuilt.skipped_attachments,
+        })
     }
 
     /// 账户的 KDF 参数。[`KeevoError::KdfNeedsConfirmation`] 时把它们展示给用户确认。
@@ -1838,6 +1845,15 @@ fn read_bounded(path: &str, limit: usize) -> std::io::Result<Option<Zeroizing<Ve
         return Ok(None);
     }
     Ok(Some(data))
+}
+
+/// 重建的结果。
+#[derive(uniffi::Record, Debug, Clone, PartialEq, Eq)]
+pub struct RebuildResult {
+    /// 新条目的 ID。
+    pub item_id: String,
+    /// 内容已损坏或缺失、没有保留的附件的文件名。
+    pub skipped_attachments: Vec<String>,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -2549,7 +2565,8 @@ pub use developer::{
     ssh_agent_link_path,
 };
 pub use import::{
-    ImportGroup, ImportPreview, ImportResult, export_password_ok, import_sources, is_keevo_export,
+    ImportGroup, ImportPreview, ImportResult, export_password_ok, export_password_strength,
+    import_sources, is_keevo_export,
 };
 pub use security::{
     ItemSecurity, PasswordStrengthInfo, SecurityFinding, SecurityReport, password_strength,

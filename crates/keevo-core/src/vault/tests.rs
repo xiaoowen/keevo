@@ -470,7 +470,7 @@ fn review3_h2_item_beyond_key_limit_must_be_rebuilt() {
     let drop: Vec<RecordKey> = (0..per_branch)
         .map(|i| RecordKey::Tag(format!("b1-{i}")))
         .collect();
-    let new_id = vault.rebuild_item(id, &drop).unwrap();
+    let new_id = vault.rebuild_item(id, &drop).unwrap().item_id;
     assert_eq!(
         vault.item(id).err(),
         Some(CoreError::NotFound),
@@ -536,7 +536,7 @@ fn review4_j2_failed_rebuild_leaves_nothing() {
         .store
         .execute_for_tests("DROP TRIGGER no_tombstones")
         .unwrap();
-    let new_id = vault.rebuild_item(id, &[]).unwrap();
+    let new_id = vault.rebuild_item(id, &[]).unwrap().item_id;
     assert_eq!(vault.items().unwrap().len(), before);
     assert_eq!(vault.item(new_id).unwrap().doc.overview().title, "t");
 }
@@ -1061,4 +1061,182 @@ fn ssh_agent_policy_is_local_and_survives_restore() {
         v.set_ssh_agent_policy(login, Some(AgentPolicy::Ask)).err(),
         Some(CoreError::NotFound)
     );
+}
+
+#[test]
+fn review5_l4_failed_migration_does_not_regrant_revoked_policy() {
+    use crate::ssh_agent::{ATTRIBUTE, AgentPolicy};
+    let dir = TempDir::new();
+    let (mut v, sk) = Vault::create(&dir.db(), "pw", fast_params()).unwrap();
+    let key = v
+        .create_item(
+            v.vaults().unwrap()[0].id,
+            ItemType::SshKey,
+            "fixture key",
+            vec![],
+        )
+        .unwrap();
+    v.revise(key, |doc, hlc, rev| {
+        Ok(doc.set(
+            RecordKey::attr(ATTRIBUTE),
+            RecordValue::Text("unlocked".into()),
+            hlc,
+            rev,
+        )?)
+    })
+    .unwrap();
+    v.store.execute_for_tests("DELETE FROM meta WHERE key = 'ssh_agent_local'; CREATE TRIGGER review5_fail BEFORE INSERT ON revision BEGIN SELECT RAISE(ABORT, 'injected failure'); END;").unwrap();
+    v.lock();
+    v.unlock("pw", &sk).unwrap(); // 本机记录写入成功，清理属性失败，迁移总标记尚未写入。
+    assert_eq!(
+        v.ssh_agent_policies().unwrap().get(&key),
+        Some(&AgentPolicy::Unlocked)
+    );
+    v.set_ssh_agent_policy(key, None).unwrap(); // 用户明确选择不在 Agent 中提供。
+    v.store
+        .execute_for_tests("DROP TRIGGER review5_fail")
+        .unwrap();
+    v.lock();
+    v.unlock("pw", &sk).unwrap();
+    assert!(
+        !v.ssh_agent_policies().unwrap().contains_key(&key),
+        "重试迁移不能复活用户已经撤销的授权"
+    );
+}
+
+#[test]
+fn review5_a1_attachment_context_and_chunk_binding_controls() {
+    let dir = TempDir::new();
+    let (mut v, _) = Vault::create(&dir.db(), "pw", fast_params()).unwrap();
+    let vault_id = v.vaults().unwrap()[0].id;
+    let item_id = v
+        .create_item(vault_id, ItemType::SecureNote, "fixture", vec![])
+        .unwrap();
+    let data: Vec<u8> = (0..crate::attachment::CHUNK_LEN + 7)
+        .map(|i| u8::try_from(i % 251).unwrap())
+        .collect();
+    let (row, chunks) = v
+        .seal_attachment(vault_id, item_id, "fixture.bin", &data)
+        .unwrap();
+    let reference = keevo_format::AttachmentRef {
+        id: row.id,
+        name: "fixture.bin".into(),
+        size: i64::try_from(data.len()).unwrap(),
+        added: 0,
+        sha256: Some(keevo_crypto::sha256(&data)),
+    };
+    let session = v.session().unwrap();
+    let vk = session.vault_keys.get(&vault_id).unwrap();
+    let open = |acct,
+                vault,
+                item,
+                row: &keevo_store::AttachmentRow,
+                chunks: &[Vec<u8>],
+                reference: &keevo_format::AttachmentRef| {
+        crate::attachment::open_parts(vk, acct, vault, item, row, chunks, reference)
+    };
+    assert_eq!(
+        open(
+            session.account_id,
+            vault_id,
+            item_id,
+            &row,
+            &chunks,
+            &reference
+        )
+        .unwrap()
+        .as_slice(),
+        data
+    );
+    let other = Id128::random().unwrap();
+    for (acct, vault, item) in [
+        (other, vault_id, item_id),
+        (session.account_id, other, item_id),
+        (session.account_id, vault_id, other),
+    ] {
+        assert!(open(acct, vault, item, &row, &chunks, &reference).is_err());
+    }
+    let mut swapped = chunks.clone();
+    swapped.swap(0, 1);
+    let mut appended = chunks.clone();
+    appended.push(chunks[0].clone());
+    let replayed = vec![chunks[0].clone(), chunks[0].clone()];
+    for changed in [swapped, chunks[..1].to_vec(), appended, replayed] {
+        assert!(
+            open(
+                session.account_id,
+                vault_id,
+                item_id,
+                &row,
+                &changed,
+                &reference
+            )
+            .is_err()
+        );
+    }
+    let mut different_row = row.clone();
+    different_row.id = other;
+    let mut different_ref = reference.clone();
+    different_ref.id = other;
+    assert!(
+        open(
+            session.account_id,
+            vault_id,
+            item_id,
+            &different_row,
+            &chunks,
+            &different_ref
+        )
+        .is_err()
+    );
+    let mut wrong_digest = reference.clone();
+    wrong_digest.sha256 = Some([0; 32]);
+    assert!(
+        open(
+            session.account_id,
+            vault_id,
+            item_id,
+            &row,
+            &chunks,
+            &wrong_digest
+        )
+        .is_err()
+    );
+}
+
+/// 重建时内容已损坏的附件不保留，名称返回给界面告诉用户，而不是静默丢弃（第五轮评审问题 5）。
+#[test]
+fn rebuild_reports_unreadable_attachments() {
+    let dir = TempDir::new();
+    let (mut v, _) = Vault::create(&dir.db(), "pw", fast_params()).unwrap();
+    let vault_id = v.vaults().unwrap()[0].id;
+    let item = v
+        .create_item(vault_id, ItemType::SecureNote, "带附件", vec![])
+        .unwrap();
+    let good = v.add_attachment(item, "good.txt", b"fine", 1).unwrap();
+    let bad = v.add_attachment(item, "bad.txt", b"broken", 1).unwrap();
+    // 长度不变、内容被改：认证失败，永远读不出
+    v.store
+        .execute_for_tests(&format!(
+            "UPDATE attachment_chunk SET ct = zeroblob(length(ct)) WHERE attachment_id = x'{}'",
+            bad.id.to_hex()
+        ))
+        .unwrap();
+    let rebuilt = v.rebuild_item(item, &[]).unwrap();
+    assert_eq!(rebuilt.skipped_attachments, ["bad.txt"]);
+    let names: Vec<String> = v
+        .item(rebuilt.item_id)
+        .unwrap()
+        .doc
+        .records
+        .values()
+        .filter_map(|r| match &r.value {
+            Some(RecordValue::Field(FieldValue {
+                data: FieldData::Attachment(a),
+                ..
+            })) => Some(a.name.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, [good.name]);
 }

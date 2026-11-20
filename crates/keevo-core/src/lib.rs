@@ -13,6 +13,9 @@ pub mod local;
 pub mod otp;
 #[cfg(test)]
 mod r5_tests;
+
+#[cfg(test)]
+mod review5_tests;
 pub mod search;
 pub mod secret_ref;
 pub mod security;
@@ -28,8 +31,8 @@ pub use local::{EnclaveError, EnclaveKey, EphemeralAgreement, LocalKeys, SecureE
 pub(crate) use vault::vault_now_ms_for_tests;
 pub use vault::{
     DEFAULT_PASSWORD_INTERVAL_DAYS, Edit, HistoryEntry, ItemSummary, ItemView, LocalRecords,
-    MAX_TOUCH_ID_FAILURES, NewField, PASSWORD_INTERVAL_DAYS, PasswordReason, Reverify, Vault,
-    VaultInfo,
+    MAX_TOUCH_ID_FAILURES, NewField, PASSWORD_INTERVAL_DAYS, PasswordReason, Rebuilt, Reverify,
+    Vault, VaultInfo,
 };
 
 pub use keevo_crypto::{AccountSecretKey, Id128, KdfParams, LocalPurpose, OtpAlgorithm};

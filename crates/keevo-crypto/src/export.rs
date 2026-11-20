@@ -40,10 +40,19 @@ fn cipher(password: &str, params: &KdfParams) -> Result<XChaCha20Poly1305> {
 /// # Errors
 /// 口令为空或过长、明文超过 [`MAX_EXPORT_LEN`]、随机数或 KDF 失败。
 pub fn seal_export(password: &str, params: &KdfParams, plaintext: &[u8]) -> Result<Vec<u8>> {
+    seal_export_with_nonce(password, params, plaintext, random::array()?)
+}
+
+/// 用给定的 nonce 加密（跨实现测试向量用；正式写出一律用随机 nonce）。
+pub(crate) fn seal_export_with_nonce(
+    password: &str,
+    params: &KdfParams,
+    plaintext: &[u8],
+    nonce: [u8; NONCE_LEN],
+) -> Result<Vec<u8>> {
     if plaintext.len() > MAX_EXPORT_LEN {
         return Err(CryptoError::TooLarge);
     }
-    let nonce: [u8; NONCE_LEN] = random::array()?;
     let mut header = Vec::with_capacity(HEADER_LEN);
     header.extend_from_slice(EXPORT_MAGIC);
     header.push(VERSION);

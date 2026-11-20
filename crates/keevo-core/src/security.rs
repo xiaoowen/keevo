@@ -166,6 +166,8 @@ pub struct ItemReport {
     pub findings: Vec<Detail>,
     /// 用户忽略了这个条目的提醒。
     pub ignored: bool,
+    /// 这个条目现在的每个密码都已查过泄露（只有"查过且没有出现"时才能说没有泄露）。
+    pub breach_checked: bool,
 }
 
 /// 检查结果。
@@ -283,36 +285,55 @@ impl Breaches {
     }
 
     /// 记下一个前缀的查询结果（Have I Been Pwned `range` 接口的响应正文：每行 `后缀:次数`，
-    /// 开启填充时包含次数为 0 的假条目）。返回 `false` 表示格式不对。
+    /// 开启填充时包含次数为 0 的假条目）。返回 `false` 表示格式不对，这时什么都不记下，这个前缀仍算没有查询
+    /// （第五轮评审 L7）：每一行都必须是 35 个十六进制字符、冒号、次数；空的正文也不对（开启了填充）。
     pub fn record(&mut self, prefix: &str, body: &str) -> bool {
         let prefix = prefix.to_ascii_uppercase();
         if prefix.len() != 5 || !prefix.chars().all(|c| c.is_ascii_hexdigit()) {
             return false;
         }
+        let mut found = Vec::new();
+        let mut lines = 0usize;
         for line in body.lines() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
             }
+            lines = lines.saturating_add(1);
             let Some((suffix, count)) = line.split_once(':') else {
                 return false;
             };
             let Ok(count) = count.trim().parse::<u64>() else {
                 return false;
             };
-            if suffix.len() != 35 || count == 0 {
-                continue;
-            }
-            let full = format!("{prefix}{}", suffix.to_ascii_uppercase());
-            let Some(hash) = unhex20(&full) else {
-                continue;
+            let Some(hash) = (suffix.len() == 35)
+                .then(|| unhex20(&format!("{prefix}{}", suffix.to_ascii_uppercase())))
+                .flatten()
+            else {
+                return false;
             };
-            if self.wanted.contains(&hash) {
-                self.counts.insert(hash, count);
+            if count > 0 && self.wanted.contains(&hash) {
+                found.push((hash, count));
             }
         }
+        if lines == 0 {
+            return false;
+        }
+        self.counts.extend(found);
         self.done.insert(prefix);
         true
+    }
+
+    /// 这个密码是否在这一批中、并且它的前缀已经查过。修改或新增之后的密码不算（第五轮评审 L7）。
+    fn checked(&self, password: &str) -> bool {
+        let hash = sha1_for_breach_check(password.as_bytes());
+        self.wanted.contains(&*hash)
+            && self.done.contains(
+                &hex_upper(hash.get(..3).unwrap_or_default())
+                    .chars()
+                    .take(5)
+                    .collect::<String>(),
+            )
     }
 
     /// 是否已查询完全部前缀。
@@ -391,8 +412,16 @@ pub fn analyze(vault: &Vault, breaches: Option<&Breaches>) -> Result<Report> {
 
 fn analyze_at(vault: &Vault, breaches: Option<&Breaches>, today: i64) -> Result<Report> {
     let items = live_items(vault)?;
+    // 泄露检查是否覆盖了现在的全部密码：这一批查完了，并且每个（没有忽略提醒的）条目的每个密码都在这一批中。
+    // 之后修改或新增的密码还没有查过（第五轮评审 L7）
     let mut report = Report {
-        breach_checked: breaches.is_some_and(Breaches::complete),
+        breach_checked: breaches.is_some_and(|b| {
+            b.complete()
+                && items
+                    .iter()
+                    .filter(|(_, doc)| !ignored(doc))
+                    .all(|(_, doc)| passwords(doc).iter().all(|p| b.checked(p)))
+        }),
         ..Report::default()
     };
     // 重复使用：按密码的哈希分组，不保留明文
@@ -437,10 +466,11 @@ fn analyze_at(vault: &Vault, breaches: Option<&Breaches>, today: i64) -> Result<
         if let Some(d) = reused.remove(id) {
             entry.findings.push(d);
         }
-        if let Some(b) = breaches
-            && let Some(count) = pws.iter().filter_map(|p| b.count(p)).max()
-        {
-            entry.findings.push(Detail::Breached { count });
+        if let Some(b) = breaches {
+            if let Some(count) = pws.iter().filter_map(|p| b.count(p)).max() {
+                entry.findings.push(Detail::Breached { count });
+            }
+            entry.breach_checked = !pws.is_empty() && pws.iter().all(|p| b.checked(p));
         }
         entry.findings.extend(item_checks(doc, today));
         if !entry.ignored {
@@ -875,13 +905,19 @@ mod tests {
         );
         let hash = hex_upper(&*sha1_for_breach_check(b"password1"));
         for p in &prefixes {
+            // 开启填充时，响应中总有次数为 0 的假条目；空的正文不算有效响应
             let body = if hash.starts_with(p.as_str()) {
-                format!("{}:2427", &hash[5..])
+                format!(
+                    "{}:2427\r\n0000000000000000000000000000000000A:0",
+                    &hash[5..]
+                )
             } else {
-                String::new()
+                "0000000000000000000000000000000000A:0\r\n".to_owned()
             };
             assert!(b.record(p, &body));
         }
+        assert!(!b.record(&prefixes[0], ""), "空正文不算查询成功");
+        assert!(!b.record(&prefixes[0], "not-a-sha1-suffix:1"));
         let report = analyze_at(&v, Some(&b), days_from_civil(2026, 11, 19)).unwrap();
         assert!(report.breach_checked);
         assert!(

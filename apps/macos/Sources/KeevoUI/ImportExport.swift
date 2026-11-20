@@ -569,7 +569,8 @@ struct ExportStrengthMeter: View {
     let password: String
 
     var body: some View {
-        let strength = password.isEmpty ? nil : passwordStrength(password: password)
+        // 按进入 KDF 的形式（NFKD）评估，与能否导出的判定一致
+        let strength = password.isEmpty ? nil : exportPasswordStrength(password: password)
         VStack(alignment: .leading, spacing: 4) {
             MasterStrengthMeter(strength: strength)
             Text(reason(strength))

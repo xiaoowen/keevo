@@ -98,7 +98,8 @@ pub(super) fn parse(data: &[u8], password: Option<&str>) -> Result<Parsed, Impor
     let mut out = Parsed::default();
     for vault in file.vaults {
         for item in vault.items {
-            let mut b = Builder::new(item.item_type, &item.title);
+            // Keevo 自己的格式：原样导入（spec/export.md §2）
+            let mut b = Builder::exact(item.item_type, &item.title);
             let sections: Vec<Option<usize>> = item.sections.iter().map(|s| b.section(s)).collect();
             for f in item.fields {
                 let section = f.section.and_then(|i| sections.get(i).copied().flatten());

@@ -18,6 +18,8 @@ pub(crate) fn parse(text: &str) -> Result<Vec<Vec<String>>, ImportError> {
     let mut quoted = false;
     // 当前字段是否以引号开头（用于区分空字段与 ""）
     let mut started = false;
+    // 引号括起的字段已经结束：之后只能是逗号、换行或文件结尾。`"abc"def` 不合法，不能拼成 abcdef（第五轮评审 L6）
+    let mut closed = false;
     loop {
         let c = chars.next();
         if quoted {
@@ -26,11 +28,17 @@ pub(crate) fn parse(text: &str) -> Result<Vec<Vec<String>>, ImportError> {
                     chars.next();
                     field.push('"');
                 }
-                Some('"') => quoted = false,
+                Some('"') => {
+                    quoted = false;
+                    closed = true;
+                }
                 Some(c) => field.push(c),
                 None => return Err(ImportError::Malformed),
             }
             continue;
+        }
+        if closed && !matches!(c, Some(',' | '\r' | '\n') | None) {
+            return Err(ImportError::Malformed);
         }
         match c {
             Some('"') if field.is_empty() && !started => {
@@ -40,6 +48,7 @@ pub(crate) fn parse(text: &str) -> Result<Vec<Vec<String>>, ImportError> {
             Some(',') => {
                 push_field(&mut row, &mut field)?;
                 started = false;
+                closed = false;
             }
             Some('\r') if chars.peek() == Some(&'\n') => {}
             Some('\n' | '\r') | None => {
@@ -51,6 +60,7 @@ pub(crate) fn parse(text: &str) -> Result<Vec<Vec<String>>, ImportError> {
                     }
                 }
                 started = false;
+                closed = false;
                 if c.is_none() {
                     break;
                 }

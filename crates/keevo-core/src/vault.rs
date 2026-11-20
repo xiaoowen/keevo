@@ -12,7 +12,7 @@ use keevo_format::{
     ItemOverview, ItemType, Purpose, RecordKey, RecordValue, RevisionGraph, SectionValue,
     VaultMeta, merge_heads, order_between, order_sequence,
 };
-use keevo_store::{AccountRow, AttachmentChanges, ObjectKind, RevisionRow, Store};
+use keevo_store::{AccountRow, ObjectKind, RevisionRow, Store, WriteExtras};
 
 use crate::error::{CoreError, Result};
 use crate::local::{LocalKeys, Unwrapped};
@@ -82,6 +82,15 @@ pub enum PasswordReason {
 
 /// 解开的本机记录 (id, 明文)，以及因解不开而跳过的条数（[`Vault::local_records`]）。
 pub type LocalRecords = (Vec<(Vec<u8>, keevo_crypto::SecretBytes)>, usize);
+
+/// 重建的结果（[`Vault::rebuild_item`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rebuilt {
+    /// 新条目的 ID。
+    pub item_id: Id128,
+    /// 内容已损坏或缺失、没有保留的附件的文件名。
+    pub skipped_attachments: Vec<String>,
+}
 
 /// 历史中的一个修订（[`Vault::history`]）。
 #[derive(Debug, Clone)]
@@ -633,31 +642,46 @@ impl Vault {
         self.unlock_epoch = self.unlock_epoch.wrapping_add(1);
         // 尽力而为：失败时下次解锁再试，迁移完成之前旧属性中的策略不生效（不在 Agent 中提供）
         let _ = self.migrate_ssh_agent_policies();
+        let _ = self.collect_all_attachments();
         Ok(())
     }
 
-    /// 全部 SSH 密钥在 Agent 中的策略（本机记录，[`crate::ssh_agent`]）。只包括仍然存在的条目。
+    /// 全部 SSH 密钥在 Agent 中的策略（本机记录，[`crate::ssh_agent`]）。只包括在 Agent 中提供的密钥；
+    /// 明确关闭（`off`）与没有记录的都不在其中。
     ///
     /// # Errors
     /// 已锁定或读取失败。
     pub fn ssh_agent_policies(&self) -> Result<HashMap<Id128, crate::ssh_agent::AgentPolicy>> {
-        let (records, _) = self.local_records(crate::ssh_agent::LOCAL_KIND)?;
-        let mut out = HashMap::new();
-        for (id, plain) in records {
-            let (Ok(bytes), Ok(text)) = (
-                <[u8; 16]>::try_from(id.as_slice()),
-                core::str::from_utf8(&plain),
-            ) else {
-                continue;
-            };
-            if let Some(policy) = crate::ssh_agent::AgentPolicy::parse(text) {
-                out.insert(Id128::from_bytes(bytes), policy);
-            }
-        }
-        Ok(out)
+        Ok(self
+            .ssh_agent_records()?
+            .into_iter()
+            .filter_map(|(id, value)| crate::ssh_agent::AgentPolicy::parse(&value).map(|p| (id, p)))
+            .collect())
     }
 
-    /// 设置一把 SSH 密钥在 Agent 中的策略；`None` 表示不在 Agent 中提供。只写本机记录，不产生修订。
+    /// 一把 SSH 密钥是否已经有本机决定（任何策略，或明确关闭）。没有决定的密钥，界面可以设为默认的 `ask`。
+    ///
+    /// # Errors
+    /// 已锁定或读取失败。
+    pub fn ssh_agent_decided(&self, item_id: Id128) -> Result<bool> {
+        Ok(self.ssh_agent_records()?.contains_key(&item_id))
+    }
+
+    /// 全部 SSH Agent 本机记录：条目 ID → 明文（`ask`、`session`、`unlocked` 或 `off`）。
+    fn ssh_agent_records(&self) -> Result<HashMap<Id128, String>> {
+        let (records, _) = self.local_records(crate::ssh_agent::LOCAL_KIND)?;
+        Ok(records
+            .into_iter()
+            .filter_map(|(id, plain)| {
+                let bytes = <[u8; 16]>::try_from(id.as_slice()).ok()?;
+                let text = core::str::from_utf8(&plain).ok()?.to_owned();
+                Some((Id128::from_bytes(bytes), text))
+            })
+            .collect())
+    }
+
+    /// 设置一把 SSH 密钥在 Agent 中的策略；`None` 表示不在 Agent 中提供，记为明确关闭（`off`）而不是删除记录：
+    /// 迁移重试时，"用户关闭了"与"还没有迁移"必须能区分（第五轮评审 L4）。只写本机记录，不产生修订。
     ///
     /// # Errors
     /// 条目不存在或不是 SSH 密钥时返回 [`CoreError::NotFound`]；已锁定。
@@ -669,20 +693,23 @@ impl Vault {
         if self.item(item_id)?.doc.item_type != ItemType::SshKey {
             return Err(CoreError::NotFound);
         }
-        let kind = crate::ssh_agent::LOCAL_KIND;
-        match policy {
-            Some(p) => self.put_local_record(kind, item_id.as_bytes(), p.as_str().as_bytes()),
-            None => self.delete_local_record(kind, item_id.as_bytes()),
-        }
+        let value = policy.map_or(crate::ssh_agent::OFF, crate::ssh_agent::AgentPolicy::as_str);
+        self.put_local_record(
+            crate::ssh_agent::LOCAL_KIND,
+            item_id.as_bytes(),
+            value.as_bytes(),
+        )
     }
 
     /// 把 M1.4 写在条目属性中的策略迁移到本机记录，并从条目中删除属性（只做一次，之后条目属性一律忽略）。
-    /// 已有本机记录的密钥保留本机记录。
+    ///
+    /// 逐把密钥可重入：已有本机记录（任何策略或明确关闭）的密钥保留本机记录，不用旧属性覆盖用户之后的决定；
+    /// 没有记录的写入旧属性的值（不认识的值记为关闭）。中途失败时下次解锁再试（第五轮评审 L4）。
     fn migrate_ssh_agent_policies(&mut self) -> Result<()> {
         if self.store.meta(META_SSH_AGENT_LOCAL)?.is_some() {
             return Ok(());
         }
-        let existing = self.ssh_agent_policies()?;
+        let decided = self.ssh_agent_records()?;
         let mut legacy = Vec::new();
         for summary in self.items()? {
             if summary.overview.item_type != ItemType::SshKey {
@@ -697,8 +724,8 @@ impl Vault {
             }
         }
         for (item_id, policy) in legacy {
-            if let (Some(p), false) = (policy, existing.contains_key(&item_id)) {
-                self.set_ssh_agent_policy(item_id, Some(p))?;
+            if !decided.contains_key(&item_id) {
+                self.set_ssh_agent_policy(item_id, policy)?;
             }
             self.revise(item_id, |doc, hlc, rev| {
                 Ok(doc.delete(RecordKey::attr(crate::ssh_agent::ATTRIBUTE), hlc, rev)?)
@@ -1023,18 +1050,19 @@ impl Vault {
         Ok(self.store.backup_to(dest)?)
     }
 
-    /// 用备份替换保险库内容，之后保险库处于锁定状态（[`crate::backup::restore`]）。备份必须属于同一个账户；
+    /// 用备份替换保险库内容（[`crate::backup::restore`]），成功后保险库处于锁定状态。备份必须属于同一个账户；
     /// 本机状态（设备 ID、配对、解锁策略）保持不变（[`Store::restore_from`]）。
     ///
     /// # Errors
-    /// 不是 Keevo 备份、来自更新版本、属于另一个账户，或 SQLite 错误。失败时什么都不改变。
+    /// 不是 Keevo 备份、来自更新版本、属于另一个账户，或 SQLite 错误。失败时**什么都不改变**：数据库保持原样，
+    /// 保险库保持原来的解锁状态（第五轮评审 L8：此前先锁定核心再恢复，失败时核心已锁定而界面层的状态没有清理）。
     pub(crate) fn restore_from(&mut self, src: &Path) -> Result<()> {
         let current = self.store.account()?.ok_or(CoreError::NoAccount)?;
         if Store::inspect_backup(src)?.account.id != current.id {
             return Err(CoreError::OtherAccount);
         }
-        self.lock();
         self.store.restore_from(src)?;
+        self.lock();
         Ok(())
     }
 
@@ -1373,14 +1401,14 @@ impl Vault {
         item_id: Id128,
         change: impl FnOnce(&mut ItemDoc, Hlc, Id128) -> Result<()>,
     ) -> Result<()> {
-        self.revise_with(item_id, &AttachmentChanges::default(), change)
+        self.revise_with(item_id, &WriteExtras::default(), change)
     }
 
     /// 与 [`Vault::revise`] 相同，附件变化与新修订在同一个事务中写入（第五轮预审 K6）。
     fn revise_with(
         &mut self,
         item_id: Id128,
-        changes: &AttachmentChanges<'_>,
+        changes: &WriteExtras<'_>,
         change: impl FnOnce(&mut ItemDoc, Hlc, Id128) -> Result<()>,
     ) -> Result<()> {
         let view = self.item(item_id)?;
@@ -1417,10 +1445,21 @@ impl Vault {
             .store
             .prune(&item_id, HISTORY_KEEP, HISTORY_MIN_AGE_MS)?;
         if pruned > 0 {
-            // 清理历史之后，只被已清理的修订引用的附件随之删除
-            self.collect_attachments(item_id)?;
+            // 清理历史之后，只被已清理的修订引用的附件随之删除。编辑已经提交，回收失败不让它报错：
+            // 每次解锁时都会对全部带附件的条目重试（collect_all_attachments，第五轮评审 L5）
+            let _ = self.collect_attachments(item_id);
         }
         Ok(())
+    }
+
+    /// 对全部带附件的条目回收附件（`spec/revisions.md` §7.3 第 1 条）。解锁后进行，补上此前失败或中断的回收。
+    /// 只读取带附件的条目的历史。返回删除的个数。
+    fn collect_all_attachments(&mut self) -> Result<usize> {
+        let mut removed = 0usize;
+        for item_id in self.store.items_with_attachments()? {
+            removed = removed.saturating_add(self.collect_attachments(item_id)?);
+        }
+        Ok(removed)
     }
 
     /// 添加附件（`spec/crypto.md` §8.9）：加密保存内容，并在条目末尾新增一个附件字段。返回附件引用。
@@ -1454,9 +1493,9 @@ impl Vault {
             purpose: None,
             data: FieldData::Attachment(reference.clone()),
         };
-        let changes = AttachmentChanges {
-            add: vec![(&row, chunks.as_slice())],
-            delete_all_of: None,
+        let changes = WriteExtras {
+            add_attachments: vec![(&row, chunks.as_slice())],
+            ..WriteExtras::default()
         };
         self.revise_with(item_id, &changes, |doc, hlc, rev_id| {
             apply(doc, Edit::AddField(field), hlc, rev_id)
@@ -1690,18 +1729,16 @@ impl Vault {
             item_id,
             heads.iter().map(|h| h.rev_id).collect(),
         )?;
-        // 永久删除：附件随之删除，与墓碑在同一个事务中（第五轮预审 K6）
+        // 永久删除：附件与本机的 Agent 授权随之删除，与墓碑在同一个事务中（第五轮预审 K6、第五轮评审 L4）。
+        // 即使条目随旧备份回来，也不在 Agent 中提供
         self.store.insert_revisions_with(
             &rows,
-            &AttachmentChanges {
-                add: Vec::new(),
-                delete_all_of: Some(item_id),
+            &WriteExtras {
+                delete_attachments_of: Some(item_id),
+                delete_local: vec![(crate::ssh_agent::LOCAL_KIND, item_id.as_bytes().to_vec())],
+                ..WriteExtras::default()
             },
         )?;
-        // 本机的 Agent 授权随之删除：即使条目随旧备份回来，也不在 Agent 中提供（第五轮预审 K17）
-        let _ = self
-            .store
-            .delete_local_record(crate::ssh_agent::LOCAL_KIND, item_id.as_bytes());
         Ok(())
     }
 
@@ -1710,11 +1747,13 @@ impl Vault {
     /// 新条目有新的 ID；旧条目的历史随永久删除进入正常清理。
     ///
     /// 附件复制为新条目的新附件（新的附件 ID 与 AK）：附件元数据绑定所属条目，而每个附件只封装一次
-    /// （`spec/crypto.md` §8.9）。读不出的附件不保留引用。旧条目的附件随永久删除一起删除（第五轮预审 K5）。
+    /// （`spec/crypto.md` §8.9）。旧条目的附件随永久删除一起删除（第五轮预审 K5）。读取附件时遇到数据库错误，
+    /// 整个重建中止；内容已损坏或缺失、永远读不出的附件不保留，名称在 [`Rebuilt::skipped_attachments`] 中返回，
+    /// 由界面告诉用户（第五轮评审问题 5）。
     ///
     /// # Errors
     /// 复制后仍超过键数或大小上限时返回错误，调用方应让用户在 `drop` 中选出更多不保留的键。失败时什么都不改变。
-    pub fn rebuild_item(&mut self, item_id: Id128, drop: &[RecordKey]) -> Result<Id128> {
+    pub fn rebuild_item(&mut self, item_id: Id128, drop: &[RecordKey]) -> Result<Rebuilt> {
         let mut copies = Vec::new();
         let result = self.rebuild_inner(item_id, drop, &mut copies);
         if result.is_err() {
@@ -1731,9 +1770,10 @@ impl Vault {
         item_id: Id128,
         drop: &[RecordKey],
         copies: &mut Vec<Id128>,
-    ) -> Result<Id128> {
+    ) -> Result<Rebuilt> {
         let view = self.item(item_id)?;
         let hlc = self.tick()?;
+        let mut skipped = Vec::new();
         let new_id = Id128::random()?;
         let rev_id = Id128::random()?;
         let mut doc = ItemDoc::new(view.doc.item_type);
@@ -1750,8 +1790,16 @@ impl Vault {
                         // 一次只在内存中保留一个附件
                         let data = match self.read_attachment(item_id, a) {
                             Ok(data) => data,
-                            Err(CoreError::Locked) => return Err(CoreError::Locked),
-                            Err(_) => continue,
+                            // 暂时性的错误：中止，什么都不改变
+                            Err(
+                                e @ (CoreError::Locked
+                                | CoreError::Store(keevo_store::StoreError::Sqlite(_))),
+                            ) => return Err(e),
+                            // 内容已损坏或缺失：永远读不出，不保留，告诉用户
+                            Err(_) => {
+                                skipped.push(a.name.clone());
+                                continue;
+                            }
                         };
                         let (row, chunks) =
                             self.seal_attachment(view.vault_id, new_id, &a.name, &data)?;
@@ -1787,14 +1835,35 @@ impl Vault {
             item_id,
             heads.iter().map(|h| h.rev_id).collect(),
         )?);
+        // SSH Agent 的本机授权（含明确关闭）移到新条目；旧条目的记录删除，它随旧备份回来也没有授权（第五轮评审 L4）
+        let kind = crate::ssh_agent::LOCAL_KIND;
+        let put_local = match self.ssh_agent_records()?.remove(&item_id) {
+            Some(value) => {
+                let session = self.session()?;
+                let ct = keevo_crypto::seal_local_record(
+                    session.keyset.account_key(),
+                    &session.account_id,
+                    kind,
+                    new_id.as_bytes(),
+                    value.as_bytes(),
+                )?;
+                vec![(kind, new_id.as_bytes().to_vec(), ct)]
+            }
+            None => Vec::new(),
+        };
         self.store.insert_revisions_with(
             &rows,
-            &AttachmentChanges {
-                add: Vec::new(),
-                delete_all_of: Some(item_id),
+            &WriteExtras {
+                delete_attachments_of: Some(item_id),
+                delete_local: vec![(kind, item_id.as_bytes().to_vec())],
+                put_local,
+                ..WriteExtras::default()
             },
         )?;
-        Ok(new_id)
+        Ok(Rebuilt {
+            item_id: new_id,
+            skipped_attachments: skipped,
+        })
     }
 
     /// 条目的全部历史修订，从新到旧（本机写入或收到的顺序）。已清理与墓碑修订只有元数据。
@@ -2034,7 +2103,7 @@ impl Vault {
         ik: &SymmetricKey,
         doc: Option<&ItemDoc>,
     ) -> Result<()> {
-        let none = AttachmentChanges::default();
+        let none = WriteExtras::default();
         self.write_item_revision_with(vault_id, item_id, rev_id, parents, ik, doc, &none)
     }
 
@@ -2048,7 +2117,7 @@ impl Vault {
         parents: Vec<Id128>,
         ik: &SymmetricKey,
         doc: Option<&ItemDoc>,
-        changes: &AttachmentChanges<'_>,
+        changes: &WriteExtras<'_>,
     ) -> Result<()> {
         let row = self.item_revision_row(vault_id, item_id, rev_id, parents, ik, doc)?;
         self.store
