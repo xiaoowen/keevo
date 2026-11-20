@@ -3,6 +3,44 @@ use std::path::PathBuf;
 use super::*;
 
 #[test]
+fn review5c_m4_export_rechecks_epoch_when_consuming_authorization() {
+    let f = Fixture::new();
+    f.login("fixture");
+    f.vault.note_export_reverified();
+    let result = std::thread::scope(|scope| {
+        // 阻止导出消费标记，让它在读取 epoch 后等待。只控制调度，不改标记的值。
+        let marker = f.vault.reverified();
+        let (started, ready) = std::sync::mpsc::channel();
+        let fixture = &f;
+        let worker = scope.spawn(move || {
+            started.send(()).unwrap();
+            fixture.vault.export_vault(
+                fixture
+                    .dir
+                    .join("stale-epoch.json")
+                    .to_string_lossy()
+                    .into_owned(),
+                "json".into(),
+                None,
+                None,
+            )
+        });
+        ready.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let before = f.vault.vault().unlock_epoch();
+        // 与已有 review5_l8 测试一样，再次调用公开 unlock 会创建新的解锁代次。
+        f.vault.unlock("pw".into(), f.secret_key.clone()).unwrap();
+        assert_ne!(f.vault.vault().unlock_epoch(), before);
+        drop(marker);
+        worker.join().unwrap()
+    });
+    assert!(
+        result.is_err(),
+        "导出实际使用新解锁代次时，旧代次的验证必须失效"
+    );
+}
+
+#[test]
 fn review5_l8_failed_restore_leaves_state_consistent() {
     let f = Fixture::new();
     let id = f.login("fixture");
@@ -64,7 +102,7 @@ fn review5_l8_failed_restore_invalidates_export_reverification() {
     );
     assert!(
         result.is_err(),
-        "恢复失败导致锁定，重新解锁后不得复用上一次解锁会话的导出验证"
+        "再次解锁建立了新的解锁代次，不得复用上一次解锁会话的导出验证"
     );
 }
 

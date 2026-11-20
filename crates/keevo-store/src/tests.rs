@@ -1,6 +1,43 @@
 use super::*;
 
 #[test]
+fn review5c_m5_restore_effective_clock_matches_documented_contract() {
+    let dir = std::env::temp_dir().join(format!(
+        "keevo-review5c-clock-{}",
+        Id128::random().unwrap().to_hex()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _cleanup = Cleanup(dir.clone());
+    let mut store = Store::open(&dir.join("vault.sqlite")).unwrap();
+    store
+        .create_account(&AccountRow {
+            id: id(1),
+            format_version: 1,
+            epoch: 1,
+            kdf_params: vec![1; 29],
+            keyset_ct: vec![2; 400],
+        })
+        .unwrap();
+    store.insert_revision(&rev(1, &[])).unwrap();
+    let backup = dir.join("old.sqlite");
+    store.backup_to(&backup).unwrap();
+    store.pass_running_time(100 * 86_400_000).unwrap();
+    store.insert_revision(&rev(2, &[1])).unwrap();
+    let before = store.effective_now().unwrap();
+    store.restore_from(&backup).unwrap();
+    let after = store.effective_now().unwrap();
+    // docs/sync.md §2（按确认评审 M5 修改后）：恢复后的有效时间不会比恢复前大，可能变小，只会让清理更晚
+    assert!(
+        after <= before.saturating_add(60_000),
+        "恢复后的有效时间不应超过恢复前：{before} -> {after}"
+    );
+    assert!(
+        after < before,
+        "恢复旧备份时有效时间可以回退（条文如实写明）"
+    );
+}
+
+#[test]
 fn review5_l2_restore_must_not_age_fresh_history() {
     let dir = std::env::temp_dir().join(format!(
         "keevo-review5-time-{}",

@@ -12,7 +12,7 @@
 | [ipc.md](ipc.md)：浏览器扩展与桌面应用的本地通信 | 2.3 | **协议 v1 已冻结**；协议 v2（§5.5，保存与更新）与 v3（§5.6，搜索、打开、解锁）尚未冻结 | [test-vectors/ipc-v1.json](test-vectors/ipc-v1.json)（配对承诺、XX 与 IK 的 v1 / v2 握手、SAS 与词表映射、传输消息）；SAS 词表 v1：[sas-wordlist-v1.tsv](sas-wordlist-v1.tsv) |
 | [secret-refs.md](secret-refs.md)：`keevo://` 密钥引用的语法与解析 | 0.1 | 草案（M1.4） | 单元测试（`keevo-core` 的 `secret_ref`） |
 | [cli.md](cli.md)：命令行工具与 Vault Service 的协议、终端会话授权 | 0.2 | 草案（M1.4） | 集成测试（`keevo-service` 的 `cli`） |
-| [ssh-agent.md](ssh-agent.md)：SSH Agent 的消息、密钥、授权策略 | 0.4 | 草案（M1.4） | Ed25519：RFC 8032 已知答案；与 OpenSSH 的互通测试（`ssh-add`、`ssh-keygen -Y`）；导入：`ssh-keygen` 与 `openssl` 生成的私钥（`crates/keevo-ssh/src/testdata/`） |
+| [ssh-agent.md](ssh-agent.md)：SSH Agent 的消息、密钥、授权策略 | 0.5 | 草案（M1.4） | Ed25519：RFC 8032 已知答案；与 OpenSSH 的互通测试（`ssh-add`、`ssh-keygen -Y`）；导入：`ssh-keygen` 与 `openssl` 生成的私钥（`crates/keevo-ssh/src/testdata/`） |
 | [export.md](export.md)：导出文件（Keevo 加密文件、JSON、CSV） | 0.3 | 草案（M1.5） | [test-vectors/export-v1.json](test-vectors/export-v1.json)（加密文件，独立实现生成）；单元测试（`keevo-crypto` 的 `export`、`keevo-core` 的 `import`：导出后再导入）；Bitwarden 有密码保护的导出：`openssl` 与 Python 独立生成的样例（`crates/keevo-core/src/import/testdata/`） |
 
 2026-11-18 冻结，此前经过四轮模型评审，报告与处理记录在 [docs/reviews/](../docs/reviews/)。

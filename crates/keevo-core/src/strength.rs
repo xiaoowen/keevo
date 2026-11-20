@@ -86,35 +86,21 @@ pub enum Warning {
 /// 评估密码强度。空密码为 0 分。
 #[must_use]
 pub fn estimate(password: &str) -> Strength {
-    let chars: Vec<char> = password.chars().collect();
-    // 分段分析：每段 MAX_ANALYZED 个字符，各段的猜测次数相乘。与前面某处完全相同的段（整段重复或周期性的模式）
-    // 只算 ×2。此前超出 64 个字符的部分按每字符 10 种计入，长的重复口令被当作随机（第五轮评审 L1）
-    let mut guesses = 1.0_f64;
-    let mut first: Option<Analysis> = None;
-    let windows: Vec<(usize, &[char])> = if chars.is_empty() {
-        vec![(0, &chars[..])]
-    } else {
-        chars
-            .chunks(MAX_ANALYZED)
-            .take(MAX_WINDOWS)
-            .enumerate()
-            .map(|(i, w)| (i * MAX_ANALYZED, w))
-            .collect()
-    };
-    for (start, w) in windows {
-        if occurs_before(&chars, start, w) {
-            guesses = (guesses * 2.0).min(f64::MAX);
-            continue;
-        }
-        let result = most_guessable(w, omnimatch(w), false);
-        guesses = (guesses * result.guesses).min(f64::MAX);
-        if first.is_none() {
-            first = Some(result);
-        }
-    }
+    // 超过 MAX_WINDOWS 段（1024 个字符）的部分不计入：只会低估
+    let chars: Vec<char> = password
+        .chars()
+        .take(MAX_ANALYZED.saturating_mul(MAX_WINDOWS))
+        .collect();
+    let (guesses, first) = estimate_chars(&chars);
     let score = guesses_to_score(guesses);
-    let warning = match &first {
-        Some(result) if score <= 2 && !result.sequence.is_empty() => {
+    let warning = match (&first, period(&chars)) {
+        // 整段是重复：提示与 zxcvbn 的重复模式相同
+        (_, Some(p)) if score <= 2 => Some(if p == 1 {
+            Warning::RepeatedCharacter
+        } else {
+            Warning::RepeatedPattern
+        }),
+        (Some(result), _) if score <= 2 && !result.sequence.is_empty() => {
             let longest = result
                 .sequence
                 .iter()
@@ -129,6 +115,76 @@ pub fn estimate(password: &str) -> Strength {
         score,
         warning,
     }
+}
+
+/// 估计一段字符（第五轮评审 L1、确认评审 M1）：
+/// 1. 整段是同一片段的重复（至少两次，最后一次可以不完整）：只估计这个片段，再乘以重复次数，与 zxcvbn 的重复
+///    模式相同。长的重复口令不会因为长而变强；
+/// 2. 否则每 MAX_ANALYZED 个字符一段，不同的段各自估计、相乘；与前面某处完全相同的段不再单独计入，最后按这样的段数
+///    整体乘一次。
+///
+/// 返回猜测次数，以及第一段的分析（用于给出提示）。
+fn estimate_chars(chars: &[char]) -> (f64, Option<Analysis>) {
+    if let Some(p) = period(chars) {
+        let (base, first) = estimate_chars(chars.get(..p).unwrap_or_default());
+        let repeated = (base * to_f64(chars.len().div_ceil(p))).min(f64::MAX);
+        // 一段之内也照常分析，取两者中较小的（更保守）
+        if chars.len() <= MAX_ANALYZED {
+            let whole = most_guessable(chars, omnimatch(chars), false);
+            if whole.guesses < repeated {
+                return (whole.guesses, Some(whole));
+            }
+        }
+        return (repeated, first);
+    }
+    let mut guesses = 1.0_f64;
+    let mut repeats = 0u32;
+    let mut first: Option<Analysis> = None;
+    let windows: Vec<(usize, &[char])> = if chars.is_empty() {
+        vec![(0, chars)]
+    } else {
+        chars
+            .chunks(MAX_ANALYZED)
+            .enumerate()
+            .map(|(i, w)| (i * MAX_ANALYZED, w))
+            .collect()
+    };
+    for (start, w) in windows {
+        if occurs_before(chars, start, w) {
+            repeats = repeats.saturating_add(1);
+            continue;
+        }
+        let result = most_guessable(w, omnimatch(w), false);
+        guesses = (guesses * result.guesses).min(f64::MAX);
+        if first.is_none() {
+            first = Some(result);
+        }
+    }
+    let guesses = (guesses * f64::from(repeats.saturating_add(1))).min(f64::MAX);
+    (guesses, first)
+}
+
+/// 最短的周期 `p`：对所有 `i`，`chars[i] == chars[i + p]`；只在至少重复两次（`2p ≤ n`）时返回（KMP 前缀函数）。
+fn period(chars: &[char]) -> Option<usize> {
+    let n = chars.len();
+    if n < 2 {
+        return None;
+    }
+    // pi[i]：chars[..=i] 最长的、同时是前缀的真后缀的长度
+    let mut pi = vec![0usize; n];
+    for i in 1..n {
+        let c = chars.get(i)?;
+        let mut k = *pi.get(i - 1)?;
+        while k > 0 && chars.get(k)? != c {
+            k = *pi.get(k - 1)?;
+        }
+        if chars.get(k)? == c {
+            k += 1;
+        }
+        *pi.get_mut(i)? = k;
+    }
+    let p = n - *pi.last()?;
+    (p < n && 2 * p <= n).then_some(p)
 }
 
 /// `window`（从 `start` 开始）是否在更早的位置出现过（可以与自身重叠，因此周期性的模式也算）。
@@ -1321,6 +1377,13 @@ mod tests {
         assert!(s.guesses.is_finite() && s.score <= 2, "{s:?}");
         for repeated in ["a".repeat(80), "abc".repeat(100), "password".repeat(10)] {
             assert!(estimate(&repeated).score <= 2, "{repeated}");
+        }
+        // 常见口令重复几次，无论长短，都达不到最高档（确认评审 M1）
+        for base in ["password123", "letmein123!", "qwerty123456", "abc123!"] {
+            for n in [2, 3, 5, 20, 93] {
+                let repeated = base.repeat(n);
+                assert!(estimate(&repeated).score <= 3, "{base} × {n}");
+            }
         }
         // 真正随机的长口令仍然很强；很长的输入也很快算完
         let random = "q7Lm2Xv9Rk4Tz8Wc1Hn6Jp3Bd5Fg0YstR8vN2kQ9wL4mZ7xP1cH6jB3dF5gY0sA";

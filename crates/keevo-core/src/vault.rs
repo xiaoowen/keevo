@@ -83,6 +83,12 @@ pub enum PasswordReason {
 /// 解开的本机记录 (id, 明文)，以及因解不开而跳过的条数（[`Vault::local_records`]）。
 pub type LocalRecords = (Vec<(Vec<u8>, keevo_crypto::SecretBytes)>, usize);
 
+/// 随修订一起删除与写入的本机记录（种类、ID；种类、ID、密文）。
+type LocalChanges = (
+    Vec<(&'static str, Vec<u8>)>,
+    Vec<(&'static str, Vec<u8>, Vec<u8>)>,
+);
+
 /// 重建的结果（[`Vault::rebuild_item`]）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rebuilt {
@@ -699,6 +705,30 @@ impl Vault {
             item_id.as_bytes(),
             value.as_bytes(),
         )
+    }
+
+    /// 永久删除 `item_id` 时撤销它的 SSH Agent 授权：返回要随墓碑一起删除与写入的本机记录。
+    ///
+    /// 迁移完成之后删除记录：旧的条目属性已被忽略，条目随旧备份回来也没有授权。迁移还没有完成时，没有记录的密钥会
+    /// 从旧属性迁入，因此改为写入 `off`：这个持久的决定让迁移跳过它（确认评审 M3）。
+    fn ssh_agent_revocation(&self, item_id: Id128) -> Result<LocalChanges> {
+        let kind = crate::ssh_agent::LOCAL_KIND;
+        if self.store.meta(META_SSH_AGENT_LOCAL)?.is_some() {
+            return Ok((vec![(kind, item_id.as_bytes().to_vec())], Vec::new()));
+        }
+        let ct = self.seal_ssh_agent_record(item_id, crate::ssh_agent::OFF)?;
+        Ok((Vec::new(), vec![(kind, item_id.as_bytes().to_vec(), ct)]))
+    }
+
+    fn seal_ssh_agent_record(&self, item_id: Id128, value: &str) -> Result<Vec<u8>> {
+        let session = self.session()?;
+        Ok(keevo_crypto::seal_local_record(
+            session.keyset.account_key(),
+            &session.account_id,
+            crate::ssh_agent::LOCAL_KIND,
+            item_id.as_bytes(),
+            value.as_bytes(),
+        )?)
     }
 
     /// 把 M1.4 写在条目属性中的策略迁移到本机记录，并从条目中删除属性（只做一次，之后条目属性一律忽略）。
@@ -1454,10 +1484,15 @@ impl Vault {
 
     /// 对全部带附件的条目回收附件（`spec/revisions.md` §7.3 第 1 条）。解锁后进行，补上此前失败或中断的回收。
     /// 只读取带附件的条目的历史。返回删除的个数。
+    ///
+    /// 每个条目单独处理：某个条目的历史读不出时，跳过它（它的附件保留），继续处理其余条目，不让一个损坏的条目
+    /// 永远挡住全库的回收（确认评审 M6）。
     fn collect_all_attachments(&mut self) -> Result<usize> {
         let mut removed = 0usize;
         for item_id in self.store.items_with_attachments()? {
-            removed = removed.saturating_add(self.collect_attachments(item_id)?);
+            if let Ok(n) = self.collect_attachments(item_id) {
+                removed = removed.saturating_add(n);
+            }
         }
         Ok(removed)
     }
@@ -1729,13 +1764,15 @@ impl Vault {
             item_id,
             heads.iter().map(|h| h.rev_id).collect(),
         )?;
-        // 永久删除：附件与本机的 Agent 授权随之删除，与墓碑在同一个事务中（第五轮预审 K6、第五轮评审 L4）。
+        // 永久删除：附件与本机的 Agent 授权随之撤销，与墓碑在同一个事务中（第五轮预审 K6、第五轮评审 L4）。
         // 即使条目随旧备份回来，也不在 Agent 中提供
+        let (delete_local, put_local) = self.ssh_agent_revocation(item_id)?;
         self.store.insert_revisions_with(
             &rows,
             &WriteExtras {
                 delete_attachments_of: Some(item_id),
-                delete_local: vec![(crate::ssh_agent::LOCAL_KIND, item_id.as_bytes().to_vec())],
+                delete_local,
+                put_local,
                 ..WriteExtras::default()
             },
         )?;
@@ -1835,27 +1872,21 @@ impl Vault {
             item_id,
             heads.iter().map(|h| h.rev_id).collect(),
         )?);
-        // SSH Agent 的本机授权（含明确关闭）移到新条目；旧条目的记录删除，它随旧备份回来也没有授权（第五轮评审 L4）
+        // SSH Agent 的本机授权（含明确关闭）移到新条目；旧条目的授权撤销，它随旧备份回来也没有授权（第五轮评审 L4）
         let kind = crate::ssh_agent::LOCAL_KIND;
-        let put_local = match self.ssh_agent_records()?.remove(&item_id) {
-            Some(value) => {
-                let session = self.session()?;
-                let ct = keevo_crypto::seal_local_record(
-                    session.keyset.account_key(),
-                    &session.account_id,
-                    kind,
-                    new_id.as_bytes(),
-                    value.as_bytes(),
-                )?;
-                vec![(kind, new_id.as_bytes().to_vec(), ct)]
-            }
-            None => Vec::new(),
-        };
+        let (delete_local, mut put_local) = self.ssh_agent_revocation(item_id)?;
+        if let Some(value) = self.ssh_agent_records()?.remove(&item_id) {
+            put_local.push((
+                kind,
+                new_id.as_bytes().to_vec(),
+                self.seal_ssh_agent_record(new_id, &value)?,
+            ));
+        }
         self.store.insert_revisions_with(
             &rows,
             &WriteExtras {
                 delete_attachments_of: Some(item_id),
-                delete_local: vec![(kind, item_id.as_bytes().to_vec())],
+                delete_local,
                 put_local,
                 ..WriteExtras::default()
             },

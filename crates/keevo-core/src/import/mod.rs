@@ -698,7 +698,8 @@ impl Builder {
                 &notes,
             );
         }
-        if self.item.title.is_empty() {
+        // 规整模式才补写空标题；Keevo 自己的格式中空标题是合法的值，原样保留（确认评审 M2）
+        if !self.exact && self.item.title.is_empty() {
             self.item.title = self
                 .item
                 .first_url()

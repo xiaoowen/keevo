@@ -612,12 +612,15 @@ def export_vectors() -> dict:
                         "vaults": [{"name": "个人", "items": [{"type": "login", "title": "GitHub", "fields": [
                             {"kind": "concealed", "label": "密码", "purpose": "password", "value": "  correct horse  "}]}]}]},
                        ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    # 另一组合法参数：迭代次数与并行度不同
+    kdf_other = kdf_encode(KDF_ALG_ARGON2ID, M_MIN, T_MIN + 1, 2, det("export/salt-other", 16))
     valid = []
-    for name, password, equivalent, plaintext in [
-        ("json_items", "plum orbit cactus velvet 41", None, plain),
+    for name, password, equivalent, plaintext, kdf in [
+        ("json_items", "plum orbit cactus velvet 41", None, plain, kdf),
         # 全角与半角的口令 NFKD 之后相同，两者都能打开
-        ("nfkd_equivalent", "ｐｌｕｍ orbit cactus velvet ４１", "plum orbit cactus velvet 41", plain),
-        ("empty_plaintext", "plum orbit cactus velvet 41", None, b""),
+        ("nfkd_equivalent", "ｐｌｕｍ orbit cactus velvet ４１", "plum orbit cactus velvet 41", plain, kdf),
+        ("empty_plaintext", "plum orbit cactus velvet 41", None, b"", kdf),
+        ("other_kdf_params", "plum orbit cactus velvet 41", None, plain, kdf_other),
     ]:
         nonce = det(f"export/{name}/nonce", 24)
         data = export_seal(password, kdf, nonce, plaintext)
@@ -659,11 +662,16 @@ def export_vectors() -> dict:
     bad("magic_changed", flip(0), "malformed")
     bad("version_2", base[:8] + b"\x02" + base[9:], "unsupported_version")
     bad("salt_changed", flip(9 + 13), "decryption_failed")
+    # KDF 参数改成另一组合法的值：派生出的密钥与 AAD 都变了，认证失败
+    bad("kdf_t_changed_within_range", base[:9] + kdf_encode(KDF_ALG_ARGON2ID, M_MIN, T_MIN + 1, 1, det("export/salt", 16)) + base[38:],
+        "decryption_failed")
     bad("nonce_changed", flip(38), "decryption_failed")
     bad("ciphertext_changed", flip(62), "decryption_failed")
     bad("tag_changed", flip(len(base) - 1), "decryption_failed")
     bad("truncated_before_tag", base[:62 + 15], "malformed")
     bad("kdf_t_below_minimum", base[:9] + kdf_encode(KDF_ALG_ARGON2ID, M_MIN, T_MIN - 1, 1, det("export/salt", 16)) + base[38:],
+        "kdf_invalid")
+    bad("kdf_unknown_algorithm", base[:9] + kdf_encode(0x02, M_MIN, T_MIN, 1, det("export/salt", 16)) + base[38:],
         "kdf_invalid")
     return {
         "spec": "spec/export.md §3（草案）",

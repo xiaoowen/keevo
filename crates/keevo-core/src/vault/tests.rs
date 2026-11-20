@@ -1105,6 +1105,52 @@ fn review5_l4_failed_migration_does_not_regrant_revoked_policy() {
 }
 
 #[test]
+fn review5c_m3_purge_during_incomplete_migration_survives_restore() {
+    use crate::ssh_agent::{ATTRIBUTE, AgentPolicy};
+    let dir = TempDir::new();
+    let (mut v, sk) = Vault::create(&dir.db(), "pw", fast_params()).unwrap();
+    let key = v
+        .create_item(
+            v.vaults().unwrap()[0].id,
+            ItemType::SshKey,
+            "legacy key",
+            vec![],
+        )
+        .unwrap();
+    v.revise(key, |doc, hlc, rev| {
+        Ok(doc.set(
+            RecordKey::attr(ATTRIBUTE),
+            RecordValue::Text("unlocked".into()),
+            hlc,
+            rev,
+        )?)
+    })
+    .unwrap();
+    let backup = dir.0.join("legacy.sqlite");
+    v.backup_to(&backup).unwrap();
+    v.store.execute_for_tests("DELETE FROM meta WHERE key = 'ssh_agent_local'; CREATE TRIGGER review5c_fail BEFORE INSERT ON revision BEGIN SELECT RAISE(ABORT, 'injected migration failure'); END;").unwrap();
+    v.lock();
+    v.unlock("pw", &sk).unwrap();
+    assert_eq!(
+        v.ssh_agent_policies().unwrap().get(&key),
+        Some(&AgentPolicy::Unlocked)
+    );
+    assert!(v.store.meta(META_SSH_AGENT_LOCAL).unwrap().is_none());
+    v.store
+        .execute_for_tests("DROP TRIGGER review5c_fail")
+        .unwrap();
+    v.set_ssh_agent_policy(key, None).unwrap();
+    v.purge_item(key).unwrap();
+    assert!(!v.ssh_agent_policies().unwrap().contains_key(&key));
+    v.restore_from(&backup).unwrap();
+    v.unlock("pw", &sk).unwrap();
+    assert!(
+        !v.ssh_agent_policies().unwrap().contains_key(&key),
+        "迁移未完成时永久删除的旧密钥，也不得在恢复后重新授权"
+    );
+}
+
+#[test]
 fn review5_a1_attachment_context_and_chunk_binding_controls() {
     let dir = TempDir::new();
     let (mut v, _) = Vault::create(&dir.db(), "pw", fast_params()).unwrap();

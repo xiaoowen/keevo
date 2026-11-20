@@ -29,6 +29,96 @@ fn item(v: &mut Vault, kind: ItemType) -> Id128 {
 }
 
 #[test]
+fn review5c_m1_repetition_does_not_reach_export_threshold() {
+    let mut accepted = Vec::new();
+    for base in [
+        "password",
+        "password123",
+        "password1234567890",
+        "qwerty123456",
+        "abc123!",
+        "letmein123!",
+    ] {
+        let pw = base.repeat(1024 / base.len());
+        if crate::export::export_password_ok(&pw) {
+            accepted.push((base, crate::strength::estimate(&pw)));
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "重复常见弱口令不应达到导出门槛：{accepted:?}"
+    );
+}
+
+#[test]
+fn review5c_m2_own_export_preserves_empty_title() {
+    let (_t, mut v, _) = fixture();
+    let vault_id = v.vaults().unwrap()[0].id;
+    let id = v
+        .create_item(vault_id, ItemType::SecureNote, "", vec![])
+        .unwrap();
+    assert_eq!(v.item(id).unwrap().doc.overview().title, "");
+    let exported = crate::export::export(&v, crate::export::Format::Json, None, None).unwrap();
+    let parsed = crate::import::parse(crate::import::Source::Keevo, &exported.bytes, None).unwrap();
+    assert_eq!(parsed.items[0].title, "", "原样模式不能补写合法的空标题");
+}
+
+#[test]
+fn review5c_m6_gc_continues_after_an_unreadable_item() {
+    let (_t, mut v, sk) = fixture();
+    let mut ids = [
+        item(&mut v, ItemType::SecureNote),
+        item(&mut v, ItemType::SecureNote),
+    ];
+    ids.sort_by_key(|id| *id.as_bytes());
+    let blocked = ids[0];
+    let healthy = ids[1];
+    v.add_attachment(blocked, "retained.txt", b"retain", 1)
+        .unwrap();
+    // 使损坏只影响历史：当前头仍能读取。
+    v.update_item(blocked, vec![Edit::SetTitle("current readable".into())])
+        .unwrap();
+    let attachment = v
+        .add_attachment(healthy, "garbage.txt", b"garbage", 1)
+        .unwrap();
+    let field = v
+        .item(healthy)
+        .unwrap()
+        .doc
+        .records
+        .iter()
+        .find_map(|(k, r)| match (k, &r.value) {
+            (RecordKey::Field(id), Some(RecordValue::Field(f)))
+                if f.kind == FieldKind::Attachment =>
+            {
+                Some(*id)
+            }
+            _ => None,
+        })
+        .unwrap();
+    v.update_item(healthy, vec![Edit::RemoveField(field)])
+        .unwrap();
+    // 夹具模拟历史清理已提交，进程在附件回收前中断；另一条目的旧密文损坏。
+    v.store_for_tests().execute_for_tests(&format!(
+        "UPDATE revision SET pruned=1, wrapped_key_ct=NULL, overview_ct=NULL, details_ct=NULL WHERE object_id=x'{}' AND rev_id NOT IN (SELECT rev_id FROM head); UPDATE revision SET details_ct=x'00' WHERE object_id=x'{}' AND rev_id NOT IN (SELECT rev_id FROM head);",
+        healthy.to_hex(), blocked.to_hex(),
+    )).unwrap();
+    assert!(v.item(blocked).is_ok());
+    assert!(v.item(healthy).is_ok());
+    for _ in 0..2 {
+        v.lock();
+        v.unlock("pw", &sk).unwrap();
+    }
+    assert!(
+        v.store_for_tests()
+            .attachment(&attachment.id)
+            .unwrap()
+            .is_none(),
+        "一个条目的历史损坏，不能阻止后续健康条目回收无引用附件"
+    );
+}
+
+#[test]
 fn review5_l1_repeated_tail_is_not_export_entropy() {
     let pw = "a".repeat(80);
     assert!(

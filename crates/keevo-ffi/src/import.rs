@@ -238,12 +238,14 @@ impl KeevoVault {
         let only = vault_id.as_deref().map(parse_id).transpose()?;
         // 每次导出都要求刚刚为导出重新验证过（第五轮预审 K15）：加密导出也一样，拿到文件和导出密码的人就能
         // 读出全部条目。标记只由 reverify_for_export 签发，用一次即作废，其他用途的重新验证不算
-        // 标记绑定签发时的解锁代次：锁定后又解锁过，即使还在两分钟之内也作废（第五轮评审 L8）
-        let epoch = self.vault().unlock_epoch();
-        let fresh = self
-            .reverified()
-            .take()
-            .is_some_and(|(at, issued)| at.elapsed() <= REVERIFY_WINDOW && Some(issued) == epoch);
+        // 标记绑定签发时的解锁代次：锁定后又解锁过，即使还在两分钟之内也作废（第五轮评审 L8）。
+        // 先取走标记，再持有导出所用的同一把保险库锁核对代次并取数：两步之间若有新的解锁，代次不同，验证作废；
+        // 核对之后到取数完成，不会有别的解锁插进来（确认评审 M4）。两把锁不嵌套
+        let token = self.reverified().take();
+        let vault = self.vault();
+        let fresh = token.is_some_and(|(at, issued)| {
+            at.elapsed() <= REVERIFY_WINDOW && Some(issued) == vault.unlock_epoch()
+        });
         if !fresh {
             return Err(KeevoError::InvalidInput {
                 message: "reverify".into(),
@@ -251,11 +253,12 @@ impl KeevoVault {
         }
         let password = export_password.map(zeroize::Zeroizing::new);
         let exported = export::export(
-            &self.vault(),
+            &vault,
             format,
             only,
             password.as_deref().map(String::as_str),
         )?;
+        drop(vault);
         write_new_file(Path::new(&path), &exported.bytes).map_err(|e| KeevoError::Internal {
             message: format!("write export: {e}"),
         })?;
