@@ -119,7 +119,7 @@ pub(super) fn parse(data: &[u8], password: Option<&str>) -> Result<Parsed, Impor
                         NewField {
                             kind: FieldKind::KvList,
                             label: f.label,
-                            purpose: None,
+                            purpose: f.purpose,
                             data: FieldData::Kv(
                                 entries
                                     .into_iter()
@@ -137,7 +137,7 @@ pub(super) fn parse(data: &[u8], password: Option<&str>) -> Result<Parsed, Impor
                         NewField {
                             kind: FieldKind::RecoveryCodes,
                             label: f.label,
-                            purpose: None,
+                            purpose: f.purpose,
                             data: FieldData::Codes(
                                 codes
                                     .into_iter()

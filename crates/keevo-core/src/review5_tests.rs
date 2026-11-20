@@ -1,7 +1,8 @@
 //! 第五轮正式评审（2026-11-20，外部模型，`docs/reviews/2026-11-20-model-review-round5.md`）的反例测试。
 //! 每个测试断言"应当成立"的行为：在修复之前的实现上失败，证实了对应的发现；修复之后作为回归测试。
-//! 与评审补丁的差异见处理记录（L5、L8 按处理记录选择的语义调整了断言）。
-#![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+//! 与评审补丁的差异见处理记录（L5、L8 按处理记录选择的语义调整了断言）。`review5c_`、`review5d_` 开头的测试来自
+//! 第五轮的两次确认评审（`docs/reviews/2026-11-20-model-review-round5-confirmation*.md`）。
+#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::print_stderr)]
 
 use crate::{Edit, NewField, Vault};
 use keevo_crypto::{AccountSecretKey, Id128, KdfParams};
@@ -26,6 +27,90 @@ fn fixture() -> (Temp, Vault, AccountSecretKey) {
 fn item(v: &mut Vault, kind: ItemType) -> Id128 {
     v.create_item(v.vaults().unwrap()[0].id, kind, "review fixture", vec![])
         .unwrap()
+}
+
+#[test]
+fn review5d_n1_near_repetition_does_not_reach_export_threshold() {
+    let mut changed = "password123".repeat(20);
+    changed.replace_range(110..111, "!");
+    let cases = [
+        ("suffix", format!("{}!", "password123".repeat(10))),
+        (
+            "insertion",
+            format!("{}!{}", "password123".repeat(5), "password123".repeat(5)),
+        ),
+        ("substitution", changed),
+        (
+            "alternating_blocks",
+            format!("{}{}", "password123".repeat(3), "qwerty123456".repeat(3)).repeat(3),
+        ),
+        ("alternating_words", "password123qwerty123456".repeat(10)),
+    ];
+    let mut accepted = Vec::new();
+    for (name, password) in cases {
+        let strength = crate::export::export_password_strength(&password);
+        let allowed = crate::export::export_password_ok(&password);
+        eprintln!(
+            "{name}: len={}, {strength:?}, export={allowed}",
+            password.len()
+        );
+        if allowed {
+            accepted.push((name, strength));
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "常见口令的廉价重复变体不应达到导出门槛：{accepted:?}"
+    );
+}
+
+#[test]
+fn review5d_n2_own_export_preserves_structured_field_purpose() {
+    let (_t, mut v, _) = fixture();
+    let vault_id = v.vaults().unwrap()[0].id;
+    v.create_item(
+        vault_id,
+        ItemType::SecureNote,
+        "structured fields",
+        vec![
+            NewField {
+                kind: FieldKind::KvList,
+                label: "environment".into(),
+                purpose: Some(Purpose::Notes),
+                data: FieldData::Kv(vec![keevo_format::KvEntry {
+                    key: "TOKEN".into(),
+                    value: "example".into(),
+                    concealed: true,
+                }]),
+            },
+            NewField {
+                kind: FieldKind::RecoveryCodes,
+                label: "recovery".into(),
+                purpose: Some(Purpose::Notes),
+                data: FieldData::Codes(vec![keevo_format::CodeEntry {
+                    code: "1234-5678".into(),
+                    used: false,
+                }]),
+            },
+        ],
+    )
+    .unwrap();
+    let exported = crate::export::export(&v, crate::export::Format::Json, None, None).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&exported.bytes).unwrap();
+    for f in json["vaults"][0]["items"][0]["fields"].as_array().unwrap() {
+        assert_eq!(f["purpose"], "notes");
+    }
+    let parsed = crate::import::parse(crate::import::Source::Keevo, &exported.bytes, None).unwrap();
+    let purposes: Vec<_> = parsed.items[0]
+        .fields
+        .iter()
+        .map(|(_, f)| f.purpose)
+        .collect();
+    assert_eq!(
+        purposes,
+        vec![Some(Purpose::Notes), Some(Purpose::Notes)],
+        "原样导入应保留合法结构化字段的 purpose"
+    );
 }
 
 #[test]

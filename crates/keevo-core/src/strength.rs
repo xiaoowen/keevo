@@ -117,51 +117,143 @@ pub fn estimate(password: &str) -> Strength {
     }
 }
 
-/// 估计一段字符（第五轮评审 L1、确认评审 M1）：
-/// 1. 整段是同一片段的重复（至少两次，最后一次可以不完整）：只估计这个片段，再乘以重复次数，与 zxcvbn 的重复
-///    模式相同。长的重复口令不会因为长而变强；
-/// 2. 否则每 MAX_ANALYZED 个字符一段，不同的段各自估计、相乘；与前面某处完全相同的段不再单独计入，最后按这样的段数
-///    整体乘一次。
+/// 估计一段字符（第五轮评审 L1，确认评审 M1、N1），取以下几种中最小的（更保守）：
+/// - 不超过 [`MAX_ANALYZED`] 个字符时，zxcvbn 整段分析（它自己识别一段之内的重复）；
+/// - LZ77 分解（[`lz_estimate`]）：对前面内容的复制只计入少量猜测，插入与替换不会凭空增加猜测次数；
+/// - 近似周期（[`near_period_estimate`]）：同一片段重复、其中最多 [`MAX_EDITS`] 处改动。
 ///
-/// 返回猜测次数，以及第一段的分析（用于给出提示）。
+/// 返回猜测次数，以及用于给出提示的分析。
 fn estimate_chars(chars: &[char]) -> (f64, Option<Analysis>) {
-    if let Some(p) = period(chars) {
-        let (base, first) = estimate_chars(chars.get(..p).unwrap_or_default());
-        let repeated = (base * to_f64(chars.len().div_ceil(p))).min(f64::MAX);
-        // 一段之内也照常分析，取两者中较小的（更保守）
-        if chars.len() <= MAX_ANALYZED {
-            let whole = most_guessable(chars, omnimatch(chars), false);
-            if whole.guesses < repeated {
-                return (whole.guesses, Some(whole));
+    let mut best = lz_estimate(chars);
+    if chars.len() <= MAX_ANALYZED {
+        let whole = most_guessable(chars, omnimatch(chars), false);
+        if whole.guesses <= best.0 {
+            best = (whole.guesses, Some(whole));
+        }
+    }
+    if let Some(near) = near_period_estimate(chars)
+        && near.0 < best.0
+    {
+        best = near;
+    }
+    best
+}
+
+/// 近似周期最多允许的改动处数。
+const MAX_EDITS: usize = 3;
+/// 每处改动的猜测次数中，字符的选择数（可打印 ASCII）。
+const EDIT_CHARS: f64 = 95.0;
+
+/// 近似周期：找最短的周期 `p`（至少重复两次），使得按每个位置上出现最多的字符还原出的基础片段，与原文最多只有
+/// [`MAX_EDITS`] 处不同。估计为：基础片段的猜测次数 × 重复次数 × 每处改动（位置 × [`EDIT_CHARS`]）。
+/// 在常见口令的重复上追加、替换几个字符，猜测次数只多一个小的因子（确认评审 N1）。
+fn near_period_estimate(chars: &[char]) -> Option<(f64, Option<Analysis>)> {
+    let n = chars.len();
+    for p in 1..=n / 2 {
+        let mut base = Vec::with_capacity(p);
+        let mut edits = 0usize;
+        for r in 0..p {
+            let mut counts: Vec<(char, usize)> = Vec::new();
+            let mut column = 0usize;
+            for c in chars.iter().skip(r).step_by(p) {
+                column = column.saturating_add(1);
+                match counts.iter_mut().find(|(x, _)| x == c) {
+                    Some(entry) => entry.1 = entry.1.saturating_add(1),
+                    None => counts.push((*c, 1)),
+                }
+            }
+            let Some(&(c, k)) = counts.iter().max_by_key(|(_, k)| *k) else {
+                break;
+            };
+            edits = edits.saturating_add(column.saturating_sub(k));
+            if edits > MAX_EDITS {
+                break;
+            }
+            base.push(c);
+        }
+        if edits <= MAX_EDITS && base.len() == p {
+            let (g, analysis) = estimate_chars(&base);
+            let per_edit = to_f64(n) * EDIT_CHARS;
+            let edit_cost = per_edit.powi(i32::try_from(edits).unwrap_or(i32::MAX));
+            let guesses = (g * to_f64(n.div_ceil(p)) * edit_cost).min(f64::MAX);
+            return Some((guesses, analysis));
+        }
+    }
+    None
+}
+
+/// 复制的最短长度：更短的重复片段按新内容计。
+const MIN_COPY: usize = 4;
+
+/// LZ77 分解的估计。从头往后，每个位置找与前面某处（可以与自身重叠）相同的最长片段：
+/// - 不短于 [`MIN_COPY`] 时记为一次**复制**，猜测次数按 zxcvbn 重复模式的方式计：重复次数（长度 ÷ 距离，向上取整）
+///   × 复制来源的选择数（前面已有的片段数）；
+/// - 否则这个字符是**新内容**。连续的新内容拼在一起，每 [`MAX_ANALYZED`] 个字符一段，用 zxcvbn 估计，各段相乘。
+///
+/// 因此在常见口令上重复、插入或替换少量字符、两段交替，猜测次数都只比基础片段多一个小的因子。这是保守的低估：
+/// 真正随机的长口令几乎没有长的重复，几乎全是新内容，不受影响。
+fn lz_estimate(chars: &[char]) -> (f64, Option<Analysis>) {
+    let n = chars.len();
+    let mut guesses = 1.0_f64;
+    let mut first: Option<Analysis> = None;
+    let mut literal: Vec<char> = Vec::new();
+    let mut tokens = 0usize;
+    let flush = |literal: &mut Vec<char>, guesses: &mut f64, first: &mut Option<Analysis>| {
+        for w in literal.chunks(MAX_ANALYZED) {
+            let result = most_guessable(w, omnimatch(w), false);
+            *guesses = (*guesses * result.guesses).min(f64::MAX);
+            if first.is_none() {
+                *first = Some(result);
             }
         }
-        return (repeated, first);
-    }
-    let mut guesses = 1.0_f64;
-    let mut repeats = 0u32;
-    let mut first: Option<Analysis> = None;
-    let windows: Vec<(usize, &[char])> = if chars.is_empty() {
-        vec![(0, chars)]
-    } else {
-        chars
-            .chunks(MAX_ANALYZED)
-            .enumerate()
-            .map(|(i, w)| (i * MAX_ANALYZED, w))
-            .collect()
+        literal.clear();
     };
-    for (start, w) in windows {
-        if occurs_before(chars, start, w) {
-            repeats = repeats.saturating_add(1);
-            continue;
-        }
-        let result = most_guessable(w, omnimatch(w), false);
-        guesses = (guesses * result.guesses).min(f64::MAX);
-        if first.is_none() {
-            first = Some(result);
+    let mut i = 0usize;
+    while i < n {
+        let (len, distance) = longest_match(chars, i);
+        if len >= MIN_COPY {
+            if !literal.is_empty() {
+                flush(&mut literal, &mut guesses, &mut first);
+                tokens = tokens.saturating_add(1);
+            }
+            let repeats = to_f64(len.div_ceil(distance.max(1)));
+            let sources = to_f64(tokens.max(1));
+            guesses = (guesses * repeats * sources).min(f64::MAX);
+            tokens = tokens.saturating_add(1);
+            i = i.saturating_add(len);
+        } else {
+            if let Some(c) = chars.get(i) {
+                literal.push(*c);
+            }
+            i = i.saturating_add(1);
         }
     }
-    let guesses = (guesses * f64::from(repeats.saturating_add(1))).min(f64::MAX);
+    if tokens == 0 && chars.is_empty() {
+        let result = most_guessable(chars, Vec::new(), false);
+        return (result.guesses, Some(result));
+    }
+    flush(&mut literal, &mut guesses, &mut first);
     (guesses, first)
+}
+
+/// 从 `i` 开始、与前面某处相同的最长片段：(长度, 距离)。来源可以与自身重叠（周期性的模式）。等长时取最近的。
+fn longest_match(chars: &[char], i: usize) -> (usize, usize) {
+    let rest = chars.get(i..).unwrap_or_default();
+    let mut best = (0usize, 0usize);
+    for start in (0..i).rev() {
+        let len = rest
+            .iter()
+            .zip(chars.get(start..).unwrap_or_default())
+            .take_while(|(a, b)| a == b)
+            .count();
+        if len > best.0 {
+            best = (len, i - start);
+            if len == rest.len() {
+                break;
+            }
+        }
+    }
+    best
 }
 
 /// 最短的周期 `p`：对所有 `i`，`chars[i] == chars[i + p]`；只在至少重复两次（`2p ≤ n`）时返回（KMP 前缀函数）。
@@ -185,11 +277,6 @@ fn period(chars: &[char]) -> Option<usize> {
     }
     let p = n - *pi.last()?;
     (p < n && 2 * p <= n).then_some(p)
-}
-
-/// `window`（从 `start` 开始）是否在更早的位置出现过（可以与自身重叠，因此周期性的模式也算）。
-fn occurs_before(chars: &[char], start: usize, window: &[char]) -> bool {
-    (0..start).any(|pos| chars.get(pos..pos + window.len()) == Some(window))
 }
 
 #[allow(
@@ -1385,6 +1472,70 @@ mod tests {
                 assert!(estimate(&repeated).score <= 3, "{base} × {n}");
             }
         }
+        // 近似重复的各种变体（确认评审 N1）：在常见口令的重复上追加、插入、替换一个字符，或与另一个常见片段交替。
+        // 1. 对非常常见的基础口令，这些变体都达不到最高档；
+        // 2. 对任意基础片段，估计不超过模型上限：基础 × 重复次数 × 一处改动的代价（位置 × 95），重复本身不再虚增
+        let variants_of = |base: &str, n: usize| -> Vec<String> {
+            let plain = base.repeat(n);
+            let len = plain.chars().count();
+            let mut out = vec![
+                format!("{plain}!"),
+                format!("!{plain}"),
+                format!("{}#{}", base.repeat(n / 2), base.repeat(n - n / 2)),
+                format!("{}{}", base.repeat(2), "qwerty".repeat(2)).repeat(n),
+            ];
+            for pos in [0, len / 3, len / 2, len - 1] {
+                let mut chars: Vec<char> = plain.chars().collect();
+                chars[pos] = '%';
+                out.push(chars.into_iter().collect());
+            }
+            out
+        };
+        for base in ["password", "password123", "qwerty123456", "abc123"] {
+            for n in [3, 5, 10, 20] {
+                for v in variants_of(base, n) {
+                    let s = estimate(&v);
+                    assert!(s.score <= 3, "{v} → {s:?}");
+                }
+            }
+        }
+        for base in ["letmein123!", "iloveyou2026", "Tr0ub4dor&3"] {
+            let g = estimate(base).guesses;
+            for n in [3, 5, 10, 20] {
+                for v in variants_of(base, n)
+                    .into_iter()
+                    .take(3)
+                    .chain(variants_of(base, n).into_iter().skip(4))
+                {
+                    let len = to_f64(v.chars().count());
+                    let bound = g * to_f64(n + 1) * len * 95.0 * 2.0;
+                    let s = estimate(&v);
+                    assert!(s.guesses <= bound, "{v} → {s:?}，上限 {bound}");
+                }
+            }
+        }
+        // 两个不同的常见口令拼在一起，重复只多一个小的因子，估计与拼接本身相同（是否达到 4 分由 zxcvbn 对拼接的估计决定）
+        let pair = estimate("letmein123!dragon99");
+        let pair_repeated = estimate(&"letmein123!dragon99".repeat(3));
+        assert!(
+            pair_repeated.guesses <= pair.guesses * 4.0,
+            "{pair:?} {pair_repeated:?}"
+        );
+        // 真正随机的长口令仍然很强（几乎没有长的重复，全是新内容）
+        let random_long = "q7Lm2Xv9Rk4Tz8Wc1Hn6Jp3Bd5Fg0YstR8vN2kQ9wL4mZ7xP1cH6jB3dF5gY0sAe9Ku3Wn7Qz1Rx5Tm8Vb2Hc4Pf6Lj0Ds";
+        assert!(random_long.len() > MAX_ANALYZED);
+        assert_eq!(estimate(random_long).score, 4);
+        let words =
+            "maple orbit cactus velvet lantern quarry ember thimble walrus gazebo prism falcon";
+        assert!(words.len() > MAX_ANALYZED);
+        assert_eq!(estimate(words).score, 4, "{:?}", estimate(words));
+        // 很长或刻意构造的输入也很快算完
+        let tricky: String = (0..5000)
+            .map(|i| if i % 37 == 0 { 'b' } else { 'a' })
+            .collect();
+        let started = std::time::Instant::now();
+        let _ = estimate(&tricky);
+        assert!(started.elapsed().as_secs() < 5);
         // 真正随机的长口令仍然很强；很长的输入也很快算完
         let random = "q7Lm2Xv9Rk4Tz8Wc1Hn6Jp3Bd5Fg0YstR8vN2kQ9wL4mZ7xP1cH6jB3dF5gY0sA";
         assert_eq!(estimate(random).score, 4);
