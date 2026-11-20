@@ -131,7 +131,7 @@ fn estimate_chars(chars: &[char]) -> (f64, Option<Analysis>) {
             best = (whole.guesses, Some(whole));
         }
     }
-    if let Some(near) = near_period_estimate(chars)
+    if let Some(near) = near_period_estimate(chars, best.0)
         && near.0 < best.0
     {
         best = near;
@@ -139,26 +139,68 @@ fn estimate_chars(chars: &[char]) -> (f64, Option<Analysis>) {
     best
 }
 
+/// 最高档（4 分）的门槛：猜测次数达到它之后，更精确的估计不改变分数。
+const TOP_SCORE_GUESSES: f64 = 1e10;
+
 /// 近似周期最多允许的改动处数（替换、插入或删除）。
 const MAX_EDITS: usize = 3;
 /// 每处改动的猜测次数中，字符的选择数（可打印 ASCII）。
 const EDIT_CHARS: f64 = 95.0;
-/// 近似周期最多检查的候选周期数（每个候选要做几次带状动态规划）。
+/// 近似周期中，按出现次数找候选时最多检查的周期数。
 const MAX_PERIOD_CANDIDATES: usize = 32;
+/// 近似周期中，最多比较总代价的匹配数。
+const MAX_COST_EVALS: usize = 16;
+/// 重复份数不超过这么多时，另外把每一份的位置都当作基础片段的候选（这时完全相同的两份可能不存在）。
+const FEW_COPIES: usize = 4;
 
-/// 近似周期（确认评审 N1、P1）：原文是同一片段的重复，其中最多 [`MAX_EDITS`] 处改动（替换、插入或删除，
-/// 改动可以在任何一份重复中，包括第一份）。估计为：基础片段的猜测次数 × 重复次数 × 每处改动（位置数 × [`EDIT_CHARS`]）。
+/// 近似周期（确认评审 N1、P1、Q1、Q2）：原文是同一片段的重复（至少两份），其中最多 [`MAX_EDITS`] 处改动（替换、
+/// 插入或删除，改动可以在任何一份中）。估计为：基础片段的猜测次数 × 重复次数 × 每处改动（位置数 × [`EDIT_CHARS`]）。
 ///
-/// 候选的周期 `p`（至少重复两次）：长度为 `p`、出现次数最多的片段，它的重复要覆盖原文的绝大部分。对每个候选，
-/// 在没有改动时的对齐位置前后 [`MAX_EDITS`] 个相位上，求原文与"基础片段无限重复"的带状编辑距离。
-/// 在全部候选中取改动最少的，同样多时取最短的周期；只对选中的那个递归估计基础片段，它的长度至少减半。
-fn near_period_estimate(chars: &[char]) -> Option<(f64, Option<Analysis>)> {
+/// 基础片段的候选有两个来源：
+/// 1. 长度为 `p`、出现次数最多的片段，它的重复要覆盖原文的绝大部分（份数多时，总有完好的两份）；
+/// 2. 份数不超过 [`FEW_COPIES`] 时，每一份所在的位置，前后各错开最多 [`MAX_EDITS`] 个字符（份数少、又有改动时，
+///    完全相同的两份可能不存在）。只用于不超过 [`MAX_ANALYZED`] 个字符的基础片段。
+///
+/// 对每个候选，在没有改动时的对齐位置前后 [`MAX_EDITS`] 个相位上（周期很短时是全部相位）求带状编辑距离。
+/// 匹配成功的按（改动处数, 周期）排序，取前 [`MAX_COST_EVALS`] 个按**总代价**比较，取最小的：改动最少的解释不一定
+/// 最便宜，基础片段是常见口令的解释可能多一处改动、代价却低得多。基础片段的估计不再递归找近似周期。
+///
+/// 只有比 `limit`（其他估计中最小的）更小、并且低于最高档门槛时，近似周期才影响结果：代价的下限（重复次数 ×
+/// 改动的代价，基础片段至少 1 次猜测）已经达到 `min(limit, 门槛)` 的候选不再估计基础片段（确认评审 P2）。
+fn near_period_estimate(chars: &[char], limit: f64) -> Option<(f64, Option<Analysis>)> {
     let n = chars.len();
-    // 最好的匹配：(改动处数, 周期, 基础片段的起点, 相位)。改动最少优先，同样多时取最短的周期
-    let mut best: Option<(usize, usize, usize, usize)> = None;
+    // 匹配成功的：(改动处数, 周期, 从原文开头对齐的基础片段)
+    let mut found: Vec<(usize, usize, Vec<char>)> = Vec::new();
+    let try_base = |p: usize, start: usize, found: &mut Vec<(usize, usize, Vec<char>)>| {
+        let Some(base) = chars.get(start..start.saturating_add(p)) else {
+            return;
+        };
+        let phases: Vec<usize> = if p <= 2 * MAX_EDITS + 1 {
+            (0..p).collect()
+        } else {
+            // 没有改动时，原文的开头对应基础片段中的位置
+            let anchor = (p - start % p) % p;
+            (0..=2 * MAX_EDITS)
+                .map(|shift| (anchor + p * (MAX_EDITS + 1) + shift - MAX_EDITS) % p)
+                .collect()
+        };
+        for phase in phases {
+            if let Some(edits) = periodic_edit_distance(chars, base, phase) {
+                let rotated: Vec<char> = (0..p)
+                    .filter_map(|k| base.get((phase + k) % p).copied())
+                    .collect();
+                found.push((edits, p, rotated));
+            }
+        }
+    };
+    // 1. 按出现次数
+    // 至少两份；删除可以让原文比两份完整的基础片段更短
+    let longest = n.saturating_add(MAX_EDITS) / 2;
     let mut candidates = 0usize;
-    for p in 1..=n / 2 {
-        let (start, count) = most_frequent(chars, p)?;
+    for p in 1..=longest.min(n) {
+        let Some((start, count)) = most_frequent(chars, p) else {
+            break;
+        };
         if count < 2 {
             // 没有长度为 p 的片段重复出现，更长的也不会有
             break;
@@ -172,20 +214,9 @@ fn near_period_estimate(chars: &[char]) -> Option<(f64, Option<Analysis>)> {
         {
             continue;
         }
-        let Some(base) = chars.get(start..start.saturating_add(p)) else {
-            continue;
-        };
-        // 没有改动时，原文的开头对应基础片段中的位置
-        let anchor = (p - start % p) % p;
-        for shift in 0..=2 * MAX_EDITS {
-            let phase = (anchor + p * (MAX_EDITS + 1) + shift - MAX_EDITS) % p;
-            if let Some(edits) = periodic_edit_distance(chars, base, phase)
-                && best.is_none_or(|b| edits < b.0)
-            {
-                best = Some((edits, p, start, phase));
-            }
-        }
-        if best.is_some_and(|b| b.0 == 0) {
+        try_base(p, start, &mut found);
+        if found.iter().any(|f| f.0 == 0) {
+            // 完全的周期：最短的就是最好的
             break;
         }
         candidates = candidates.saturating_add(1);
@@ -193,28 +224,63 @@ fn near_period_estimate(chars: &[char]) -> Option<(f64, Option<Analysis>)> {
             break;
         }
     }
-    let (edits, p, start, phase) = best?;
-    let base = chars.get(start..start.saturating_add(p))?;
-    let rotated: Vec<char> = (0..p)
-        .filter_map(|k| base.get((phase + k) % p).copied())
-        .collect();
-    let (g, analysis) = estimate_chars(&rotated);
+    // 2. 份数少：每一份的位置。基础片段更长时它自己就有足够的新内容，或者里面的重复由第 1 种候选找到
+    if !found.iter().any(|f| f.0 == 0) {
+        let low = (n.saturating_sub(MAX_EDITS) / FEW_COPIES).max(1);
+        for p in low..=longest.min(n).min(MAX_ANALYZED) {
+            for copy in 0..FEW_COPIES {
+                // 前面的插入或删除会让这一份前后错开最多 MAX_EDITS 个字符
+                let slot = copy.saturating_mul(p);
+                for start in slot.saturating_sub(MAX_EDITS)..=slot.saturating_add(MAX_EDITS) {
+                    if start.saturating_add(p) <= n {
+                        try_base(p, start, &mut found);
+                    }
+                }
+            }
+        }
+    }
+    found.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)).then_with(|| a.2.cmp(&b.2)));
+    found.dedup();
     let per_edit = to_f64(n) * EDIT_CHARS;
-    let edit_cost = per_edit.powi(i32::try_from(edits).unwrap_or(i32::MAX));
-    Some((
-        (g * to_f64(n.div_ceil(p)) * edit_cost).min(f64::MAX),
-        analysis,
-    ))
+    let mut best: Option<(f64, Option<Analysis>)> = None;
+    for (edits, p, rotated) in found.into_iter().take(MAX_COST_EVALS) {
+        let edit_cost = per_edit.powi(i32::try_from(edits).unwrap_or(i32::MAX));
+        let floor = to_f64(n.div_ceil(p)) * edit_cost;
+        let target = best.as_ref().map_or(limit, |b| b.0).min(TOP_SCORE_GUESSES);
+        if floor >= target {
+            continue;
+        }
+        let (g, analysis) = base_estimate(&rotated);
+        let guesses = (g * floor).min(f64::MAX);
+        if best.as_ref().is_none_or(|b| guesses < b.0) {
+            best = Some((guesses, analysis));
+        }
+    }
+    best
 }
 
-/// 长度为 `p` 的片段中出现次数最多的一个：(第一次出现的位置, 次数)。滚动哈希，重叠的出现也计入；等次数时取最早的。
+/// 近似周期中基础片段的估计：zxcvbn（不超过 [`MAX_ANALYZED`] 个字符时）与 LZ77 分解中较小的，不再递归。
+fn base_estimate(chars: &[char]) -> (f64, Option<Analysis>) {
+    let lz = lz_estimate(chars);
+    if chars.len() <= MAX_ANALYZED {
+        let whole = most_guessable(chars, omnimatch(chars), false);
+        if whole.guesses <= lz.0 {
+            return (whole.guesses, Some(whole));
+        }
+    }
+    lz
+}
+
+/// 长度为 `p` 的片段中出现次数最多的一个：(第一次出现的位置, 次数)。滚动哈希找候选，同一个哈希值下再比较真实的
+/// 字符，碰撞不会被当作相同的片段（确认评审 Q3）。重叠的出现也计入；等次数时取最早的。
 fn most_frequent(chars: &[char], p: usize) -> Option<(usize, usize)> {
     const B: u64 = 1_000_003;
     if p == 0 || p > chars.len() {
         return None;
     }
     let pow = (1..p).fold(1u64, |acc, _| acc.wrapping_mul(B));
-    let mut seen: HashMap<u64, (usize, usize)> = HashMap::new();
+    // 哈希值 → 这个值下不同的片段：(第一次出现的位置, 次数)
+    let mut seen: HashMap<u64, Vec<(usize, usize)>> = HashMap::new();
     let mut h = 0u64;
     for (i, c) in chars.iter().enumerate() {
         if i >= p {
@@ -223,11 +289,20 @@ fn most_frequent(chars: &[char], p: usize) -> Option<(usize, usize)> {
         }
         h = h.wrapping_mul(B).wrapping_add(u64::from(*c));
         if i + 1 >= p {
-            let entry = seen.entry(h).or_insert((i + 1 - p, 0));
-            entry.1 = entry.1.saturating_add(1);
+            let start = i + 1 - p;
+            let slice = chars.get(start..=i)?;
+            let bucket = seen.entry(h).or_default();
+            match bucket
+                .iter_mut()
+                .find(|(first, _)| chars.get(*first..first + p) == Some(slice))
+            {
+                Some(entry) => entry.1 = entry.1.saturating_add(1),
+                None => bucket.push((start, 1)),
+            }
         }
     }
     seen.into_values()
+        .flatten()
         .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
 }
 
@@ -1491,8 +1566,152 @@ fn match_warning(m: &Match, sole: bool) -> Option<Warning> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::float_cmp)]
+#[allow(clippy::unwrap_used, clippy::float_cmp, clippy::print_stderr)]
 mod tests {
+    #[test]
+    fn review5f_q1_two_copies_with_one_substitution_are_rejected() {
+        let base: Vec<char> = "password123".chars().collect();
+        let mut failures = Vec::new();
+        for pos in [2, 5] {
+            let mut password = "password123".repeat(2);
+            password.replace_range(pos..pos + 1, "!");
+            let chars: Vec<char> = password.chars().collect();
+            assert_eq!(super::periodic_edit_distance(&chars, &base, 0), Some(1));
+            let bound =
+                super::estimate("password123").guesses * 2.0 * super::to_f64(chars.len()) * 95.0;
+            assert!(bound < 1e10);
+            let near = super::near_period_estimate(&chars, f64::MAX).map(|v| v.0);
+            let actual = crate::export::export_password_strength(&password);
+            let allowed = crate::export::export_password_ok(&password);
+            eprintln!(
+                "{password}: model={bound}, near={near:?}, actual={actual:?}, allowed={allowed}"
+            );
+            if allowed {
+                failures.push(password);
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "low-cost substitutions must not permit export: {failures:?}"
+        );
+    }
+
+    #[test]
+    fn review5f_q2_cheaper_common_password_phase_must_not_be_discarded() {
+        let base: Vec<char> = "letmein".chars().collect();
+        let password = "etm!inletmeinletmein"; // letmein × 3，删除开头 l，再替换一个 e
+        let chars: Vec<char> = password.chars().collect();
+        assert_eq!(super::periodic_edit_distance(&chars, &base, 0), Some(2));
+        assert_eq!(super::periodic_edit_distance(&chars, &base, 1), Some(1));
+        let bound =
+            super::estimate("letmein").guesses * 3.0 * (super::to_f64(chars.len()) * 95.0).powi(2);
+        assert!(bound < 1e10);
+        let near = super::near_period_estimate(&chars, f64::MAX).map(|v| v.0);
+        let strength = crate::export::export_password_strength(password);
+        eprintln!(
+            "canonical_base={}, rotated_base={}, model={bound}, near={near:?}, actual={strength:?}",
+            super::estimate("letmein").guesses,
+            super::estimate("etmeinl").guesses
+        );
+        assert!(
+            !crate::export::export_password_ok(password),
+            "model={bound}, actual={strength:?}"
+        );
+    }
+
+    #[test]
+    fn review5f_q3_hash_collision_is_not_a_repeated_substring() {
+        // 0 * B + B == 1 * B + 0，但 [0, B] 与 [1, 0] 不同。
+        let chars = ['\0', '\u{f4243}', '\u{1}', '\0'];
+        assert_ne!(&chars[..2], &chars[2..]);
+        assert_eq!(super::most_frequent(&chars, 2), Some((0, 1)));
+    }
+
+    #[test]
+    fn review5f_c1_banded_distance_matches_full_matrix() {
+        fn word(bits: usize, len: usize) -> Vec<char> {
+            (0..len)
+                .map(|i| if bits & (1 << i) == 0 { 'a' } else { 'b' })
+                .collect()
+        }
+        let mut checked = 0;
+        for n in 0..=7 {
+            for bits in 0..1 << n {
+                let text = word(bits, n);
+                for p in 1..=4 {
+                    for pattern in 0..1 << p {
+                        let base = word(pattern, p);
+                        for phase in 0..p {
+                            let m = n + super::MAX_EDITS;
+                            let mut row: Vec<usize> = (0..=m).collect();
+                            for i in 1..=n {
+                                let mut next = vec![i; m + 1];
+                                for j in 1..=m {
+                                    next[j] = (row[j] + 1).min(next[j - 1] + 1).min(
+                                        row[j - 1]
+                                            + usize::from(text[i - 1] != base[(phase + j - 1) % p]),
+                                    );
+                                }
+                                row = next;
+                            }
+                            let expected = row.into_iter().min().filter(|d| *d <= super::MAX_EDITS);
+                            assert_eq!(
+                                super::periodic_edit_distance(&text, &base, phase),
+                                expected,
+                                "text={text:?}, base={base:?}, phase={phase}"
+                            );
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("full-matrix comparisons={checked}");
+    }
+
+    #[test]
+    fn review5f_c2_additional_performance_cases() {
+        let symbols = b"4@8({[<3691!|70$5+%2";
+        let mut dense = String::new();
+        for i in 100_u32..132 {
+            for b in keevo_crypto::sha256(&i.to_le_bytes()) {
+                dense.push(char::from(symbols[usize::from(b) % symbols.len()]));
+            }
+        }
+        let mut repeated = dense[..64].repeat(16);
+        for pos in [2, 400, 900] {
+            repeated.insert(pos, 'Z');
+        }
+        let digits: String = (0_u32..32)
+            .flat_map(|i| keevo_crypto::sha256(&i.to_le_bytes()))
+            .map(|b| char::from(b'0' + b % 10))
+            .collect();
+        let _ = super::estimate("warm dictionaries");
+        for (label, password) in [
+            ("dense64", dense[..64].to_owned()),
+            ("dense128", dense[..128].to_owned()),
+            ("dense1024", dense),
+            ("l33t_period64_plus_three_insertions", repeated),
+            ("digits1024", digits),
+            (
+                "copy_interleaved",
+                (0..32)
+                    .map(|i| format!("4@8({{[<3691!|70$5+%2{i:02}"))
+                    .collect(),
+            ),
+        ] {
+            let start = std::time::Instant::now();
+            let strength = super::estimate(&password);
+            let elapsed = start.elapsed();
+            eprintln!("{label}: {elapsed:?}, score={}", strength.score);
+            assert!(
+                elapsed < std::time::Duration::from_secs(5),
+                "{label}: {elapsed:?}"
+            );
+            assert!(strength.guesses.is_finite());
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -1579,47 +1798,69 @@ mod tests {
         // 近似重复的各种变体（确认评审 N1）：在常见口令的重复上追加、插入、替换一个字符，或与另一个常见片段交替。
         // 1. 对非常常见的基础口令，这些变体都达不到最高档；
         // 2. 对任意基础片段，估计不超过模型上限：基础 × 重复次数 × 一处改动的代价（位置 × 95），重复本身不再虚增
-        let variants_of = |base: &str, n: usize| -> Vec<String> {
+        // (变体, 改动处数)；与另一个常见片段交替的变体没有改动处数（它是精确的周期，基础片段由两个常见口令组成）
+        let variants_of = |base: &str, n: usize| -> Vec<(String, Option<i32>)> {
             let plain = base.repeat(n);
             let len = plain.chars().count();
             let mut out = vec![
-                format!("{plain}!"),
-                format!("!{plain}"),
-                format!("{}#{}", base.repeat(n / 2), base.repeat(n - n / 2)),
-                format!("{}{}", base.repeat(2), "qwerty".repeat(2)).repeat(n),
+                (format!("{plain}!"), Some(1)),
+                (format!("!{plain}"), Some(1)),
+                (
+                    format!("{}#{}", base.repeat(n / 2), base.repeat(n - n / 2)),
+                    Some(1),
+                ),
+                (
+                    format!("{}{}", base.repeat(2), "qwerty".repeat(2)).repeat(n),
+                    None,
+                ),
             ];
             for pos in [0, len / 3, len / 2, len - 1] {
                 let mut chars: Vec<char> = plain.chars().collect();
                 chars[pos] = '%';
-                out.push(chars.into_iter().collect());
+                out.push((chars.into_iter().collect(), Some(1)));
             }
+            // 删掉开头一个字符、再替换一个字符：从常见口令的相位看是两处改动（确认评审 Q2）
+            let mut shifted: Vec<char> = plain.chars().skip(1).collect();
+            shifted[2] = '!';
+            out.push((shifted.into_iter().collect(), Some(2)));
             // 第一份之内的插入与删除（确认评审 P1），以及中间的删除
             for pos in [1, 2, base.len() / 2, len / 2] {
                 let mut inserted: Vec<char> = plain.chars().collect();
                 inserted.insert(pos, '!');
-                out.push(inserted.into_iter().collect());
+                out.push((inserted.into_iter().collect(), Some(1)));
                 let mut removed: Vec<char> = plain.chars().collect();
                 removed.remove(pos);
-                out.push(removed.into_iter().collect());
+                out.push((removed.into_iter().collect(), Some(1)));
             }
             out
         };
-        for base in ["password", "password123", "qwerty123456", "abc123"] {
-            for n in [3, 5, 10, 20] {
-                for v in variants_of(base, n) {
+        // 按规范的枚举模型（基础 × 重复次数 × 每处改动的位置数 × 95）代价低于 10¹⁰ 的，一律达不到最高档；
+        // 只有两份时，完全相同的两份可能不存在（确认评审 Q1）
+        let mut below = 0usize;
+        // debug 构建下 zxcvbn 较慢，这里取有代表性的组合；评审测试（review5e_、review5f_）另外覆盖了更多重复次数
+        for base in ["password", "password123", "letmein"] {
+            let g = estimate(base).guesses;
+            for n in [2, 3, 10] {
+                for (v, edits) in variants_of(base, n) {
                     let s = estimate(&v);
-                    assert!(s.score <= 3, "{v} → {s:?}");
+                    let len = v.chars().count();
+                    let bound = edits.map_or(0.0, |e| {
+                        g * to_f64(len.div_ceil(base.len())) * (to_f64(len) * 95.0).powi(e)
+                    });
+                    if bound < 1e10 {
+                        below += 1;
+                        assert!(s.score <= 3, "{v} → {s:?}，模型代价 {bound}");
+                    }
                 }
             }
         }
-        for base in ["letmein123!", "iloveyou2026", "Tr0ub4dor&3"] {
+        assert!(below > 100, "{below}");
+        // 对其他基础片段，估计不超过模型上限：重复本身不再虚增
+        for base in ["letmein123!", "Tr0ub4dor&3"] {
             let g = estimate(base).guesses;
-            for n in [3, 5, 10, 20] {
-                for v in variants_of(base, n)
-                    .into_iter()
-                    .take(3)
-                    .chain(variants_of(base, n).into_iter().skip(4))
-                {
+            for n in [3, 10] {
+                for (v, edits) in variants_of(base, n) {
+                    let Some(1) = edits else { continue };
                     let len = to_f64(v.chars().count());
                     let bound = g * to_f64(n + 1) * len * 95.0 * 2.0;
                     let s = estimate(&v);
