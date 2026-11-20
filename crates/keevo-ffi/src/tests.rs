@@ -1341,7 +1341,13 @@ fn backup_and_restore() {
         f.vault.create_backup(dir.clone(), "restore".into()),
         Err(KeevoError::InvalidInput { .. })
     ));
-    f.vault.check_backup(first.path.clone()).unwrap();
+    let check = f.vault.check_backup(first.path.clone()).unwrap();
+    assert_eq!(
+        check.created_ms,
+        Some(first.created_ms),
+        "备份内记录了创建时间"
+    );
+    assert!(!check.older_master_password);
 
     let later = f.login("备份之后");
     _ = f.vault.search(String::new()).unwrap();
@@ -1430,14 +1436,14 @@ fn import_and_export() {
     assert_eq!((again.total, again.duplicates), (4, 2));
     f.vault.cancel_import();
 
-    // 明文导出要求刚刚重新验证过，且只能用一次
+    // 导出要求刚刚为导出重新验证过，且只能用一次
     let out = f.dir.join("out.csv").to_string_lossy().into_owned();
     assert!(matches!(
         f.vault.export_vault(out.clone(), "csv".into(), None, None),
         Err(KeevoError::InvalidInput { message }) if message == "reverify"
     ));
-    // 夹具没有本机密钥，无法走主密码验证；这里直接记下"刚刚验证过"（reverify 成功时做的就是这件事）
-    f.vault.note_reverified();
+    // 夹具没有本机密钥，无法走主密码验证；这里直接记下"刚刚为导出验证过"
+    f.vault.note_export_reverified();
     assert_eq!(
         f.vault
             .export_vault(out.clone(), "csv".into(), None, None)
@@ -1455,12 +1461,25 @@ fn import_and_export() {
         let mode = std::fs::metadata(&out).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
     }
-    // 加密导出不需要重新验证；再导入另一个账户
+    // 加密导出同样要求重新验证（第五轮预审 K15）；再导入另一个账户
     let enc = f
         .dir
         .join("all.keevo-export")
         .to_string_lossy()
         .into_owned();
+    assert!(matches!(
+        f.vault.export_vault(
+            enc.clone(),
+            "keevo".into(),
+            None,
+            Some("plum orbit cactus velvet 41".into())
+        ),
+        Err(KeevoError::InvalidInput { message }) if message == "reverify"
+    ));
+    assert!(!export_password_ok("          ".into()));
+    assert!(!export_password_ok("password123".into()));
+    assert!(export_password_ok("plum orbit cactus velvet 41".into()));
+    f.vault.note_export_reverified();
     assert_eq!(
         f.vault
             .export_vault(

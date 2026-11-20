@@ -218,13 +218,13 @@ impl KeevoVault {
         Ok(moved)
     }
 
-    /// 导出到 `path`（新文件，权限 0600）。`format`：`keevo`（需要 `export_password`：至少 10 个字符、不全是空白、强度"很强"）、
-    /// `json`、`csv`。`vault_id` 为 `None` 时导出全部保险库。明文格式要求 2 分钟内重新验证过用户
-    /// （[`KeevoVault::reverify`]），且每次验证只能导出一次。返回导出的条目数。加密导出约需一秒。
+    /// 导出到 `path`（新文件，权限 0600）。`format`：`keevo`（需要 `export_password`，满足 [`export_password_ok`]）、
+    /// `json`、`csv`。`vault_id` 为 `None` 时导出全部保险库。任何格式都要求 2 分钟内为导出重新验证过用户
+    /// （[`KeevoVault::reverify_for_export`]），且每次验证只能导出一次。返回导出的条目数。加密导出约需一秒。
     ///
     /// # Errors
-    /// 已锁定；保险库不存在；导出密码过短；明文导出前没有重新验证（[`KeevoError::Locked`] 以外的
-    /// `InvalidInput { message: "reverify" }`）；文件无法写入。
+    /// 已锁定；保险库不存在；导出密码不满足要求；没有为导出重新验证（`InvalidInput { message: "reverify" }`）；
+    /// 文件无法写入。
     pub fn export_vault(
         &self,
         path: String,
@@ -236,16 +236,16 @@ impl KeevoVault {
             message: "export format".into(),
         })?;
         let only = vault_id.as_deref().map(parse_id).transpose()?;
-        if format != Format::Keevo {
-            let fresh = self
-                .reverified()
-                .take()
-                .is_some_and(|at| at.elapsed() <= REVERIFY_WINDOW);
-            if !fresh {
-                return Err(KeevoError::InvalidInput {
-                    message: "reverify".into(),
-                });
-            }
+        // 每次导出都要求刚刚为导出重新验证过（第五轮预审 K15）：加密导出也一样，拿到文件和导出密码的人就能
+        // 读出全部条目。标记只由 reverify_for_export 签发，用一次即作废，其他用途的重新验证不算
+        let fresh = self
+            .reverified()
+            .take()
+            .is_some_and(|at| at.elapsed() <= REVERIFY_WINDOW);
+        if !fresh {
+            return Err(KeevoError::InvalidInput {
+                message: "reverify".into(),
+            });
         }
         let password = export_password.map(zeroize::Zeroizing::new);
         let exported = export::export(
@@ -288,9 +288,36 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// 导出密码是否满足要求（`spec/export.md` §3）：至少 10 个字符、不全是空白、强度"很强"。界面用它决定能否继续。
+#[uniffi::export]
+#[must_use]
+pub fn export_password_ok(password: String) -> bool {
+    let password = zeroize::Zeroizing::new(password);
+    export::export_password_ok(&password)
+}
+
+#[uniffi::export]
 impl KeevoVault {
-    /// 记下"刚刚重新验证过"（明文导出用）。
-    pub(crate) fn note_reverified(&self) {
+    /// 为导出重新验证用户（`password` 为 `None` 时用 Touch ID，会弹出提示，请在后台线程调用）。通过后签发一个
+    /// 只能用于下一次导出的标记，2 分钟内有效（[`KeevoVault::export_vault`]）。
+    ///
+    /// # Errors
+    /// 同 [`KeevoVault::reverify`]。
+    pub fn reverify_for_export(&self, password: Option<String>) -> Result<(), KeevoError> {
+        let proof = password.as_deref().map_or(
+            keevo_core::Reverify::TouchId,
+            keevo_core::Reverify::Password,
+        );
+        self.vault().reverify(proof)?;
+        *self.reverified() = Some(Instant::now());
+        Ok(())
+    }
+}
+
+impl KeevoVault {
+    /// 测试用：记下"刚刚为导出重新验证过"（`reverify_for_export` 成功时做的就是这件事）。
+    #[cfg(test)]
+    pub(crate) fn note_export_reverified(&self) {
         *self.reverified() = Some(Instant::now());
     }
 }

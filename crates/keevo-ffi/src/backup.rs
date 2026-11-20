@@ -11,6 +11,15 @@ use keevo_core::backup::{self, Kind};
 
 use crate::{KeevoError, KeevoVault};
 
+/// 恢复前的检查结果（设计稿"预审修复 · 恢复"）。
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BackupCheck {
+    /// 备份内记录的创建时间（Unix 毫秒）；较早的备份没有。与文件名中的时间不一致时以它为准。
+    pub created_ms: Option<u64>,
+    /// 备份之后修改过主密码：恢复后要用备份时的旧主密码解锁。
+    pub older_master_password: bool,
+}
+
 /// 一份备份。
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct BackupInfo {
@@ -103,14 +112,19 @@ impl KeevoVault {
         Ok(backup::create(&self.vault(), Path::new(&dir), kind, now_ms())?.into())
     }
 
-    /// 检查 `path` 能否用来恢复这个保险库（不改变任何东西）。
+    /// 检查 `path` 能否用来恢复这个保险库（不改变任何东西），返回恢复确认需要的信息。
     ///
     /// # Errors
     /// [`KeevoError::Backup`]。
-    pub fn check_backup(&self, path: String) -> Result<(), KeevoError> {
-        self.vault()
+    pub fn check_backup(&self, path: String) -> Result<BackupCheck, KeevoError> {
+        let check = self
+            .vault()
             .check_backup(Path::new(&path))
-            .map_err(backup_error)
+            .map_err(backup_error)?;
+        Ok(BackupCheck {
+            created_ms: check.created_ms,
+            older_master_password: check.older_master_password,
+        })
     }
 
     /// 从备份恢复：先把当前的保险库备份到 `dir`，再替换。之后保险库处于锁定状态，界面应回到解锁页。

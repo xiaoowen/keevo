@@ -431,11 +431,22 @@ struct BreachCheckConfirmSheet: View {
         ) {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
                 KVCard {
-                    CardRow(label: tr("发送")) { Text(tr("每个密码 SHA-1 哈希的前 5 位（k-匿名）")).font(KV.Typography.body) } actions: {}
+                    CardRow(label: tr("发送"), multiline: true) {
+                        Text(tr("每个密码 SHA-1 哈希的前 5 位（k-匿名），另加随机的伪前缀")).font(KV.Typography.body).fixedSize(horizontal: false, vertical: true)
+                    } actions: {}
                     CardRowDivider()
                     CardRow(label: tr("不发送")) { Text(tr("密码、完整哈希、用户名与网址")).font(KV.Typography.body) } actions: {}
                     CardRowDivider()
+                    // 第五轮预审 K16：k-匿名挡不住的元数据，开启前说清楚（docs/governance.md §5）
+                    CardRow(label: tr("仍会暴露"), multiline: true) {
+                        Text(tr("保险库中不同密码的大致数量（以 64 个为一档），以及两次检查之间是否有密码改过"))
+                            .font(KV.Typography.body)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } actions: {}
+                    CardRowDivider()
                     CardRow(label: tr("比对")) { Text(tr("在这台 Mac 上进行")).font(KV.Typography.body) } actions: {}
+                    CardRowDivider()
+                    CardRow(label: tr("不检查")) { Text(tr("已忽略提醒的条目")).font(KV.Typography.body) } actions: {}
                     CardRowDivider()
                     CardRow(label: tr("时机")) { Text(tr("开启时与每次「重新检查」，结果只在内存中")).font(KV.Typography.body) } actions: {}
                 }

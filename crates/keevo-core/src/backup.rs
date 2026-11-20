@@ -73,6 +73,16 @@ pub struct Backup {
     pub size: u64,
 }
 
+/// 恢复前的检查结果（[`Vault::check_backup`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackupCheck {
+    /// 备份内记录的创建时间（Unix 毫秒）；较早的备份没有。文件名中的时间可以被改动，两者不一致时以它为准
+    /// （第五轮预审 K17）。
+    pub created_ms: Option<u64>,
+    /// 备份的密钥集版本（`epoch`）早于当前：备份之后修改过主密码或轮换过密钥，恢复后要用备份时的旧主密码解锁。
+    pub older_master_password: bool,
+}
+
 /// 文件名：`keevo-YYYYMMDD-HHMMSS-<原因>.keevo-backup`（UTC）。
 #[must_use]
 pub fn file_name(created_ms: u64, kind: Kind) -> String {
@@ -176,7 +186,8 @@ pub fn create(vault: &Vault, dir: &Path, kind: Kind, now_ms: u64) -> Result<Back
     vault.backup_to(&path)?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(io)?;
     // 文件名可以被改动；备份内另记一份创建时间，恢复时以它为准（第五轮预审 K17）
-    if let Err(e) = keevo_store::Store::mark_backup(&path, now_ms) {
+    // 记下与文件名相同的时间：文件没有被改名时两者完全一致
+    if let Err(e) = keevo_store::Store::mark_backup(&path, created) {
         let _ = std::fs::remove_file(&path);
         return Err(e.into());
     }

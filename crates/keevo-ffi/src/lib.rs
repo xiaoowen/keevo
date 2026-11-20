@@ -1583,7 +1583,6 @@ impl KeevoVault {
             keevo_core::Reverify::Password,
         );
         self.vault().reverify(proof)?;
-        self.note_reverified();
         Ok(())
     }
 
@@ -2544,12 +2543,14 @@ mod backup;
 mod developer;
 mod import;
 mod security;
-pub use backup::{BackupInfo, auto_backup_due, list_backups, prune_backups};
+pub use backup::{BackupCheck, BackupInfo, auto_backup_due, list_backups, prune_backups};
 pub use developer::{
     CliSessionInfo, DeveloperPrompt, RequestOrigin, SshAgentInfo, SshKeyInfo, SshSignRequest,
     ssh_agent_link_path,
 };
-pub use import::{ImportGroup, ImportPreview, ImportResult, import_sources, is_keevo_export};
+pub use import::{
+    ImportGroup, ImportPreview, ImportResult, export_password_ok, import_sources, is_keevo_export,
+};
 pub use security::{
     ItemSecurity, PasswordStrengthInfo, SecurityFinding, SecurityReport, password_strength,
     security_checks,

@@ -442,13 +442,16 @@ struct ExportSheet: View {
     @ViewState private var vaultId = ""
     @ViewState private var password = ""
     @ViewState private var confirm = ""
-    @ViewState private var confirmingPlain = false
+    /// 选好的保存位置；确认身份之后写入。
+    @ViewState private var target: URL?
+    @ViewState private var verifying = false
     @ViewState private var working = false
     @ViewState private var problem: String?
 
     private var passwordProblem: String? {
         guard format == "keevo" else { return nil }
-        if password.count < 10 { return password.isEmpty ? "" : tr("至少 10 个字符") }
+        // 规则在 Rust 中（spec/export.md §3）：至少 10 个字符、不全是空白、强度「很强」
+        if !exportPasswordOk(password: password) { return "" }
         if confirm != password { return confirm.isEmpty ? "" : tr("两次输入不一致") }
         return nil
     }
@@ -474,15 +477,17 @@ struct ExportSheet: View {
                     .fixedSize()
                 }
                 if format == "keevo" {
-                    LabeledInput(label: tr("导出密码"), hint: tr("至少 10 个字符"), focused: true) {
+                    LabeledInput(label: tr("导出密码"), focused: true) {
                         SecureField("", text: $password)
                     }
+                    ExportStrengthMeter(password: password)
                     LabeledInput(label: tr("再输入一次"), hint: passwordProblem.flatMap { $0.isEmpty ? nil : $0 }) {
                         SecureField("", text: $confirm).onSubmit(start)
                     }
-                    Text(tr("导出密码只用于这个文件，与主密码无关；忘记后文件无法打开。"))
+                    Text(tr("导出文件只受这个密码保护（没有账户密钥这一层），所以强度必须达到「很强」。它与主密码无关；忘记后文件无法打开。"))
                         .font(KV.Typography.footnote)
                         .foregroundStyle(KV.Colors.fgSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if let problem { Banner(kind: .danger, message: problem) }
             }
@@ -494,8 +499,10 @@ struct ExportSheet: View {
                 .keyboardShortcut(.defaultAction)
                 .disabled(passwordProblem != nil || working)
         }
-        .sheet(isPresented: $confirmingPlain) {
-            ExportPlainSheet { proof in await exportPlain(proof: proof) }
+        .sheet(isPresented: $verifying) {
+            ExportConfirmSheet(kind: format == "keevo" ? .encrypted : .plain(csv: format == "csv")) { proof in
+                await verified(proof: proof)
+            }
         }
     }
 
@@ -505,14 +512,11 @@ struct ExportSheet: View {
         return tr("Keevo 导出 {}.{}", "\(date)", "\(ext)")
     }
 
+    /// 先选位置，再确认身份（每次导出都要，第五轮预审 K15），确认后立即写入。
     private func start() {
-        guard passwordProblem == nil else { return }
-        if format == "keevo" {
-            guard let url = savePanel() else { return }
-            run(url: url, password: password)
-        } else {
-            confirmingPlain = true
-        }
+        guard passwordProblem == nil, let url = savePanel() else { return }
+        target = url
+        verifying = true
     }
 
     private func savePanel() -> URL? {
@@ -524,11 +528,11 @@ struct ExportSheet: View {
         return panel.url
     }
 
-    /// 明文导出：重新验证通过后选择位置并导出。
-    private func exportPlain(proof: String?) async -> Bool {
-        guard let vault = model.vault else { return false }
+    /// 为导出重新验证；通过后导出到选好的位置。
+    private func verified(proof: String?) async -> Bool {
+        guard let vault = model.vault, let url = target else { return false }
         do {
-            try await Task.detached { try vault.reverify(password: proof) }.value
+            try await Task.detached { try vault.reverifyForExport(password: proof) }.value
         } catch KeevoError.Cancelled {
             return false
         } catch {
@@ -536,10 +540,7 @@ struct ExportSheet: View {
             return false
         }
         model.errorMessage = nil
-        // 关闭验证表单后再打开保存面板
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            if let url = savePanel() { run(url: url, password: nil) }
-        }
+        run(url: url, password: format == "keevo" ? password : nil)
         return true
     }
 
@@ -563,47 +564,111 @@ struct ExportSheet: View {
     }
 }
 
-/// 导出明文前重新验证（设计稿"导出明文：重新验证"）。
-struct ExportPlainSheet: View {
+/// 导出密码的强度（设计稿"预审修复 · 导出"）：四段条与文字，下面一行说明还差什么。
+struct ExportStrengthMeter: View {
+    let password: String
+
+    var body: some View {
+        let strength = password.isEmpty ? nil : passwordStrength(password: password)
+        VStack(alignment: .leading, spacing: 4) {
+            MasterStrengthMeter(strength: strength)
+            Text(reason(strength))
+                .font(KV.Typography.footnote)
+                .foregroundStyle(KV.Colors.fgSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func reason(_ s: PasswordStrengthInfo?) -> String {
+        guard let s else { return tr("需要达到「很强」：建议用几个随机的词组成一句话") }
+        if password.unicodeScalars.count < 10 { return tr("至少 10 个字符") }
+        if password.allSatisfy(\.isWhitespace) { return tr("不能全是空格") }
+        if s.score < 4 { return tr("需要达到「很强」：加长，或用几个随机的词组成一句话") }
+        return tr("约 {} 比特熵", "\(Int(s.bits.rounded()))")
+    }
+}
+
+/// 导出前确认身份：加密导出（设计稿"每次导出前确认身份"）与明文导出（设计稿"导出明文：重新验证"，
+/// CSV 另加公式的风险）。
+struct ExportConfirmSheet: View {
+    enum Kind: Equatable {
+        case encrypted
+        case plain(csv: Bool)
+    }
+
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    let kind: Kind
     let action: (String?) async -> Bool
     @ViewState private var password = ""
     @ViewState private var working = false
 
     var body: some View {
-        SheetScaffold(
-            title: tr("导出明文文件？"),
-            subtitle: tr("明文文件中的密码，任何拿到文件的人都能读取。"),
-            systemImage: "exclamationmark.triangle",
-            tint: KV.Colors.statusDangerFg,
-            width: 560
-        ) {
-            VStack(alignment: .leading, spacing: KV.Space.s3) {
-                Banner(kind: .danger, message: tr("明文文件不受 Keevo 保护：同步盘、备份与邮件附件都可能把它复制到别处。导入完成后请立即删除。"))
-                if model.touchIDUsable {
-                    Button { confirm(nil) } label: { Label(tr("用 Touch ID 确认"), systemImage: "touchid") }
-                        .buttonStyle(KVButtonStyle(kind: .secondary, fullWidth: true))
-                        .disabled(working)
-                    TextDivider(text: tr("或输入主密码"))
+        if kind == .encrypted {
+            SheetScaffold(
+                title: tr("导出前确认是你本人"),
+                subtitle: tr("导出文件包含所选保险库中的全部条目。"),
+                systemImage: "person.crop.circle",
+                width: 460
+            ) {
+                VStack(alignment: .leading, spacing: KV.Space.s3) {
+                    proof
+                    Text(tr("每次导出都要确认，加密导出也一样：拿到文件和导出密码的人就能读出全部条目。"))
+                        .font(KV.Typography.footnote)
+                        .foregroundStyle(KV.Colors.fgSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ErrorText()
                 }
-                LabeledInput(label: tr("主密码")) {
-                    SecureField("", text: $password).onSubmit { confirm(password) }
-                }
-                ErrorText()
+            } footer: {
+                Button(tr("取消")) { dismiss() }.buttonStyle(.kvSecondary).keyboardShortcut(.cancelAction)
+                Button(tr("继续")) { confirm(password) }
+                    .buttonStyle(.kvPrimary)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(password.isEmpty || working)
             }
-        } footer: {
-            Button(tr("取消")) { dismiss() }.buttonStyle(.kvSecondary).keyboardShortcut(.cancelAction)
-            Button(tr("导出明文…")) { confirm(password) }
-                .buttonStyle(KVButtonStyle(kind: .danger))
-                .keyboardShortcut(.defaultAction)
-                .disabled(password.isEmpty || working)
+            .onDisappear { model.errorMessage = nil }
+        } else {
+            SheetScaffold(
+                title: tr("导出明文文件？"),
+                subtitle: tr("明文文件中的密码，任何拿到文件的人都能读取。"),
+                systemImage: "exclamationmark.triangle",
+                tint: KV.Colors.statusDangerFg,
+                width: 560
+            ) {
+                VStack(alignment: .leading, spacing: KV.Space.s3) {
+                    Banner(kind: .danger, message: tr("明文文件不受 Keevo 保护：同步盘、备份与邮件附件都可能把它复制到别处。导入完成后请立即删除。"))
+                    if kind == .plain(csv: true) {
+                        Banner(kind: .warning, message: tr("不要用电子表格软件（Numbers、Excel）打开 CSV：网站保存的用户名或标题中可能藏有公式，打开时会把同一行的密码发出去。"))
+                    }
+                    proof
+                    ErrorText()
+                }
+            } footer: {
+                Button(tr("取消")) { dismiss() }.buttonStyle(.kvSecondary).keyboardShortcut(.cancelAction)
+                Button(tr("导出明文…")) { confirm(password) }
+                    .buttonStyle(KVButtonStyle(kind: .danger))
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(password.isEmpty || working)
+            }
+            .onDisappear { model.errorMessage = nil }
         }
-        .onDisappear { model.errorMessage = nil }
+    }
+
+    @ViewBuilder private var proof: some View {
+        if model.touchIDUsable {
+            Button { confirm(nil) } label: { Label(tr("用 Touch ID 确认"), systemImage: "touchid") }
+                .buttonStyle(KVButtonStyle(kind: .secondary, fullWidth: true))
+                .disabled(working)
+            TextDivider(text: tr("或输入主密码"))
+        }
+        LabeledInput(label: tr("主密码")) {
+            SecureField("", text: $password).onSubmit { confirm(password) }
+        }
     }
 
     private func confirm(_ proof: String?) {
         guard !working else { return }
+        if proof?.isEmpty == true { return }
         working = true
         Task {
             if await action(proof) { dismiss() }

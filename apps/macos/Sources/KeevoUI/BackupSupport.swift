@@ -94,14 +94,13 @@ extension AppModel {
         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: backupFolder)
     }
 
-    /// 检查文件能否用来恢复。不能时返回原因。
-    func backupProblem(_ path: String) -> String? {
-        guard let vault else { return tr("保险库没有打开。") }
+    /// 检查文件能否用来恢复：能时返回恢复确认需要的信息，不能时返回原因。
+    func checkBackup(_ path: String) -> (check: BackupCheck?, problem: String?) {
+        guard let vault else { return (nil, tr("保险库没有打开。")) }
         do {
-            try vault.checkBackup(path: path)
-            return nil
+            return (try vault.checkBackup(path: path), nil)
         } catch {
-            return Self.describe(error)
+            return (nil, Self.describe(error))
         }
     }
 
@@ -204,7 +203,7 @@ struct BackupRow: View {
 struct BackupSettings: View {
     @Environment(AppModel.self) private var model
     @ViewState private var choosing = false
-    @ViewState private var confirming: BackupInfo?
+    @ViewState private var confirming: RestoreTarget?
     @ViewState private var working = false
 
     var body: some View {
@@ -284,8 +283,8 @@ struct BackupSettings: View {
         .sheet(isPresented: $choosing) {
             RestorePickerSheet { confirming = $0 }
         }
-        .sheet(item: $confirming) { backup in
-            RestoreConfirmSheet(backup: backup)
+        .sheet(item: $confirming) { target in
+            RestoreConfirmSheet(target: target)
         }
     }
 }
@@ -294,12 +293,19 @@ extension BackupInfo: Identifiable {
     public var id: String { path }
 }
 
+/// 要恢复的备份与恢复前的检查结果。
+struct RestoreTarget: Identifiable {
+    let backup: BackupInfo
+    let check: BackupCheck
+    var id: String { backup.path }
+}
+
 // MARK: - 选择备份
 
 struct RestorePickerSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    let next: (BackupInfo) -> Void
+    let next: (RestoreTarget) -> Void
     @ViewState private var selected: String?
     /// 从其他位置选择的文件。
     @ViewState private var other: BackupInfo?
@@ -379,13 +385,14 @@ struct RestorePickerSheet: View {
 
     private func proceed() {
         guard let path = current, let backup = candidates.first(where: { $0.path == path }) else { return }
-        if let problem = model.backupProblem(path) {
+        let (check, problem) = model.checkBackup(path)
+        guard let check else {
             self.problem = problem
             return
         }
         dismiss()
         // 等这个表单关闭后再打开确认
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { next(backup) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { next(RestoreTarget(backup: backup, check: check)) }
     }
 }
 
@@ -394,8 +401,17 @@ struct RestorePickerSheet: View {
 struct RestoreConfirmSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    let backup: BackupInfo
+    let target: RestoreTarget
     @ViewState private var working = false
+
+    private var backup: BackupInfo { target.backup }
+    /// 备份内记录的时间；较早的备份没有，用文件名中的时间（第五轮预审 K17）。
+    private var createdMs: UInt64 { target.check.createdMs ?? backup.createdMs }
+    /// 文件名中的时间与备份内记录的不一致（相差一分钟以上）：文件可能被改过名。
+    private var renamed: Bool {
+        guard let inside = target.check.createdMs else { return false }
+        return max(inside, backup.createdMs) - min(inside, backup.createdMs) > 60_000
+    }
 
     var body: some View {
         SheetScaffold(
@@ -407,15 +423,31 @@ struct RestoreConfirmSheet: View {
         ) {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
                 KVCard {
-                    CardRow(label: tr("备份时间")) { Text(BackupText.full(backup.createdMs)).font(KV.Typography.body) } actions: {}
+                    CardRow(label: tr("备份时间"), multiline: renamed) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(BackupText.full(createdMs)).font(KV.Typography.body)
+                            if renamed {
+                                Text(tr("文件名写的是 {}；以备份内记录的时间为准", "\(BackupText.when(backup.createdMs))"))
+                                    .font(KV.Typography.footnote)
+                                    .foregroundStyle(KV.Colors.statusWarningFg)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    } actions: {}
                     CardRowDivider()
                     CardRow(label: tr("内容")) { Text(tr("保险库数据库（加密）")).font(KV.Typography.body) } actions: {}
                     CardRowDivider()
                     CardRow(label: tr("当前保险库")) { Text(tr("恢复前会再备份一份")).font(KV.Typography.body) } actions: {}
                 }
+                if target.check.olderMasterPassword {
+                    Banner(
+                        kind: .danger,
+                        message: tr("这份备份之后你修改过主密码。恢复后要用备份时的旧主密码解锁，修改主密码的效果会被撤销；如果是因为旧主密码泄露才修改的，请不要恢复这份备份。")
+                    )
+                }
                 Banner(
                     kind: .warning,
-                    message: tr("备份之后的修改会被替换掉（可以从恢复前自动生成的备份找回）。恢复后需要用备份时的主密码解锁；这台 Mac 上的浏览器配对、命令行授权与解锁设置保持现在的状态。")
+                    message: tr("备份之后的修改会被替换掉（可以从恢复前自动生成的备份找回）。这台 Mac 上的浏览器配对、命令行授权、SSH Agent 的使用方式与解锁设置保持现在的状态。")
                 )
                 ErrorText()
             }
@@ -423,14 +455,14 @@ struct RestoreConfirmSheet: View {
             Button(tr("取消")) { dismiss() }
                 .buttonStyle(.kvSecondary)
                 .keyboardShortcut(.cancelAction)
-            Button(tr("恢复")) {
+            Button(target.check.olderMasterPassword ? tr("仍然恢复") : tr("恢复")) {
                 working = true
                 Task {
                     if await model.restore(from: backup) { dismiss() }
                     working = false
                 }
             }
-            .buttonStyle(.kvPrimary)
+            .buttonStyle(KVButtonStyle(kind: target.check.olderMasterPassword ? .danger : .primary))
             .disabled(working)
         }
     }

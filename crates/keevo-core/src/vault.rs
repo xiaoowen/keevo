@@ -1038,16 +1038,20 @@ impl Vault {
         Ok(())
     }
 
-    /// 备份属于哪个账户、是否可以用来恢复这个保险库（不改变任何东西）。
+    /// 备份属于哪个账户、是否可以用来恢复这个保险库（不改变任何东西）。返回恢复确认需要的信息。
     ///
     /// # Errors
     /// 不是 Keevo 备份、来自更新版本，或属于另一个账户。
-    pub fn check_backup(&self, src: &Path) -> Result<()> {
+    pub fn check_backup(&self, src: &Path) -> Result<crate::backup::BackupCheck> {
         let current = self.store.account()?.ok_or(CoreError::NoAccount)?;
-        if Store::inspect_backup(src)?.account.id != current.id {
+        let summary = Store::inspect_backup(src)?;
+        if summary.account.id != current.id {
             return Err(CoreError::OtherAccount);
         }
-        Ok(())
+        Ok(crate::backup::BackupCheck {
+            created_ms: summary.created_ms,
+            older_master_password: summary.account.epoch < current.epoch,
+        })
     }
 
     /// 全部保险库，按名称排序。

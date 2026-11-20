@@ -108,6 +108,7 @@ public enum Snapshots {
         await shooter.shoot("main-empty-trash", size: main) { MainView(initialSidebar: .trash) }
         await model.runSecurityCheck()
         await shooter.shoot("security-center", size: main) { MainView(initialSidebar: .security) }
+        await shooter.shoot("breach-confirm", sheet: true) { BreachCheckConfirmSheet {} }
         await shooter.shoot("main-weak", size: main) { MainView(initialItem: ids.weak) }
 
         await shooter.shoot("editor-login", size: main) { MainView(initialItem: ids.login, initialEditing: true) }
@@ -155,7 +156,13 @@ public enum Snapshots {
         await shooter.shoot("settings-backup", sheet: true) { SettingsView(initialPage: .backup) }
         await shooter.shoot("restore-picker", sheet: true) { RestorePickerSheet { _ in } }
         if let backup = model.backups.first(where: { $0.kind == "import" }) {
-            await shooter.shoot("restore-confirm", sheet: true) { RestoreConfirmSheet(backup: backup) }
+            let check = BackupCheck(createdMs: backup.createdMs, olderMasterPassword: false)
+            await shooter.shoot("restore-confirm", sheet: true) { RestoreConfirmSheet(target: RestoreTarget(backup: backup, check: check)) }
+            // 预审修复：备份之后改过主密码；文件名中的时间与备份内记录的不一致
+            let rolledBack = BackupCheck(createdMs: backup.createdMs, olderMasterPassword: true)
+            await shooter.shoot("restore-rollback", sheet: true) { RestoreConfirmSheet(target: RestoreTarget(backup: backup, check: rolledBack)) }
+            let renamed = BackupCheck(createdMs: backup.createdMs - 16 * 86_400_000, olderMasterPassword: false)
+            await shooter.shoot("restore-renamed", sheet: true) { RestoreConfirmSheet(target: RestoreTarget(backup: backup, check: renamed)) }
         }
         // 导入与导出
         let exportFile = URL(fileURLWithPath: "/Users/me/Downloads/bitwarden_export_20261119.json")
@@ -175,7 +182,8 @@ public enum Snapshots {
                         backup: model.backups.first)
         }
         await shooter.shoot("export", sheet: true) { ExportSheet() }
-        await shooter.shoot("export-plain", sheet: true) { ExportPlainSheet { _ in false } }
+        await shooter.shoot("export-verify", sheet: true) { ExportConfirmSheet(kind: .encrypted) { _ in false } }
+        await shooter.shoot("export-plain", sheet: true) { ExportConfirmSheet(kind: .plain(csv: true)) { _ in false } }
         await shooter.shoot("practice", sheet: true) { PracticeSheet() }
         // 品牌标志：应用内标志与菜单栏图标（已解锁 / 已锁定）
         await shooter.shoot("brand-mark", size: CGSize(width: 360, height: 140)) {
