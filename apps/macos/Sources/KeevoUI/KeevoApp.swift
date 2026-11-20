@@ -18,9 +18,10 @@ public struct KeevoApp: App {
     public var body: some Scene {
         WindowGroup("Keevo", id: "main") {
             RootView().tinted
-                .environment(model)
                 .frame(minWidth: 960, minHeight: 600)
                 .background(MainWindowOpener())
+                // 放在最后：环境只传给它修饰的视图，之后再加的背景视图拿不到模型（启动即崩溃）
+                .environment(model)
         }
         // 设计稿：没有标题栏与工具栏，各栏自己的顶部区域放搜索与操作
         .windowStyle(.hiddenTitleBar)

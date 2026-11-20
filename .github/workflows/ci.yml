@@ -111,8 +111,8 @@ jobs:
         run: swift scripts/check-sas-wordlist.swift
       - name: 构建并运行冒烟测试
         run: scripts/build-macos.sh --smoke
-      - name: 打包 Keevo.app 并实测进程加固（临时签名、Hardened Runtime、Library Validation）
-        run: scripts/package-macos.sh --verify
+      - name: 打包 Keevo.app，实测进程加固（临时签名、Hardened Runtime、Library Validation）并启动一次
+        run: scripts/package-macos.sh --launch
 
   fuzz:
     name: 模糊测试（每个目标 30 秒）
