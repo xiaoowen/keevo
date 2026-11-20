@@ -139,48 +139,146 @@ fn estimate_chars(chars: &[char]) -> (f64, Option<Analysis>) {
     best
 }
 
-/// 近似周期最多允许的改动处数。
+/// 近似周期最多允许的改动处数（替换、插入或删除）。
 const MAX_EDITS: usize = 3;
 /// 每处改动的猜测次数中，字符的选择数（可打印 ASCII）。
 const EDIT_CHARS: f64 = 95.0;
+/// 近似周期最多检查的候选周期数（每个候选要做几次带状动态规划）。
+const MAX_PERIOD_CANDIDATES: usize = 32;
 
-/// 近似周期：找最短的周期 `p`（至少重复两次），使得按每个位置上出现最多的字符还原出的基础片段，与原文最多只有
-/// [`MAX_EDITS`] 处不同。估计为：基础片段的猜测次数 × 重复次数 × 每处改动（位置 × [`EDIT_CHARS`]）。
-/// 在常见口令的重复上追加、替换几个字符，猜测次数只多一个小的因子（确认评审 N1）。
+/// 近似周期（确认评审 N1、P1）：原文是同一片段的重复，其中最多 [`MAX_EDITS`] 处改动（替换、插入或删除，
+/// 改动可以在任何一份重复中，包括第一份）。估计为：基础片段的猜测次数 × 重复次数 × 每处改动（位置数 × [`EDIT_CHARS`]）。
+///
+/// 候选的周期 `p`（至少重复两次）：长度为 `p`、出现次数最多的片段，它的重复要覆盖原文的绝大部分。对每个候选，
+/// 在没有改动时的对齐位置前后 [`MAX_EDITS`] 个相位上，求原文与"基础片段无限重复"的带状编辑距离。
+/// 在全部候选中取改动最少的，同样多时取最短的周期；只对选中的那个递归估计基础片段，它的长度至少减半。
 fn near_period_estimate(chars: &[char]) -> Option<(f64, Option<Analysis>)> {
     let n = chars.len();
+    // 最好的匹配：(改动处数, 周期, 基础片段的起点, 相位)。改动最少优先，同样多时取最短的周期
+    let mut best: Option<(usize, usize, usize, usize)> = None;
+    let mut candidates = 0usize;
     for p in 1..=n / 2 {
-        let mut base = Vec::with_capacity(p);
-        let mut edits = 0usize;
-        for r in 0..p {
-            let mut counts: Vec<(char, usize)> = Vec::new();
-            let mut column = 0usize;
-            for c in chars.iter().skip(r).step_by(p) {
-                column = column.saturating_add(1);
-                match counts.iter_mut().find(|(x, _)| x == c) {
-                    Some(entry) => entry.1 = entry.1.saturating_add(1),
-                    None => counts.push((*c, 1)),
-                }
-            }
-            let Some(&(c, k)) = counts.iter().max_by_key(|(_, k)| *k) else {
-                break;
-            };
-            edits = edits.saturating_add(column.saturating_sub(k));
-            if edits > MAX_EDITS {
-                break;
-            }
-            base.push(c);
+        let (start, count) = most_frequent(chars, p)?;
+        if count < 2 {
+            // 没有长度为 p 的片段重复出现，更长的也不会有
+            break;
         }
-        if edits <= MAX_EDITS && base.len() == p {
-            let (g, analysis) = estimate_chars(&base);
-            let per_edit = to_f64(n) * EDIT_CHARS;
-            let edit_cost = per_edit.powi(i32::try_from(edits).unwrap_or(i32::MAX));
-            let guesses = (g * to_f64(n.div_ceil(p)) * edit_cost).min(f64::MAX);
-            return Some((guesses, analysis));
+        // 片段的重复要覆盖原文的绝大部分：允许每处改动破坏一份，再加上不完整的第一份与最后一份
+        if count
+            .saturating_add(MAX_EDITS)
+            .saturating_add(2)
+            .saturating_mul(p)
+            < n
+        {
+            continue;
+        }
+        let Some(base) = chars.get(start..start.saturating_add(p)) else {
+            continue;
+        };
+        // 没有改动时，原文的开头对应基础片段中的位置
+        let anchor = (p - start % p) % p;
+        for shift in 0..=2 * MAX_EDITS {
+            let phase = (anchor + p * (MAX_EDITS + 1) + shift - MAX_EDITS) % p;
+            if let Some(edits) = periodic_edit_distance(chars, base, phase)
+                && best.is_none_or(|b| edits < b.0)
+            {
+                best = Some((edits, p, start, phase));
+            }
+        }
+        if best.is_some_and(|b| b.0 == 0) {
+            break;
+        }
+        candidates = candidates.saturating_add(1);
+        if candidates >= MAX_PERIOD_CANDIDATES {
+            break;
         }
     }
-    None
+    let (edits, p, start, phase) = best?;
+    let base = chars.get(start..start.saturating_add(p))?;
+    let rotated: Vec<char> = (0..p)
+        .filter_map(|k| base.get((phase + k) % p).copied())
+        .collect();
+    let (g, analysis) = estimate_chars(&rotated);
+    let per_edit = to_f64(n) * EDIT_CHARS;
+    let edit_cost = per_edit.powi(i32::try_from(edits).unwrap_or(i32::MAX));
+    Some((
+        (g * to_f64(n.div_ceil(p)) * edit_cost).min(f64::MAX),
+        analysis,
+    ))
 }
+
+/// 长度为 `p` 的片段中出现次数最多的一个：(第一次出现的位置, 次数)。滚动哈希，重叠的出现也计入；等次数时取最早的。
+fn most_frequent(chars: &[char], p: usize) -> Option<(usize, usize)> {
+    const B: u64 = 1_000_003;
+    if p == 0 || p > chars.len() {
+        return None;
+    }
+    let pow = (1..p).fold(1u64, |acc, _| acc.wrapping_mul(B));
+    let mut seen: HashMap<u64, (usize, usize)> = HashMap::new();
+    let mut h = 0u64;
+    for (i, c) in chars.iter().enumerate() {
+        if i >= p {
+            let old = u64::from(*chars.get(i - p)?);
+            h = h.wrapping_sub(old.wrapping_mul(pow));
+        }
+        h = h.wrapping_mul(B).wrapping_add(u64::from(*c));
+        if i + 1 >= p {
+            let entry = seen.entry(h).or_insert((i + 1 - p, 0));
+            entry.1 = entry.1.saturating_add(1);
+        }
+    }
+    seen.into_values()
+        .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
+}
+
+/// 原文与"`base` 从 `phase` 开始无限重复"之间的编辑距离（替换、插入、删除各算一处；重复的长度可以与原文不同，
+/// 最后一份可以不完整）。只算到 [`MAX_EDITS`]，超过时返回 `None`。带状动态规划，O(n × MAX_EDITS)。
+fn periodic_edit_distance(text: &[char], base: &[char], phase: usize) -> Option<usize> {
+    let p = base.len();
+    if p == 0 {
+        return None;
+    }
+    let k = MAX_EDITS;
+    let width = 2 * k + 1;
+    let inf = usize::MAX / 4;
+    let pattern = |j: usize| base.get((phase + j) % p);
+    // row[c] 是 d[i][j]，其中 j = i + c − k
+    let mut row: Vec<usize> = (0..width)
+        .map(|c| if c >= k { c - k } else { inf })
+        .collect();
+    for i in 1..=text.len() {
+        let t = text.get(i - 1)?;
+        let mut next = vec![inf; width];
+        for c in 0..width {
+            let Some(j) = (i + c).checked_sub(k) else {
+                continue;
+            };
+            let value = if j == 0 {
+                i
+            } else {
+                let diagonal = row
+                    .get(c)?
+                    .saturating_add(usize::from(pattern(j - 1) != Some(t)));
+                let up = row.get(c + 1).map_or(inf, |v| v.saturating_add(1));
+                let left = c
+                    .checked_sub(1)
+                    .and_then(|l| next.get(l))
+                    .map_or(inf, |v| v.saturating_add(1));
+                diagonal.min(up).min(left)
+            };
+            *next.get_mut(c)? = value;
+        }
+        if next.iter().all(|v| *v > k) {
+            return None;
+        }
+        row = next;
+    }
+    let best = row.into_iter().min()?;
+    (best <= k).then_some(best)
+}
+
+/// LZ77 分解中，用 zxcvbn 分析的新内容最多这么多个字符。
+const MAX_LITERAL: usize = 2 * MAX_ANALYZED;
 
 /// 复制的最短长度：更短的重复片段按新内容计。
 const MIN_COPY: usize = 4;
@@ -188,7 +286,8 @@ const MIN_COPY: usize = 4;
 /// LZ77 分解的估计。从头往后，每个位置找与前面某处（可以与自身重叠）相同的最长片段：
 /// - 不短于 [`MIN_COPY`] 时记为一次**复制**，猜测次数按 zxcvbn 重复模式的方式计：重复次数（长度 ÷ 距离，向上取整）
 ///   × 复制来源的选择数（前面已有的片段数）；
-/// - 否则这个字符是**新内容**。连续的新内容拼在一起，每 [`MAX_ANALYZED`] 个字符一段，用 zxcvbn 估计，各段相乘。
+/// - 否则这个字符是**新内容**。连续的新内容拼在一起，每 [`MAX_ANALYZED`] 个字符一段，用 zxcvbn 估计，各段相乘；
+///   新内容最多分析 [`MAX_LITERAL`] 个字符。
 ///
 /// 因此在常见口令上重复、插入或替换少量字符、两段交替，猜测次数都只比基础片段多一个小的因子。这是保守的低估：
 /// 真正随机的长口令几乎没有长的重复，几乎全是新内容，不受影响。
@@ -198,8 +297,13 @@ fn lz_estimate(chars: &[char]) -> (f64, Option<Analysis>) {
     let mut first: Option<Analysis> = None;
     let mut literal: Vec<char> = Vec::new();
     let mut tokens = 0usize;
-    let flush = |literal: &mut Vec<char>, guesses: &mut f64, first: &mut Option<Analysis>| {
-        for w in literal.chunks(MAX_ANALYZED) {
+    // 新内容最多分析 MAX_LITERAL 个字符，之后的不计入（只会低估）：几段真正的新内容已足够判断强弱，
+    // 而 zxcvbn 对某些输入（大量 l33t 字符）每段都很慢（确认评审 P2）
+    let mut budget = MAX_LITERAL;
+    let mut flush = |literal: &mut Vec<char>, guesses: &mut f64, first: &mut Option<Analysis>| {
+        let take = literal.len().min(budget);
+        budget -= take;
+        for w in literal.get(..take).unwrap_or_default().chunks(MAX_ANALYZED) {
             let result = most_guessable(w, omnimatch(w), false);
             *guesses = (*guesses * result.guesses).min(f64::MAX);
             if first.is_none() {
@@ -1488,6 +1592,15 @@ mod tests {
                 let mut chars: Vec<char> = plain.chars().collect();
                 chars[pos] = '%';
                 out.push(chars.into_iter().collect());
+            }
+            // 第一份之内的插入与删除（确认评审 P1），以及中间的删除
+            for pos in [1, 2, base.len() / 2, len / 2] {
+                let mut inserted: Vec<char> = plain.chars().collect();
+                inserted.insert(pos, '!');
+                out.push(inserted.into_iter().collect());
+                let mut removed: Vec<char> = plain.chars().collect();
+                removed.remove(pos);
+                out.push(removed.into_iter().collect());
             }
             out
         };

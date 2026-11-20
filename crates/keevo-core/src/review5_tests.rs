@@ -1,7 +1,7 @@
 //! 第五轮正式评审（2026-11-20，外部模型，`docs/reviews/2026-11-20-model-review-round5.md`）的反例测试。
 //! 每个测试断言"应当成立"的行为：在修复之前的实现上失败，证实了对应的发现；修复之后作为回归测试。
-//! 与评审补丁的差异见处理记录（L5、L8 按处理记录选择的语义调整了断言）。`review5c_`、`review5d_` 开头的测试来自
-//! 第五轮的两次确认评审（`docs/reviews/2026-11-20-model-review-round5-confirmation*.md`）。
+//! 与评审补丁的差异见处理记录（L5、L8 按处理记录选择的语义调整了断言）。`review5c_`、`review5d_`、`review5e_`
+//! 开头的测试来自第五轮的三次确认评审（`docs/reviews/2026-11-20-model-review-round5-confirmation*.md`）。
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::print_stderr)]
 
 use crate::{Edit, NewField, Vault};
@@ -27,6 +27,115 @@ fn fixture() -> (Temp, Vault, AccountSecretKey) {
 fn item(v: &mut Vault, kind: ItemType) -> Id128 {
     v.create_item(v.vaults().unwrap()[0].id, kind, "review fixture", vec![])
         .unwrap()
+}
+
+#[test]
+fn review5e_p1_single_insertion_in_repeated_common_password_is_cheap() {
+    let mut failures = Vec::new();
+    for base in ["password", "password123", "qwerty123456", "abc123"] {
+        let base_guesses = crate::strength::estimate(base).guesses;
+        for repeats in [10_u32, 20, 50] {
+            let plain = base.repeat(usize::try_from(repeats).unwrap());
+            for pos in 0..=base.len() {
+                let mut password = plain.clone();
+                password.insert(pos, '!');
+                let strength = crate::export::export_password_strength(&password);
+                let allowed = crate::export::export_password_ok(&password);
+                // 枚举基础口令、重复次数、插入位置及 95 种可打印字符。
+                let bound = base_guesses
+                    * f64::from(repeats)
+                    * f64::from(u32::try_from(password.len()).unwrap())
+                    * 95.0;
+                if bound < 1e10 && allowed {
+                    assert_eq!(strength.score, 4);
+                    failures.push((base, repeats, pos, bound, strength.guesses));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "一次插入的低成本变体不应达到 4 分：(基础、重复、位置、模型代价、实际估计) {failures:?}"
+    );
+}
+
+#[test]
+fn review5e_c1_random_long_passwords_remain_strong() {
+    let mut slowest = std::time::Duration::ZERO;
+    for len in [65, 96, 256, 1024] {
+        for alphabet in [10_u8, 95] {
+            for _ in 0..3 {
+                let mut password = String::new();
+                while password.len() < len {
+                    for &b in Id128::random().unwrap().as_bytes() {
+                        // 拒绝采样，均匀选取数字或可打印 ASCII。
+                        if u16::from(b) < 256 / u16::from(alphabet) * u16::from(alphabet) {
+                            let start = if alphabet == 10 { b'0' } else { b' ' };
+                            password.push(char::from(start + b % alphabet));
+                            if password.len() == len {
+                                break;
+                            }
+                        }
+                    }
+                }
+                let started = std::time::Instant::now();
+                let strength = crate::strength::estimate(&password);
+                slowest = slowest.max(started.elapsed());
+                assert_eq!(
+                    strength.score, 4,
+                    "len={len}, alphabet={alphabet}, {password:?}: {strength:?}"
+                );
+            }
+        }
+    }
+    eprintln!("24 CSPRNG samples; slowest={slowest:?}");
+}
+
+#[test]
+fn review5e_p2_adversarial_inputs_finish_within_five_seconds() {
+    let unique: String = (0..1024)
+        .map(|i| char::from_u32(0x4e00 + i).unwrap())
+        .collect();
+    let mut cases = vec![
+        ("distinct_unicode", unique),
+        (
+            "near_periodic",
+            (0..5000)
+                .map(|i| if i % 37 == 0 { 'b' } else { 'a' })
+                .collect(),
+        ),
+        (
+            "almost_unary",
+            format!(
+                "{}b{}c{}d{}e",
+                "a".repeat(251),
+                "a".repeat(251),
+                "a".repeat(251),
+                "a".repeat(251)
+            ),
+        ),
+    ];
+    // 64 字符窗口含大量 l33t 替换，且窗与窗间无固定周期。
+    let symbols = b"4@8({[<3691!|70$5+%2";
+    let mut l33t = String::new();
+    for i in 0_u32..32 {
+        for b in keevo_crypto::sha256(&i.to_le_bytes()) {
+            l33t.push(char::from(symbols[usize::from(b) % symbols.len()]));
+        }
+    }
+    cases.push(("l33t_dense", l33t));
+    let _ = crate::strength::estimate("warm up dictionaries");
+    for (label, password) in cases {
+        let started = std::time::Instant::now();
+        let strength = crate::strength::estimate(&password);
+        let elapsed = started.elapsed();
+        eprintln!("{label}: {elapsed:?}, score={}", strength.score);
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "{label}: {elapsed:?}"
+        );
+        assert!(strength.guesses.is_finite());
+    }
 }
 
 #[test]
