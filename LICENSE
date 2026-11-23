@@ -9,12 +9,14 @@ Keevo is multi-licensed by directory. See docs/governance.md §1 for the rationa
 | apps/、crates/keevo-cli/                     | GPL-3.0-or-later，附加 App Store 许可                        |
 |                                             | GPL-3.0-or-later with the Keevo App Store Additional Permission |
 | server/（将来 / future）                      | AGPL-3.0-or-later                                          |
+| crates/keevo-site/src/public_suffix_list.dat | MPL-2.0（原样取自 publicsuffix.org / verbatim from publicsuffix.org） |
 
 许可证全文 Full license texts:
 
 - LICENSES/MIT.txt
 - LICENSES/Apache-2.0.txt
 - LICENSES/GPL-3.0-or-later.txt
+- LICENSES/MPL-2.0.txt
 - LICENSES/LicenseRef-Keevo-AppStore-Exception.txt（草案，待法律审阅 / draft, pending legal review）
 
 除非文件或其所在目录另有声明，否则以上表为准。

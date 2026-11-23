@@ -35,6 +35,14 @@ fn frame_string(bytes: Vec<u8>) -> Result<String, JsError> {
     String::from_utf8(bytes).map_err(js_err)
 }
 
+/// 两个源是否同站：都是 HTTPS，可注册域名相同（Public Suffix List，`keevo-site`）。同站的 iframe 中的输入框
+/// 不显示嵌入提示、不要求再次确认（`docs/security.md` §12）。
+#[wasm_bindgen(js_name = sameSite)]
+#[must_use]
+pub fn same_site(a: &str, b: &str) -> bool {
+    keevo_site::same_site(a, b)
+}
+
 /// 生成密码（弹窗的"生成密码"与"新建登录"）。与 Keevo.app 用同一份实现（`keevo-generator`），只在扩展内进行。
 ///
 /// `recipe_json`：

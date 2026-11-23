@@ -79,7 +79,7 @@ function render(note?: { kind: "info" | "danger"; text: string }): void {
   if (init.message) {
     root.append(el("p", MESSAGES[init.message] ?? MESSAGES.error, "muted"));
   } else {
-    if (init.topOrigin !== init.origin) {
+    if (init.crossSite) {
       const warn = el(
         "p",
         t("嵌在 {} 的页面中", String(init.topOrigin ? host(init.topOrigin) : t("另一个网站"))),
@@ -132,8 +132,8 @@ function row(c: Candidate): HTMLElement {
 
 async function choose(c: Candidate): Promise<void> {
   if (!init) return;
-  // 跨域 iframe 中的输入框：第一次点击只要求确认（docs/security.md §12）
-  if (init.topOrigin !== init.origin && pendingConfirm !== c.item_id) {
+  // 跨站 iframe 中的输入框：第一次点击只要求确认（docs/security.md §12）；同站的 iframe 与顶层一样
+  if (init.crossSite && pendingConfirm !== c.item_id) {
     pendingConfirm = c.item_id;
     render({ kind: "info", text: t("再点一次「{}」填充", String(c.title)) });
     return;

@@ -14,7 +14,7 @@
 //   这里随之重新打开弹窗；Keevo 不支持某个版本时逐级退回。
 
 import { t } from "./i18n.js";
-import init, { KeevoClient, generatePassword } from "./wasm/keevo_wasm.js";
+import init, { KeevoClient, generatePassword, sameSite } from "./wasm/keevo_wasm.js";
 import type {
   BarRequest,
   BarResponse,
@@ -498,6 +498,8 @@ interface InlineSession {
   url: string;
   origin: string;
   topOrigin: string | null;
+  /** 输入框在跨站的 iframe 中（来源不同，也不同站）：显示嵌入提示，第一次点击只要求确认。 */
+  crossSite: boolean;
   kind: "login" | "otp";
 }
 
@@ -641,13 +643,17 @@ async function handleContent(req: ContentRequest, sender: chrome.runtime.Message
     case "inline_open": {
       const origin = originOf(url);
       if (!origin || !/^https?:$/.test(new URL(url).protocol)) return { ok: false };
+      // 顶层帧的网址同样来自 Chrome；拿不到时按跨站处理（要求确认）
+      const topOrigin = frameId === 0 ? origin : originOf(sender.tab?.url);
+      await ready;
       const session: InlineSession = {
         tabId,
         frameId,
         url,
         origin,
-        // 顶层帧的网址同样来自 Chrome；拿不到时按跨域处理（要求确认）
-        topOrigin: frameId === 0 ? origin : originOf(sender.tab?.url),
+        topOrigin,
+        // 同站（都是 HTTPS、可注册域名相同，如 account.aliyun.com 中的 passport.aliyun.com）不算跨站
+        crossSite: topOrigin !== origin && !(topOrigin !== null && sameSite(origin, topOrigin)),
         kind: req.kind === "otp" ? "otp" : "login",
       };
       await chrome.storage.session.set({ [`inline:${tabId}`]: session });
@@ -662,8 +668,10 @@ async function handleContent(req: ContentRequest, sender: chrome.runtime.Message
 }
 
 async function menuInit(session: InlineSession | undefined): Promise<MenuInit> {
-  if (!session) return { origin: "", topOrigin: null, kind: "login", candidates: [], message: "no_session" };
-  const base = { origin: session.origin, topOrigin: session.topOrigin, kind: session.kind, candidates: [] };
+  if (!session) return { origin: "", topOrigin: null, crossSite: true, kind: "login", candidates: [], message: "no_session" };
+  // 缺少 crossSite 的会话（理论上只有旧版本存下的）按跨站处理
+  const crossSite = session.crossSite !== false;
+  const base = { origin: session.origin, topOrigin: session.topOrigin, crossSite, kind: session.kind, candidates: [] };
   await ensureConnected();
   await settled();
   if (state.status === "unpaired") return { ...base, message: "unpaired" };
@@ -685,8 +693,8 @@ async function handleMenu(req: MenuRequest, sender: chrome.runtime.MessageSender
       return { init: await menuInit(session) };
     case "menu_fill": {
       if (!session) return { error: "failed" };
-      // 跨域 iframe 中的输入框需要用户在菜单中再确认一次
-      if (session.topOrigin !== session.origin && !req.confirmed) return { error: "failed" };
+      // 跨站 iframe 中的输入框需要用户在菜单中再确认一次（在后台独立判断，不采信菜单页）
+      if (session.crossSite !== false && !req.confirmed) return { error: "failed" };
       const { secret, error } = await fetchSecret(req.itemId, session.url);
       if (!secret) return { error: error ?? "failed" };
       if (session.kind === "otp" && !secret.totp) return { error: "no_totp" };

@@ -94,8 +94,10 @@ export interface PopupResponse {
 export interface MenuInit {
   /** 输入框所在帧的来源（由 Chrome 提供，不采信页面自述）。 */
   origin: string;
-  /** 标签页顶层的来源；与 origin 不同时，输入框位于跨域 iframe 中。 */
+  /** 标签页顶层的来源；与 origin 不同时，输入框位于 iframe 中。 */
   topOrigin: string | null;
+  /** 输入框在跨站的 iframe 中（来源不同，也不同站）：显示嵌入提示，第一次点击只要求确认。 */
+  crossSite: boolean;
   kind: "login" | "otp";
   candidates: Candidate[];
   /** 不能列出条目时的原因。 */

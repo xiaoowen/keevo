@@ -41,6 +41,7 @@ crates/keevo-ipc/      本地通信协议（spec/ipc.md）：分帧、Noise 配�
 crates/keevo-service/  Vault Service 的 socket 服务与开发服务
 crates/keevo-native-host/  由浏览器启动的转发进程，校验父进程代码签名
 crates/keevo-generator/  密码生成器（App 与扩展共用）
+crates/keevo-site/     可注册域名与同站判断（Public Suffix List，扩展用）
 crates/keevo-wasm/     扩展使用的 WASM 客户端
 crates/keevo-macos/    代码签名校验（唯一允许 unsafe 的 crate）
 apps/macos/            macOS 应用（M0：SwiftUI 空壳 + 端到端冒烟测试）

@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..", "..", "..");
-const { initSync, KeevoClient } = await import(join(here, "..", "dist", "wasm", "keevo_wasm.js"));
+const { initSync, KeevoClient, sameSite } = await import(join(here, "..", "dist", "wasm", "keevo_wasm.js"));
 initSync({ module: readFileSync(join(here, "..", "dist", "wasm", "keevo_wasm_bg.wasm")) });
 
 const ORIGIN = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
@@ -103,6 +103,15 @@ console.log("扩展侧端到端测试（WASM → native host → socket → 开�
 assert.equal(KeevoClient.displayName("Chrome\u202e · \u200b工作\u0007"), "Chrome · 工作");
 assert.equal([...KeevoClient.displayName("名".repeat(100))].length, 64);
 ok("显示名去掉双向控制符、零宽字符与控制字符，最多 64 个字符");
+
+// ---- 同站判断（docs/security.md §12）：同站的 iframe 不显示嵌入提示、不要求再次确认
+assert.equal(sameSite("https://passport.aliyun.com", "https://account.aliyun.com"), true);
+assert.equal(sameSite("https://a.sina.com.cn", "https://login.sina.com.cn"), true);
+assert.equal(sameSite("https://a.com.cn", "https://b.com.cn"), false);
+assert.equal(sameSite("https://alice.github.io", "https://bob.github.io"), false);
+assert.equal(sameSite("http://passport.aliyun.com", "https://account.aliyun.com"), false);
+assert.equal(sameSite(`http://localhost:1`, `http://127.0.0.1:1`), false);
+ok("同站判断：可注册域名相同且都是 HTTPS；公共后缀（含 github.io）下的不同子域不算同站");
 
 // ---- 首次配对
 let host = launchHost();

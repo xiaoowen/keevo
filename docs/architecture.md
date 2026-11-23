@@ -77,7 +77,8 @@ flowchart LR
 | `keevo-macos` | macOS 平台集成：进程代码签名校验（audit token / pid）。**整个 workspace 唯一允许 `unsafe` 的 crate**，仅限一次 `getsockopt` 调用 |
 | `keevo-service` | Vault Service 的 socket 服务：对端校验、连接线程、把 IPC 状态机接到 `keevo-core`；附开发服务 `keevo-dev-service` |
 | `keevo-generator` | 密码生成器（随机字符、口令短语、PIN）。只依赖 `keevo-crypto` 的随机数，`keevo-core` 与 `keevo-wasm` 共用，扩展与桌面应用生成的密码出自同一份实现 |
-| `keevo-wasm` | 把 `keevo-ipc` 的扩展侧客户端与 `keevo-generator` 编译为 WASM，扩展与桌面应用共用同一份协议与生成器实现 |
+| `keevo-site` | 可注册域名与同站判断，内置 Public Suffix List（编译时去掉注释）。扩展据此判断 iframe 是否与顶层同站（`docs/security.md` §12） |
+| `keevo-wasm` | 把 `keevo-ipc` 的扩展侧客户端、`keevo-generator` 与 `keevo-site` 编译为 WASM，扩展与桌面应用共用同一份协议与生成器实现 |
 | `keevo-wasm`（后续） | 扩展独立模式，供没有桌面应用的平台使用 |
 
 **依赖方向**：`crypto ← format ← store ← core ← {ffi, cli, native-host, sync}`。由 CI 检查：除 `keevo-crypto` 外，任何 crate 都不得直接依赖密码学原语 crate。

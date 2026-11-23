@@ -984,6 +984,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "keevo-site"
+version = "0.0.0"
+
+[[package]]
 name = "keevo-ssh"
 version = "0.0.0"
 dependencies = [
@@ -1008,6 +1012,7 @@ dependencies = [
  "keevo-crypto",
  "keevo-generator",
  "keevo-ipc",
+ "keevo-site",
  "serde_json",
  "wasm-bindgen",
  "zeroize",

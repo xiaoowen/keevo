@@ -1,0 +1,13 @@
+[package]
+name = "keevo-site"
+description = "Keevo 的可注册域名与同站判断（Public Suffix List）。浏览器扩展（WASM）判断 iframe 是否与顶层同站。"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+# 代码为 MIT OR Apache-2.0；src/public_suffix_list.dat 原样取自 publicsuffix.org，为 MPL-2.0
+license = "(MIT OR Apache-2.0) AND MPL-2.0"
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
