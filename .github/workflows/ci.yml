@@ -123,8 +123,11 @@ jobs:
           persist-credentials: false
       - name: 安装 nightly 与 cargo-fuzz
         run: |
+          # cargo-fuzz 用 rust-toolchain.toml 指定的稳定版构建：它锁定的旧依赖（rustix 的 Linux 后端）检测到 nightly 时
+          # 会用编译器内部属性，新版 nightly 已经不再接受；运行模糊测试时才需要 nightly
+          rustup toolchain install
+          cargo install --locked cargo-fuzz@0.13.1
           rustup toolchain install nightly --profile minimal
-          cargo +nightly install --locked cargo-fuzz@0.13.1
       - name: 运行全部目标
         working-directory: fuzz
         run: |

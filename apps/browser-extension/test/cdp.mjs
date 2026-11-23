@@ -9,7 +9,7 @@
 // （…/X/com.google.Chrome.code_sign_clone/），进程被强行结束时不会删除，反复运行测试会占满磁盘。
 // 关闭浏览器时也先经 DevTools 协议正常退出（close），确实需要品牌版 Chrome 的测试（packaged.mjs）同样不留副本。
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -48,8 +48,13 @@ export function findChromium() {
 export const NO_CHROMIUM = "没有找到 Playwright 的 Chromium（安装：npx playwright install chromium；或用 KEEVO_CHROME 指定）";
 
 export async function launchChrome(chrome, args, env) {
-  // 界面语言固定为中文：测试按中文文字断言（扩展按浏览器的界面语言选择中文或英文）
+  // 界面语言固定为中文：测试按中文文字断言（扩展按浏览器的界面语言选择中文或英文）。macOS 上 Chrome 不理会 --lang，
+  // 界面语言取自应用的 AppleLanguages 偏好（CI 的运行器是英文系统）；在命令行上带 -AppleLanguages 又会让管道模式
+  // 无法启动。因此对只用于测试的 Chrome for Testing 写入它自己的偏好，不改品牌版 Chrome 的设置。
   const lang = ["--lang=zh-CN"];
+  if (process.platform === "darwin" && chrome.includes("Google Chrome for Testing.app")) {
+    execFileSync("defaults", ["write", "com.google.chrome.for.testing", "AppleLanguages", "-array", "zh-CN"]);
+  }
   const proc = spawn(chrome, [...args, ...lang, "--remote-debugging-pipe", "--enable-unsafe-extension-debugging"], {
     env,
     stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],

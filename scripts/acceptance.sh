@@ -55,7 +55,7 @@ if cargo +nightly fuzz --version >/dev/null 2>&1; then
   )
   pass "全部模糊测试目标无崩溃"
 else
-  echo "  ! 没有 nightly 或 cargo-fuzz，跳过（安装：cargo +nightly install --locked cargo-fuzz）"
+  echo "  ! 没有 nightly 或 cargo-fuzz，跳过（安装：在仓库根目录 cargo install --locked cargo-fuzz@0.13.1，并 rustup toolchain install nightly）"
 fi
 
 echo "== 扩展：端到端、真实浏览器与登录页语料"

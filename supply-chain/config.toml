@@ -19,10 +19,6 @@ url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 [imports.zcash]
 url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/audits.toml"
 
-[[exemptions.adler2]]
-version = "2.0.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.aead]]
 version = "0.4.3"
 criteria = "safe-to-deploy"
@@ -93,10 +89,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.blowfish]]
 version = "0.10.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.byteorder]]
-version = "1.5.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.bytes]]
@@ -219,6 +211,10 @@ criteria = "safe-to-deploy"
 version = "0.1.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.form_urlencoded]]
+version = "1.2.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.fs-err]]
 version = "3.3.2"
 criteria = "safe-to-deploy"
@@ -337,10 +333,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.minimal-lexical]]
 version = "0.2.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.miniz_oxide]]
-version = "0.8.9"
 criteria = "safe-to-deploy"
 
 [[exemptions.once_cell]]
@@ -536,7 +528,7 @@ version = "0.6.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.url]]
-version = "2.5.8"
+version = "2.5.9"
 criteria = "safe-to-deploy"
 
 [[exemptions.version_check]]

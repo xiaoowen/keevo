@@ -72,9 +72,22 @@ final class SoftwareEnclave: SecureEnclaveProvider, @unchecked Sendable {
     }
 }
 
-/// `KEEVO_SMOKE_SOFTWARE_ENCLAVE=1` 强制使用软件实现，用于在本机验证 CI 走的路径。
-let useSecureEnclave = SecureEnclave.isAvailable
-    && ProcessInfo.processInfo.environment["KEEVO_SMOKE_SOFTWARE_ENCLAVE"] != "1"
+/// 能否真正使用 Secure Enclave：按应用的路径走一遍（建密钥 → 与临时公钥协商 → 从 blob 重新载入再协商），用途
+/// 不要求用户在场，不会弹出提示。GitHub 的 macOS 运行器（虚拟机）报告 Secure Enclave 可用，实际却建不了密钥，
+/// 只看 `SecureEnclave.isAvailable` 不够。`KEEVO_SMOKE_SOFTWARE_ENCLAVE=1` 强制使用软件实现，用于在本机验证 CI 走的路径。
+func secureEnclaveWorks() -> Bool {
+    guard SecureEnclave.isAvailable,
+          ProcessInfo.processInfo.environment["KEEVO_SMOKE_SOFTWARE_ENCLAVE"] != "1" else { return false }
+    let bridge = SecureEnclaveBridge(touchIDReason: "Keevo 冒烟测试")
+    let purpose: UInt8 = 0x02  // 不是 AUK（0x01）：不要求用户在场
+    guard let key = try? bridge.createKey(purpose: purpose),
+          let ephemeral = try? bridge.agreeEphemeral(publicKey: key.publicKey),
+          let shared = try? bridge.agree(purpose: purpose, keyBlob: key.blob, ephemeralPublic: ephemeral.ephemeralPublic)
+    else { return false }
+    return shared == ephemeral.shared
+}
+
+let useSecureEnclave = secureEnclaveWorks()
 let enclave: SecureEnclaveProvider = useSecureEnclave
     ? SecureEnclaveBridge(touchIDReason: "Keevo 冒烟测试")
     : SoftwareEnclave()

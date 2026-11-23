@@ -11,7 +11,8 @@
 # - 语料库沿用 fuzz/corpus/<目标>/，新发现的输入会加入其中，下次运行接着用；fuzz/seeds/<目标>/ 中入库的种子
 #   （合法的密钥引用、SSH agent 消息、导出文件等）一并读入。
 #
-# 需要 nightly 与 cargo-fuzz（cargo +nightly install --locked cargo-fuzz）。macOS 与 Linux 都可以运行，例如放在
+# 需要 nightly 与 cargo-fuzz。cargo-fuzz 在仓库根目录用稳定版构建（cargo install --locked cargo-fuzz@0.13.1）：
+# 用 nightly 构建时，它锁定的旧依赖在 Linux 上会因新版 nightly 而编译失败。macOS 与 Linux 都可以运行，例如放在
 # 打包机上：检出同一个提交即可，本机积累的语料（fuzz/corpus/，未入库）可以一并拷过去，从更好的起点开始。
 set -euo pipefail
 

@@ -73,8 +73,7 @@ func runBrowserServiceIfRequested() -> Int32? {
     defer { try? FileManager.default.removeItem(at: dir) }
     do {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let enclave: SecureEnclaveProvider = SecureEnclave.isAvailable
-            && ProcessInfo.processInfo.environment["KEEVO_SMOKE_SOFTWARE_ENCLAVE"] != "1"
+        let enclave: SecureEnclaveProvider = secureEnclaveWorks()
             ? SecureEnclaveBridge(touchIDReason: "Keevo 浏览器测试")
             : SoftwareEnclave()
         let created = try createAccount(
