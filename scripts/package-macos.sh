@@ -151,8 +151,9 @@ C
   clang -dynamiclib -o "$WORK/inject.dylib" "$WORK/inject.c"
   codesign --force --sign - --timestamp=none "$WORK/inject.dylib"
 
-  # 2. DYLD_INSERT_LIBRARIES：对照组被注入，Hardened Runtime 下被忽略。系统完整性保护（SIP）关闭时，系统不按
-  #    Hardened Runtime 限制 DYLD_* 环境变量（GitHub 的 macOS 运行器即是如此），这一项无从验证，只在 SIP 开启时实测
+  # 2. DYLD_INSERT_LIBRARIES：对照组被注入，Hardened Runtime 下被忽略。系统完整性保护（SIP）关闭时，系统既不按
+  #    Hardened Runtime 限制 DYLD_* 环境变量，也不执行 Library Validation（GitHub 的 macOS 运行器即是如此），
+  #    第 2、3 项无从验证，只在 SIP 开启时实测
   SIP="$(csrutil status 2>/dev/null || echo "System Integrity Protection status: unknown.")"
   echo "  · ${SIP}"
   KEEVO_INJECT_MARKER="$WORK/plain.marker" DYLD_INSERT_LIBRARIES="$WORK/inject.dylib" \
@@ -175,9 +176,14 @@ C
   REFUSED="$("$WORK/smoke-runtime" --dlopen "$WORK/inject.dylib")"
   CODE=$?
   set -e
-  [[ "$CODE" == 3 ]] || fail "Library Validation 没有拒绝临时签名的库：$REFUSED"
-  REASON="$(grep -oE 'not valid for use in process: [^,]*' <<<"$REFUSED" | head -1 | sed 's/)$//')"
-  pass "Library Validation 拒绝临时签名的库，放行系统库（${REASON:-$REFUSED}）"
+  if [[ "$CODE" == 3 ]]; then
+    REASON="$(grep -oE 'not valid for use in process: [^,]*' <<<"$REFUSED" | head -1 | sed 's/)$//')"
+    pass "Library Validation 拒绝临时签名的库，放行系统库（${REASON:-$REFUSED}）"
+  elif grep -q "disabled" <<<"$SIP"; then
+    echo "  ! 跳过 Library Validation 的实测：本机关闭了系统完整性保护，系统不执行库校验；SIP 开启的机器上必须通过"
+  else
+    fail "Library Validation 没有拒绝临时签名的库：$REFUSED"
+  fi
 
   # 命令行工具与 SSH Agent（spec/cli.md、spec/ssh-agent.md）：服务由 keevo-smoke 提供（同一份 Rust 静态库），
   # HOME 指向临时目录，socket 随之放在那里
