@@ -356,6 +356,7 @@ struct CliAuthorizationSheet: View {
             }
             .onChange(of: left) { if left == 0, model.browserDialog?.id == request.id { model.browserDialog = nil } }
         }
+        .kvContainerFocus()
     }
 
     private func allow() {
@@ -436,6 +437,7 @@ struct SshSignSheet: View {
             }
             .onChange(of: left) { if left == 0, model.browserDialog?.id == request.id { model.browserDialog = nil } }
         }
+        .kvContainerFocus()
     }
 
     private func allow() {

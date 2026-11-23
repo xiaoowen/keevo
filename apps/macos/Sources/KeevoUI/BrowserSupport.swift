@@ -285,6 +285,7 @@ struct PairingConfirmSheet: View {
             }
             .onChange(of: left) { if left == 0, model.browserDialog?.id == request.id { model.browserDialog = nil } }
         }
+        .kvContainerFocus()
     }
 
     private func answer(_ accepted: Bool) {
@@ -354,6 +355,7 @@ struct FillAuthorizationSheet: View {
             }
             .onChange(of: left) { if left == 0, model.browserDialog?.id == request.id { model.browserDialog = nil } }
         }
+        .kvContainerFocus()
     }
 
     private func answer(_ accepted: Bool) {
@@ -404,6 +406,7 @@ struct SearchAuthorizationSheet: View {
             }
             .onChange(of: left) { if left == 0, model.browserDialog?.id == request.id { model.browserDialog = nil } }
         }
+        .kvContainerFocus()
     }
 
     private func answer(_ accepted: Bool) {
@@ -450,6 +453,7 @@ struct UpdateConfirmationSheet: View {
             }
             .onChange(of: left) { if left == 0, model.browserDialog?.id == request.id { model.browserDialog = nil } }
         }
+        .kvContainerFocus()
     }
 
     private func answer(_ accepted: Bool) {

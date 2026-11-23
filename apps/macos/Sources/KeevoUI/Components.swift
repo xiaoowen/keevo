@@ -812,6 +812,29 @@ struct KVSegmented<Value: Hashable>: View {
     }
 }
 
+// MARK: - 焦点
+
+/// 打开时焦点给容器本身（不画焦点框）。开启全键盘操作时，没有输入框的面板、弹出框会把焦点框放在第一个按钮、
+/// 开关或可选择的文字上，而且不随点击移动；用 Tab 才进入其中的控件。Esc 等键盘快捷键照常可用。
+private struct ContainerFocus: ViewModifier {
+    @FocusState private var focused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .focusable()
+            .focusEffectDisabled()
+            .focused($focused)
+            .onAppear { focused = true }
+    }
+}
+
+extension View {
+    /// 见 `ContainerFocus`：用于确认面板、开关列表等没有输入框的容器。
+    func kvContainerFocus() -> some View {
+        modifier(ContainerFocus())
+    }
+}
+
 // MARK: - 面板
 
 /// 面板（sheet）的统一框架：标题区（可选图标）、内容、底部按钮靠右。
