@@ -16,8 +16,24 @@ use keevo_ipc::cli::{
 
 use crate::client::{CliError, Client};
 
-/// 引用无法解析时附在报错后面的提示。
-const REF_HINT: &str = "提示：在 Keevo 中右键点字段，选「复制 keevo:// 引用」可以得到准确的引用；keevo item get 保险库/条目 列出字段名。";
+/// 引用无法解析时附在报错后面的提示（不含"提示："标签，见 [`hint`]）。
+const REF_HINT: &str = "在 Keevo 中右键点字段，选「复制 keevo:// 引用」可以得到准确的引用；keevo item get 保险库/条目 列出字段名。";
+
+/// 一行提示："提示：…"。`color` 时"提示"二字用青色加粗，与报错区分开。
+fn hint(text: &str, color: bool) -> String {
+    if color {
+        format!("\x1b[1;36m提示\x1b[0m：{text}")
+    } else {
+        format!("提示：{text}")
+    }
+}
+
+/// 标准错误是终端、没有设置 `NO_COLOR`（https://no-color.org）、`TERM` 不是 `dumb` 时才用颜色。
+fn stderr_color() -> bool {
+    std::io::stderr().is_terminal()
+        && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
+        && std::env::var_os("TERM").is_none_or(|t| t != "dumb")
+}
 
 const USAGE: &str = "keevo — Keevo 的命令行工具
 
@@ -109,7 +125,7 @@ fn main() {
             eprint(&format!("keevo：{e}"));
             // 引用无法解析（退出码 6）：说明怎样得到准确的引用
             if matches!(e, CliError::Ref(_)) {
-                eprint(REF_HINT);
+                eprint(&hint(REF_HINT, stderr_color()));
             }
             e.exit_code()
         }
@@ -554,4 +570,16 @@ fn ssh_sign(args: Args) -> Result<i32, CliError> {
         .env("SSH_AUTH_SOCK", sock)
         .exec();
     Err(CliError::Other(format!("无法运行 ssh-keygen：{err}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{REF_HINT, hint};
+
+    #[test]
+    fn hint_is_plain_without_color() {
+        assert_eq!(hint("x", false), "提示：x");
+        assert_eq!(hint("x", true), "\x1b[1;36m提示\x1b[0m：x");
+        assert!(hint(REF_HINT, false).starts_with("提示：在 Keevo 中右键点字段"));
+    }
 }
