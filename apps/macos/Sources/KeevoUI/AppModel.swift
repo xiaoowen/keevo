@@ -27,6 +27,15 @@ final class AppModel {
     var pendingKdf: KdfInfo?
     private(set) var vaults: [VaultEntry] = []
     private(set) var items: [ItemEntry] = []
+
+    /// 记下条目被使用了一次（在 Keevo 或快速访问中复制），并就地更新列表中的使用次数与最近使用（列表排序），
+    /// 不重新读取全部条目。写入失败不影响复制本身。
+    func recordUse(itemId: String) {
+        guard (try? vault?.recordItemUse(itemId: itemId)) != nil,
+              let index = items.firstIndex(where: { $0.id == itemId }) else { return }
+        items[index].useCount += 1
+        items[index].lastUsedMs = UInt64(max(0, Date().timeIntervalSince1970 * 1000))
+    }
     /// 每次条目数据变化时加 1。详情等视图据此重新读取。
     private(set) var dataVersion = 0
 

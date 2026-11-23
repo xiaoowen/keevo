@@ -1005,6 +1005,26 @@ fn browser_service_pairs_lists_and_revokes() {
         is_fill(&fill(&mut client, &mut stream)),
         "设置页中选所有网站"
     );
+    // 经扩展取用凭据记为使用（列表排序）；Keevo 中复制由界面调用 record_item_use
+    let uses = |id: &str| {
+        f.vault
+            .items()
+            .unwrap()
+            .into_iter()
+            .find(|i| i.id == id)
+            .map(|i| {
+                (
+                    i.use_count,
+                    i.last_used_ms.is_some(),
+                    i.created_ms.is_some(),
+                )
+            })
+            .unwrap()
+    };
+    let (count, used, created) = uses(&gh);
+    assert!(count >= 4 && used && created, "{count} {used} {created}");
+    f.vault.record_item_use(gh.clone()).unwrap();
+    assert_eq!(uses(&gh).0, count + 1);
     assert!(
         f.vault
             .set_browser_fill_all_sites(pairings[0].id.clone(), false)
@@ -1767,6 +1787,15 @@ fn performance_budget() {
     let started = Instant::now();
     vault.import_items(vault_id, parsed.items, None).unwrap();
     println!("导入 1 万条目：{:?}", started.elapsed());
+    // 第一次列出时补算全部条目的创建时间（列表排序，只发生一次）
+    vault.lock();
+    vault.unlock("pw", &sk).unwrap();
+    let ids: Vec<_> = vault.items().unwrap().iter().map(|i| i.id).collect();
+    let started = Instant::now();
+    let stats = vault.item_stats(&ids).unwrap();
+    println!("第一次补算 1 万条目的创建时间：{:?}", started.elapsed());
+    assert!(stats.values().all(|s| s.created_ms.is_some()));
+    // 之后每次解锁：从本机记录读入统计
     vault.lock();
     vault.unlock("pw", &sk).unwrap();
     let v = KeevoVault::new(vault);

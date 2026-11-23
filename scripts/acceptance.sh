@@ -23,7 +23,7 @@ limit() {
 
 echo "== 性能预算（docs/product.md §6.1，release 构建）"
 limit 900 cargo test -p keevo-ffi --release --locked -- --ignored performance_budget --nocapture 2>&1 \
-  | grep -E "列表可用|搜索 |安全检查|test result" || fail "性能预算"
+  | grep -E "列表可用|补算|搜索 |安全检查|test result" || fail "性能预算"
 pass "列表可用 < 300 ms，每次按键的搜索 < 16 ms"
 
 echo "== kill -9（反复强行结束写入进程，数据零损坏）"

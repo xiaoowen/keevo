@@ -18,7 +18,7 @@ use keevo_ipc::service::{
     VaultBackend, WriteOp, WriteRequest,
 };
 
-use crate::backend::CoreBackend;
+use crate::backend::{CoreBackend, record_uses};
 use crate::pairing::{
     Authorization, Bound, FillDecision, Live, LoadReport, PairingCache, ReadOnly,
 };
@@ -295,9 +295,14 @@ impl VaultService {
                 break;
             };
             let outputs = {
-                let vault = lock(&self.vault);
+                let mut vault = lock(&self.vault);
                 let mut pairings = lock(&self.pairings);
-                conn.on_frame(&frame, &mut Live(&mut pairings), &CoreBackend::new(&vault))
+                let backend = CoreBackend::new(&vault);
+                let outputs = conn.on_frame(&frame, &mut Live(&mut pairings), &backend);
+                // 取用了凭据的条目记一次使用（列表排序）
+                let used = backend.take_used();
+                record_uses(&mut vault, &used);
+                outputs
             };
             // 会话一建立就登记，早于任何可能阻塞的发送（第二轮评审 G7）；
             // 配对确认发生在 emit 内，那里同样先登记再发送（第三轮评审 H6）
@@ -415,7 +420,11 @@ impl VaultService {
                                     bound.set_all_sites(&request.extension_public, true).is_ok()
                                 }
                             };
-                        conn.resolve_fill(granted, &mut Live(&mut cache), &CoreBackend::new(&vault))
+                        let backend = CoreBackend::new(&vault);
+                        let more = conn.resolve_fill(granted, &mut Live(&mut cache), &backend);
+                        let used = backend.take_used();
+                        record_uses(&mut vault, &used);
+                        more
                     };
                     if !self.emit(id, stream, conn, more) {
                         return false;

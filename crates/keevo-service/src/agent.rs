@@ -284,6 +284,8 @@ impl SshAgent {
         };
         match signature {
             Some(sig) => {
+                // 签名记一次使用（列表排序）
+                crate::backend::record_uses(&mut self.dev.vault(), &[item_id]);
                 self.dev.prompt.ssh_signed(&request);
                 sign_response(&sig)
             }

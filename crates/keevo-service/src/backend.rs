@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use keevo_core::{FieldKind, Id128, ItemType, Purpose, RecordKey, RecordValue, Vault, url_match};
@@ -5,15 +6,42 @@ use keevo_ipc::message::{Candidate, FillData};
 use keevo_ipc::service::VaultBackend;
 
 /// 把 IPC 状态机的后端接口接到保险库上。只有登录条目、且不在回收站中的条目才会参与匹配。
+///
+/// 后端只借用保险库（不可变），取用了凭据的条目先记在这里；调用方在借用结束后用 [`record_uses`] 写入使用记录
+/// （列表排序的"使用频率""最近使用"）。
 pub struct CoreBackend<'a> {
     vault: &'a Vault,
+    used: RefCell<Vec<Id128>>,
 }
 
 impl<'a> CoreBackend<'a> {
     /// 包装一个保险库。
     #[must_use]
     pub const fn new(vault: &'a Vault) -> Self {
-        Self { vault }
+        Self {
+            vault,
+            used: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// 这次调用中取用了凭据的条目（同一条目只记一次）。
+    #[must_use]
+    pub fn take_used(&self) -> Vec<Id128> {
+        let mut used = self.used.take();
+        used.sort_unstable();
+        used.dedup();
+        used
+    }
+}
+
+/// 记下这些条目被使用了一次。写入失败不影响已经完成的取用。
+pub(crate) fn record_uses(vault: &mut Vault, items: &[Id128]) {
+    let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        return;
+    };
+    let now = u64::try_from(now.as_millis()).unwrap_or(u64::MAX);
+    for id in items {
+        let _ = vault.record_use(*id, now);
     }
 }
 
@@ -160,10 +188,12 @@ impl VaultBackend for CoreBackend<'_> {
                 self.vault.otp_code(id, field_id, ms).ok()
             })
             .map(|c| c.code.as_str().to_owned());
-        Some(FillData {
+        let data = FillData {
             username: text_with(Purpose::Username).unwrap_or_default(),
             password: text_with(Purpose::Password)?,
             totp,
-        })
+        };
+        self.used.borrow_mut().push(id);
+        Some(data)
     }
 }

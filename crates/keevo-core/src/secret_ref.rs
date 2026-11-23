@@ -481,6 +481,18 @@ impl SecretRef {
     /// # Errors
     /// 见 [`RefError`]。
     pub fn resolve(&self, vault: &Vault, now_ms: u64) -> Result<Zeroizing<String>, RefError> {
+        self.resolve_item(vault, now_ms).map(|(_, value)| value)
+    }
+
+    /// 同 [`SecretRef::resolve`]，另外返回引用指向的条目（记录使用，用于列表排序）。
+    ///
+    /// # Errors
+    /// 同 [`SecretRef::resolve`]。
+    pub fn resolve_item(
+        &self,
+        vault: &Vault,
+        now_ms: u64,
+    ) -> Result<(Id128, Zeroizing<String>), RefError> {
         let vaults: Vec<_> = vault
             .vaults()?
             .into_iter()
@@ -501,7 +513,7 @@ impl SecretRef {
             None => None,
         };
         let target = find_field(doc, section, &self.field)?;
-        match (target, self.attribute) {
+        let value = match (target, self.attribute) {
             (Target::Field(f), Attribute::Value) => match &f.data {
                 FieldData::Text(t) => Ok(Zeroizing::new(t.expose().to_owned())),
                 _ => Err(RefError::UnsupportedField),
@@ -526,7 +538,8 @@ impl SecretRef {
             (Target::Kv(..) | Target::ConnectionString, Attribute::Otp) => {
                 Err(RefError::UnsupportedField)
             }
-        }
+        };
+        Ok((item_id, value?))
     }
 }
 

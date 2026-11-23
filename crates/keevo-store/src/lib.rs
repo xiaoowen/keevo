@@ -433,6 +433,28 @@ impl Store {
         Ok(())
     }
 
+    /// 在一个事务中写入或替换多条同种的本机记录：全部成功，或者都不写。
+    ///
+    /// # Errors
+    /// SQLite 错误；某条密文超长时返回 [`StoreError::TooLarge`]，什么都不写。
+    pub fn put_local_records(&mut self, kind: &str, records: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+        for (id, ct) in records {
+            check_local_record(id, ct)?;
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO local_record (kind, id, ct) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(kind, id) DO UPDATE SET ct = excluded.ct",
+            )?;
+            for (id, ct) in records {
+                stmt.execute(params![kind, id, ct])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// 删除一条本机记录。不存在时也算成功。
     ///
     /// # Errors
@@ -771,6 +793,72 @@ impl Store {
         };
         tx.commit()?;
         rows
+    }
+
+    /// 某类对象各自最早写入、且仍留有内容（未清理、不是墓碑、有概要）的修订，不含详情密文：一次取出全部条目的
+    /// 创建时间（[`Store::earliest_content_revision`] 的批量版本）。
+    ///
+    /// # Errors
+    /// SQLite 错误；某列超长时返回 [`StoreError::Corrupt`]。
+    pub fn earliest_content_revisions(&self, kind: ObjectKind) -> Result<Vec<RevisionRow>> {
+        let tx = self.snapshot()?;
+        let env = keevo_crypto::MAX_ENVELOPE_LEN;
+        let parents = MAX_PARENTS * 16;
+        // 与随后的读取在同一个快照中，只在 WHERE 中计算 length()（第二、三轮评审 G4、H3）
+        let oversized: bool = tx.query_row(
+            &format!(
+                "SELECT EXISTS(SELECT 1 FROM revision r
+                 WHERE r.object_type = ?1 AND r.pruned = 0 AND r.deleted = 0 AND r.overview_ct IS NOT NULL AND (
+                   length(r.rev_id) != 16 OR length(r.object_id) != 16 OR length(r.vault_id) != 16
+                   OR length(r.origin_device) != 16 OR length(r.parents) % 16 != 0
+                   OR length(r.parents) > {parents}
+                   OR coalesce(length(r.wrapped_key_ct), 0) > {env}
+                   OR length(r.overview_ct) > {env}))"
+            ),
+            [kind.code()],
+            |r| r.get(0),
+        )?;
+        if oversized {
+            return Err(StoreError::Corrupt("column exceeds its size limit"));
+        }
+        let rows = {
+            let mut stmt = tx.prepare(
+                "SELECT r.rev_id, r.object_id, r.object_type, r.vault_id, r.parents, r.origin_device,
+                        r.origin_seq, r.wrapped_key_ct, r.overview_ct, NULL, r.deleted, r.pruned
+                 FROM revision r
+                 JOIN (SELECT min(seq) AS seq FROM revision
+                       WHERE object_type = ?1 AND pruned = 0 AND deleted = 0 AND overview_ct IS NOT NULL
+                       GROUP BY object_id) m ON r.seq = m.seq
+                 ORDER BY r.object_id",
+            )?;
+            let rows = stmt.query_map([kind.code()], raw_revision)?;
+            rows.map(|r| r.map_err(StoreError::from).and_then(RawRevision::into_row))
+                .collect::<Result<Vec<_>>>()
+        };
+        tx.commit()?;
+        rows
+    }
+
+    /// 对象最早写入、且仍留有内容（未清理、不是墓碑、有概要）的修订：用来确定条目的创建时间。没有时为 `None`。
+    ///
+    /// # Errors
+    /// SQLite 错误或数据损坏。
+    pub fn earliest_content_revision(&self, object_id: &Id128) -> Result<Option<RevisionRow>> {
+        let tx = self.snapshot()?;
+        Self::check_sizes(&tx, "object_id = ?1", object_id)?;
+        let row = {
+            let mut stmt = tx.prepare(&format!(
+                "SELECT {REVISION_COLUMNS} FROM revision
+                 WHERE object_id = ?1 AND pruned = 0 AND deleted = 0 AND overview_ct IS NOT NULL
+                 ORDER BY seq ASC LIMIT 1"
+            ))?;
+            let mut rows = stmt.query_map([object_id.as_bytes().as_slice()], raw_revision)?;
+            rows.next()
+                .map(|r| r.map_err(StoreError::from).and_then(RawRevision::into_row))
+                .transpose()
+        };
+        tx.commit()?;
+        row
     }
 
     /// 开启一个只读快照：长度预检与随后的读取必须看到同一份数据（第三轮评审 H3），

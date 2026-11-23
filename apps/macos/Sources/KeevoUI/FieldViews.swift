@@ -51,6 +51,7 @@ struct FieldDisplay: View {
             CodesRows(itemId: itemId, field: field, revealed: revealed, toggle: toggle)
         default:
             FieldRow(
+                itemId: itemId,
                 field: field,
                 revealed: revealed.contains(field.id),
                 toggle: { toggle(field.id) },
@@ -132,9 +133,11 @@ extension View {
 }
 
 extension AppModel {
-    /// 复制字段的值（复制按钮与双击）：剪贴板在 Clipboard.clearAfter 秒后清除，底部提示。
-    func copyField(label: String, value: String) {
+    /// 复制字段的值（复制按钮与双击）：剪贴板在 Clipboard.clearAfter 秒后清除，底部提示。`itemId` 不为空时记一次
+    /// 使用（列表按"使用频率""最近使用"排序）。
+    func copyField(label: String, value: String, itemId: String? = nil) {
         Clipboard.copy(value)
+        if let itemId { recordUse(itemId: itemId) }
         showToast(tr("已复制{} · {} 秒后清除", "\(tr(label))", "\(Int(Clipboard.clearAfter))"))
     }
 }
@@ -174,7 +177,7 @@ struct WebsitesBlock: View {
             ForEach(Array(fields.enumerated()), id: \.element.id) { index, field in
                 ItemFieldRow(
                     label: index == 0 ? field.label : "",
-                    copy: { model.copyField(label: field.label, value: field.value.expose()) }
+                    copy: { model.copyField(label: field.label, value: field.value.expose(), itemId: itemId) }
                 ) {
                     if let url = URL(string: field.value.expose()), url.scheme == "https" || url.scheme == "http" {
                         Link(FieldRow.display(url), destination: url)
@@ -189,7 +192,7 @@ struct WebsitesBlock: View {
                             .lineLimit(1)
                     }
                 } actions: {
-                    CopyButton(label: field.label) { field.value.expose() }
+                    CopyButton(label: field.label, itemId: itemId) { field.value.expose() }
                 }
                 .contextMenu { ReferenceMenu(itemId: itemId, fieldId: field.id) }
             }
@@ -252,6 +255,7 @@ struct CardRow<Value: View, Actions: View>: View {
 /// 普通字段与秘密字段。
 struct FieldRow: View {
     @Environment(AppModel.self) private var model
+    var itemId: String?
     let field: FieldEntry
     let revealed: Bool
     let toggle: () -> Void
@@ -266,7 +270,7 @@ struct FieldRow: View {
         ItemFieldRow(
             label: field.label,
             highlighted: field.concealed && revealed,
-            copy: { model.copyField(label: field.label, value: field.value.expose()) }
+            copy: { model.copyField(label: field.label, value: field.value.expose(), itemId: itemId) }
         ) {
             valueView
         } accessory: {
@@ -281,7 +285,7 @@ struct FieldRow: View {
                 )
                 LargeTypeButton(action: largeType)
             }
-            CopyButton(label: field.label) { field.value.expose() }
+            CopyButton(label: field.label, itemId: itemId) { field.value.expose() }
         }
     }
 
@@ -331,6 +335,8 @@ struct FieldRow: View {
 struct CopyButton: View {
     @Environment(AppModel.self) private var model
     let label: String
+    /// 复制的内容所属的条目：复制时记一次使用。
+    var itemId: String?
     let value: () -> String
 
     var body: some View {
@@ -339,7 +345,7 @@ struct CopyButton: View {
             label: tr("复制{}", "\(tr(label))"),
             help: tr("复制（{} 秒后自动清除）", "\(Int(Clipboard.clearAfter))")
         ) {
-            model.copyField(label: label, value: value())
+            model.copyField(label: label, value: value(), itemId: itemId)
         }
     }
 }
@@ -358,7 +364,9 @@ struct OtpRow: View {
             let remaining = max(0, expiresAt.timeIntervalSince(context.date))
             ItemFieldRow(
                 label: field.label,
-                copy: code.flatMap { c in invalid ? nil : { model.copyField(label: field.label, value: c.code.expose()) } }
+                copy: code.flatMap { c in
+                    invalid ? nil : { model.copyField(label: field.label, value: c.code.expose(), itemId: itemId) }
+                }
             ) {
                 if invalid {
                     Text(tr("配置无效，请在编辑器中检查")).font(KV.Typography.footnote).foregroundStyle(KV.Colors.statusDangerFg)
@@ -380,7 +388,7 @@ struct OtpRow: View {
                 }
             } actions: {
                 if let code, !invalid {
-                    CopyButton(label: field.label) { code.code.expose() }
+                    CopyButton(label: field.label, itemId: itemId) { code.code.expose() }
                 }
             }
             .onChange(of: context.date) { refreshIfNeeded(context.date) }
@@ -458,7 +466,7 @@ struct KvRows: View {
                 labelColor: KV.Colors.fgPrimary,
                 labelWidth: 180,
                 highlighted: entry.concealed && shown,
-                copy: { model.copyField(label: entry.key, value: entry.value.expose()) }
+                copy: { model.copyField(label: entry.key, value: entry.value.expose(), itemId: itemId) }
             ) {
                 if entry.concealed && !shown {
                     Text(String(repeating: "•", count: 10))
@@ -484,7 +492,7 @@ struct KvRows: View {
                     }
                     Button(shown ? tr("隐藏") : tr("显示")) { toggle(key) }.buttonStyle(.kvLink)
                 }
-                CopyButton(label: entry.key) { entry.value.expose() }
+                CopyButton(label: entry.key, itemId: itemId) { entry.value.expose() }
             }
             .contextMenu { ReferenceMenu(itemId: itemId, fieldId: field.id, kvKey: entry.key) }
         }
@@ -620,8 +628,8 @@ struct CodesRows: View {
                     Spacer()
                 }
                 .contentShape(Rectangle())
-                .doubleClickToCopy { model.copyField(label: tr("恢复码"), value: code.code.expose()) }
-                CopyButton(label: tr("恢复码")) { code.code.expose() }
+                .doubleClickToCopy { model.copyField(label: tr("恢复码"), value: code.code.expose(), itemId: itemId) }
+                CopyButton(label: tr("恢复码"), itemId: itemId) { code.code.expose() }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)

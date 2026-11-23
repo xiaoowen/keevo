@@ -247,6 +247,8 @@ pub struct Vault {
     secret_key_broken: bool,
     /// Touch ID 的包裹已失效，用主密码解锁后重新包裹。
     touch_id_broken: bool,
+    /// 条目的本机统计（[`stats`]）：解锁后第一次需要时读入，锁定时丢弃。
+    stats: Option<HashMap<Id128, stats::ItemStats>>,
 }
 
 impl Vault {
@@ -305,6 +307,7 @@ impl Vault {
             local: None,
             secret_key_broken: false,
             touch_id_broken: false,
+            stats: None,
         };
         vault.create_vault(DEFAULT_VAULT_NAME)?;
         Ok((vault, secret_key))
@@ -444,6 +447,7 @@ impl Vault {
             local: None,
             secret_key_broken: false,
             touch_id_broken: false,
+            stats: None,
         })
     }
 
@@ -1070,6 +1074,7 @@ impl Vault {
     /// 锁定：清除内存中的全部密钥。
     pub fn lock(&mut self) {
         self.session = None;
+        self.stats = None;
     }
 
     /// 把整个数据库备份到 `dest`（[`crate::backup`]）。锁定时也可以进行：备份中只有密文。
@@ -2033,6 +2038,29 @@ impl Vault {
         Ok(())
     }
 
+    /// 在一个事务中写入或替换多条同种的本机记录：全部成功，或者都不写。
+    ///
+    /// # Errors
+    /// 同 [`Vault::put_local_record`]。
+    pub fn put_local_records(&mut self, kind: &str, records: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+        let session = self.session()?;
+        let sealed = records
+            .iter()
+            .map(|(id, plaintext)| {
+                keevo_crypto::seal_local_record(
+                    session.keyset.account_key(),
+                    &session.account_id,
+                    kind,
+                    id,
+                    plaintext,
+                )
+                .map(|ct| (id.clone(), ct))
+            })
+            .collect::<core::result::Result<Vec<_>, _>>()?;
+        self.store.put_local_records(kind, &sealed)?;
+        Ok(())
+    }
+
     /// 删除一条本机记录。与写入一样要求已解锁（撤销只在解锁时进行，`spec/ipc.md` §4.2）。
     ///
     /// # Errors
@@ -2668,6 +2696,9 @@ fn verify_entry(
         LocalPurpose::Auk => true,
     })
 }
+
+mod stats;
+pub use stats::{ITEM_STATS_KIND, ItemStats};
 
 #[cfg(test)]
 mod tests;

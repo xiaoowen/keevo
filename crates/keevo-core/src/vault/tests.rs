@@ -1286,3 +1286,56 @@ fn rebuild_reports_unreadable_attachments() {
         .collect();
     assert_eq!(names, [good.name]);
 }
+
+/// 条目的本机统计（列表排序）：创建时间取最早的修订，使用次数与最近使用逐次累加；存成加密的本机记录，
+/// 重新打开后仍在；锁定时丢弃内存中的副本；永久删除的条目的记录随之删除。
+#[test]
+fn item_stats_created_uses_and_cleanup() {
+    let tmp = TempDir::new();
+    let (mut vault, secret_key) = Vault::create(&tmp.db(), "pw stats", fast_params()).unwrap();
+    let vault_id = vault.vaults().unwrap()[0].id;
+    let before = vault_now_ms_for_tests();
+    let a = vault
+        .create_item(vault_id, ItemType::Login, "A", login_fields())
+        .unwrap();
+    let b = vault
+        .create_item(vault_id, ItemType::Login, "B", vec![])
+        .unwrap();
+    let after = vault_now_ms_for_tests();
+    // 修改之后，创建时间仍是第一个修订的时间
+    vault
+        .update_item(a, vec![Edit::SetTitle("A2".into())])
+        .unwrap();
+
+    let stats = vault.item_stats(&[a, b]).unwrap();
+    let created = stats[&a].created_ms.unwrap();
+    assert!(
+        (before..=after).contains(&created),
+        "{before} ≤ {created} ≤ {after}"
+    );
+    assert_eq!((stats[&a].uses, stats[&a].last_used_ms), (0, None));
+
+    vault.record_use(a, 1_000).unwrap();
+    vault.record_use(a, 2_000).unwrap();
+    vault.record_use(b, 1_500).unwrap();
+    let stats = vault.item_stats(&[a, b]).unwrap();
+    assert_eq!((stats[&a].uses, stats[&a].last_used_ms), (2, Some(2_000)));
+    assert_eq!((stats[&b].uses, stats[&b].last_used_ms), (1, Some(1_500)));
+
+    // 锁定时不可用；重新打开、解锁后从本机记录读回
+    vault.lock();
+    assert_eq!(vault.record_use(a, 3_000).err(), Some(CoreError::Locked));
+    drop(vault);
+    let mut vault = Vault::open(&tmp.db()).unwrap();
+    vault.unlock("pw stats", &secret_key).unwrap();
+    let stats = vault.item_stats(&[a, b]).unwrap();
+    assert_eq!(stats[&a].created_ms, Some(created));
+    assert_eq!((stats[&a].uses, stats[&a].last_used_ms), (2, Some(2_000)));
+
+    // 不再存在的条目：记录删除
+    vault.purge_item(b).unwrap();
+    let stats = vault.item_stats(&[a]).unwrap();
+    assert!(!stats.contains_key(&b));
+    let (rows, _) = vault.local_records(ITEM_STATS_KIND).unwrap();
+    assert_eq!(rows.len(), 1);
+}

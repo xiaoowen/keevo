@@ -659,6 +659,12 @@ pub struct ItemEntry {
     pub updated_ms: u64,
     /// 是否有未解决的并发冲突。
     pub has_conflicts: bool,
+    /// 创建时间（Unix 毫秒，本机统计）；算不出时为 `None`。
+    pub created_ms: Option<u64>,
+    /// 在这台 Mac 上的使用次数（复制、浏览器填充、命令行取用、SSH 签名）。
+    pub use_count: u64,
+    /// 在这台 Mac 上最近一次使用（Unix 毫秒）；从未使用时为 `None`。
+    pub last_used_ms: Option<u64>,
 }
 
 /// 条目字段。
@@ -1229,8 +1235,8 @@ impl KeevoVault {
     /// 已锁定时返回 [`KeevoError::Locked`]。
     pub fn items(&self) -> Result<Vec<ItemEntry>, KeevoError> {
         let weak = self.security_state().weak_items();
-        let items = {
-            let vault = self.vault();
+        let (items, stats) = {
+            let mut vault = self.vault();
             let items = vault.items()?;
             let names = vault
                 .vaults()?
@@ -1242,11 +1248,19 @@ impl KeevoVault {
             // 安全中心检查过时，保留弱密码的标记（`is:weak`）
             index.set_weak(&weak);
             *self.index() = Some(index);
-            items
+            // 列表排序用的本机统计（创建时间、使用次数、最近使用）
+            let ids: Vec<Id128> = items.iter().map(|i| i.id).collect();
+            // 读不出统计时列表照常显示，只是排序缺少使用情况与创建时间
+            let stats = vault.item_stats(&ids).unwrap_or_default();
+            (items, stats)
         };
         Ok(items
             .into_iter()
-            .map(|i| ItemEntry {
+            .map(|i| {
+                let s = stats.get(&i.id).copied().unwrap_or_default();
+                (i, s)
+            })
+            .map(|(i, s)| ItemEntry {
                 id: i.id.to_hex(),
                 vault_id: i.vault_id.to_hex(),
                 item_type: item_type_name(i.overview.item_type).to_owned(),
@@ -1258,6 +1272,9 @@ impl KeevoVault {
                 trashed: i.overview.trashed_at.is_some(),
                 updated_ms: i.overview.updated.millis(),
                 has_conflicts: i.has_conflicts,
+                created_ms: s.created_ms,
+                use_count: s.uses,
+                last_used_ms: s.last_used_ms,
             })
             .collect())
     }
@@ -1453,6 +1470,20 @@ impl KeevoVault {
             period: code.period,
             remaining_ms: code.remaining_ms,
         })
+    }
+
+    /// 记下条目被使用了一次（在 Keevo 或快速访问中复制）。列表按"使用频率""最近使用"排序时用到；
+    /// 浏览器填充、命令行取用与 SSH 签名由服务自己记录。
+    ///
+    /// # Errors
+    /// 已锁定、ID 不合法或写入失败时返回错误；调用方通常忽略它，不影响复制本身。
+    pub fn record_item_use(&self, item_id: String) -> Result<(), KeevoError> {
+        let id = parse_id(&item_id)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+            .unwrap_or(0);
+        Ok(self.vault().record_use(id, now)?)
     }
 
     /// 条目的历史，从新到旧。

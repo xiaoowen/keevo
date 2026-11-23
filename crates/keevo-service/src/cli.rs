@@ -215,7 +215,7 @@ impl CliService {
         }
         let mut vault = self.dev.vault();
         match request {
-            Request::Resolve { refs, .. } => resolve(id, &vault, refs),
+            Request::Resolve { refs, .. } => resolve(id, &mut vault, refs),
             Request::Items {
                 vault: v, query, ..
             } => items(id, &vault, v.as_deref(), query.as_deref()),
@@ -241,20 +241,24 @@ impl CliService {
     }
 }
 
-fn resolve(id: u32, vault: &Vault, refs: &[String]) -> Reply {
+fn resolve(id: u32, vault: &mut Vault, refs: &[String]) -> Reply {
     if refs.is_empty() || refs.len() > MAX_REFS {
         return Err(Failure::new("bad_request", "refs 应有 1–256 个"));
     }
     let now = now_ms();
+    let mut used = Vec::new();
     let mut values: Vec<ResolvedValue> = refs
         .iter()
         .map(
-            |r| match SecretRef::parse(r).and_then(|r| r.resolve(vault, now)) {
-                Ok(v) => ResolvedValue {
-                    value: Some(v.to_string()),
-                    error: None,
-                    message: None,
-                },
+            |r| match SecretRef::parse(r).and_then(|r| r.resolve_item(vault, now)) {
+                Ok((item, v)) => {
+                    used.push(item);
+                    ResolvedValue {
+                        value: Some(v.to_string()),
+                        error: None,
+                        message: None,
+                    }
+                }
                 Err(e) => ResolvedValue {
                     value: None,
                     error: Some(e.code().to_owned()),
@@ -263,6 +267,10 @@ fn resolve(id: u32, vault: &Vault, refs: &[String]) -> Reply {
             },
         )
         .collect();
+    // 取用了的条目各记一次使用（列表排序）；同一次请求中引用同一条目的多个字段只算一次
+    used.sort_unstable();
+    used.dedup();
+    crate::backend::record_uses(vault, &used);
     let reply = ok(
         id,
         &ResolveResult {

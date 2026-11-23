@@ -50,6 +50,9 @@ struct MainView: View {
     /// 切换侧边栏后要选中的条目（"在 Keevo 中打开"）：切换会清空选中，由切换的处理代为选中。
     @ViewState private var selectAfterSidebarChange: String?
     @ViewState private var search = ""
+    /// 列表的排序（设计稿"强度、双击复制、排序与检查更新"），记在这台 Mac 上。有搜索词时按相关度排列。
+    @AppStorage("list.sort") private var sort: ListSort = .title
+    @AppStorage("list.sortReversed") private var sortReversed = false
     @FocusState private var searchFocused: Bool
     @FocusState private var listFocused: Bool
     @ViewState private var showingNewLogin = false
@@ -79,18 +82,12 @@ struct MainView: View {
         }
     }
 
-    /// 没有搜索词时按标题排序（汉字按拼音与拉丁字母混排，见 AppModel.sortKeys）；有搜索词时由 Rust 按相关度排序。
+    /// 没有搜索词时按所选方式排序（标题中的汉字按拼音与拉丁字母混排，见 AppModel.sortKeys）；有搜索词时由 Rust
+    /// 按相关度排序。
     private var visibleItems: [ItemEntry] {
         let query = search.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else {
-            let keys = model.sortKeys
-            return model.items
-                .filter { matches($0, sidebar) }
-                .sorted {
-                    let a = keys[$0.title] ?? $0.title.lowercased()
-                    let b = keys[$1.title] ?? $1.title.lowercased()
-                    return a.localizedStandardCompare(b) == .orderedAscending
-                }
+            return sort.sorted(model.items.filter { matches($0, sidebar) }, reversed: sortReversed, keys: model.sortKeys)
         }
         let byId = Dictionary(uniqueKeysWithValues: model.items.map { ($0.id, $0) })
         return model.search(query).compactMap { byId[$0] }.filter { matches($0, sidebar) }
@@ -202,6 +199,7 @@ struct MainView: View {
                         if selectedItem == nil { selectedItem = visibleItems.first?.id }
                         return .handled
                     }
+                SortMenu(sort: $sort, reversed: $sortReversed)
                 NewItemMenu(disabled: model.vaults.isEmpty, create: create, generator: { showingGenerator = true })
             }
             .padding(.horizontal, KV.Space.s3)
@@ -442,6 +440,98 @@ struct SidebarRow: View {
 // MARK: - 新建
 
 /// 列表顶部的"+"：点击新建登录，箭头菜单选择其他类型或打开密码生成器。
+/// 列表的排序方式。
+enum ListSort: String, CaseIterable, Identifiable {
+    case title, created, modified, frequency, recent
+
+    var id: String { rawValue }
+
+    var name: String {
+        switch self {
+        case .title: tr("标题")
+        case .created: tr("创建日期")
+        case .modified: tr("修改日期")
+        case .frequency: tr("使用频率")
+        case .recent: tr("最近使用")
+        }
+    }
+
+    /// 菜单第二组的两项：自然顺序与反过来的顺序。
+    var directions: (natural: String, reversed: String) {
+        switch self {
+        case .title: (tr("A → Z"), tr("Z → A"))
+        case .created, .modified: (tr("最新的在前"), tr("最早的在前"))
+        case .frequency: (tr("最常用的在前"), tr("最少用的在前"))
+        case .recent: (tr("最近的在前"), tr("最久的在前"))
+        }
+    }
+
+    /// 排序。`reversed` 只反转主要的顺序；相同时一律按标题从 A 到 Z。从未使用、算不出创建时间的条目按 0 处理。
+    func sorted(_ items: [ItemEntry], reversed: Bool, keys: [String: String]) -> [ItemEntry] {
+        let title = { (item: ItemEntry) in keys[item.title] ?? item.title.lowercased() }
+        let byTitle = { (a: ItemEntry, b: ItemEntry) in title(a).localizedStandardCompare(title(b)) == .orderedAscending }
+        // 自然顺序：标题从 A 到 Z，其余从大到小（最新、最常用、最近）
+        func by<Key: Comparable>(_ key: (ItemEntry) -> Key) -> [ItemEntry] {
+            items.sorted { a, b in
+                let x = key(a), y = key(b)
+                guard x != y else { return byTitle(a, b) }
+                return reversed ? x < y : x > y
+            }
+        }
+        switch self {
+        case .title: return items.sorted { reversed ? byTitle($1, $0) : byTitle($0, $1) }
+        case .created: return by { $0.createdMs ?? 0 }
+        case .modified: return by { $0.updatedMs }
+        // 次数相同时，最近用过的在前
+        case .frequency: return by { UsageKey(count: $0.useCount, last: $0.lastUsedMs ?? 0) }
+        case .recent: return by { $0.lastUsedMs ?? 0 }
+        }
+    }
+}
+
+/// 使用频率的比较键：先比次数，再比最近一次使用。
+private struct UsageKey: Comparable {
+    let count: UInt64
+    let last: UInt64
+
+    static func < (a: UsageKey, b: UsageKey) -> Bool {
+        (a.count, a.last) < (b.count, b.last)
+    }
+}
+
+/// 列表栏顶部的排序按钮（设计稿）：第一组选排序方式，第二组选顺序；换排序方式时回到自然顺序。
+private struct SortMenu: View {
+    @Binding var sort: ListSort
+    @Binding var reversed: Bool
+
+    var body: some View {
+        Menu {
+            Picker(tr("排序方式"), selection: Binding(get: { sort }, set: { sort = $0; reversed = false })) {
+                ForEach(ListSort.allCases) { Text($0.name).tag($0) }
+            }
+            .pickerStyle(.inline)
+            Picker(tr("顺序"), selection: $reversed) {
+                Text(sort.directions.natural).tag(false)
+                Text(sort.directions.reversed).tag(true)
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            Image(systemName: "arrow.up.arrow.down")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(sort == .title && !reversed ? KV.Colors.fgSecondary : KV.Colors.accentFg)
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.kvToolbar)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(tr("排序方式：{}", sort.name))
+        .accessibilityLabel(tr("排序方式：{}", sort.name))
+    }
+}
+
 private struct NewItemMenu: View {
     let disabled: Bool
     let create: (NewItemChoice) -> Void

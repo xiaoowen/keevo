@@ -373,6 +373,7 @@ struct QuickAccessView: View {
             return done(tr("「{}」没有密码", "\(item.title)"), copiedValue: false)
         }
         Clipboard.copy(f.value.expose())
+        model.recordUse(itemId: item.id)
         done(tr("已复制「{}」的密码，90 秒后从剪贴板清除", "\(item.title)"))
     }
 
@@ -382,6 +383,7 @@ struct QuickAccessView: View {
             return done(tr("「{}」没有用户名", "\(item.title)"), copiedValue: false)
         }
         Clipboard.copy(f.value.expose())
+        model.recordUse(itemId: item.id)
         done(tr("已复制「{}」的用户名", "\(item.title)"))
     }
 
@@ -391,6 +393,7 @@ struct QuickAccessView: View {
             return done(tr("「{}」没有一次性密码", "\(item.title)"), copiedValue: false)
         }
         Clipboard.copy(code.code.expose())
+        model.recordUse(itemId: item.id)
         done(tr("已复制「{}」的验证码，{} 秒后更新", "\(item.title)", "\(code.remainingMs / 1000)"))
     }
 
