@@ -16,6 +16,9 @@ use keevo_ipc::cli::{
 
 use crate::client::{CliError, Client};
 
+/// 引用无法解析时附在报错后面的提示。
+const REF_HINT: &str = "提示：在 Keevo 中右键点字段，选「复制 keevo:// 引用」可以得到准确的引用；keevo item get 保险库/条目 列出字段名。";
+
 const USAGE: &str = "keevo — Keevo 的命令行工具
 
 用法：
@@ -36,6 +39,10 @@ const USAGE: &str = "keevo — Keevo 的命令行工具
   keevo ssh config                             SSH 配置片段（IdentityAgent）
   keevo ssh-sign …                             经 Keevo 的 SSH Agent 执行 ssh-keygen
                                                 （以 keevo-ssh-sign 的名字运行时相同，供 git 的 gpg.ssh.program 使用）
+
+引用：keevo://保险库/条目/字段，或 keevo://保险库/条目/分区/字段；名称有重复时，那一段改用 ID。
+  获取引用：在 Keevo 中右键点字段（或环境变量的一项），选「复制 keevo:// 引用」。
+  也可以用 keevo item get 保险库/条目 查看字段与分区的名称。
 
 退出码：0 成功；1 其他错误；2 用法错误；3 无法连接 Keevo；4 已锁定；5 未授权；6 引用无法解析。
 命令的退出码由 keevo run 原样返回。";
@@ -100,6 +107,10 @@ fn main() {
         Ok(code) => code,
         Err(e) => {
             eprint(&format!("keevo：{e}"));
+            // 引用无法解析（退出码 6）：说明怎样得到准确的引用
+            if matches!(e, CliError::Ref(_)) {
+                eprint(REF_HINT);
+            }
             e.exit_code()
         }
     };

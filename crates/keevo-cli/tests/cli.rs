@@ -137,14 +137,18 @@ fn read_run_inject_and_items() {
     let o = keevo(&env, &["read", &pw_ref, "--newline"]);
     assert_eq!(stdout(&o), "correct horse battery\n");
 
-    // 引用无法解析：6；语法错误同样是 6
-    assert_eq!(
-        keevo(&env, &["read", &format!("keevo://{v}/没有/密码")])
-            .status
-            .code(),
-        Some(6)
-    );
-    assert_eq!(keevo(&env, &["read", "keevo://x"]).status.code(), Some(6));
+    // 引用无法解析：6；语法错误同样是 6。都附上获取引用的方法
+    let o = keevo(&env, &["read", &format!("keevo://{v}/没有/密码")]);
+    assert_eq!(o.status.code(), Some(6));
+    let hint = "复制 keevo:// 引用";
+    assert!(String::from_utf8_lossy(&o.stderr).contains(hint));
+    let o = keevo(&env, &["read", "keevo://x"]);
+    assert_eq!(o.status.code(), Some(6));
+    assert!(String::from_utf8_lossy(&o.stderr).contains(hint));
+    // 帮助中说明引用的格式与获取方法
+    let o = keevo(&env, &["--help"]);
+    assert_eq!(o.status.code(), Some(0));
+    assert!(stdout(&o).contains("获取引用：在 Keevo 中右键点字段"));
 
     // run：注入并遮蔽；--no-masking 直接继承
     let env_file = env.dir.join(".env.keevo");

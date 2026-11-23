@@ -106,6 +106,8 @@ keevo（CLI）──Unix socket（cli.sock）──► Keevo.app 中的 Vault Se
 | 5 | 未授权（拒绝或超时） |
 | 6 | 引用无法解析（`not_found`、`ambiguous`、`bad_ref`、`unsupported_field`、`invalid_otp`） |
 
+- **获取引用**：用户通常不知道引用的确切写法。`keevo --help` 写明引用的格式与获取方法（在 Keevo 中右键点字段，选"复制 `keevo://` 引用"，生成规则见 `spec/secret-refs.md` §5；或用 `keevo item get` 查看字段与分区的名称）；退出码为 6 时，标准错误在报错之后附一行同样的提示。
+
 - **`keevo run`**：
   - 环境变量来自 `--env-file`（可多次）与 `--env KEY=<值或引用>`（可多次），后者覆盖前者；也会解析当前环境中值为 `keevo://…` 的变量。
   - `--env-file` 的格式：每行 `KEY=VALUE`，忽略空行与 `#` 开头的行，允许行首 `export `；`VALUE` 两端成对的单引号或双引号会去掉。`VALUE` 整体是 `keevo://` 引用时解析，否则原样使用。
