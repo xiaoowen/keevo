@@ -137,7 +137,7 @@ if [[ "$VERIFY" == 1 ]]; then
   # 1. Secure Enclave、Rust 核心在 Hardened Runtime 下正常工作
   "$WORK/smoke-runtime" >"$WORK/smoke.log" 2>&1 || { cat "$WORK/smoke.log"; fail "Hardened Runtime 下冒烟测试失败"; }
   grep -q "全部通过" "$WORK/smoke.log" || fail "冒烟测试没有通过"
-  pass "Hardened Runtime 下冒烟测试通过（$(grep -o '本机密钥包裹（[^）]*）' "$WORK/smoke.log" | head -1)）"
+  pass "Hardened Runtime 下冒烟测试通过（$(grep -o '本机密钥包裹：[^（]*' "$WORK/smoke.log" | head -1)）"
 
   # 一个临时签名的动态库：加载时写下标记文件
   cat > "$WORK/inject.c" <<'C'
@@ -151,14 +151,22 @@ C
   clang -dynamiclib -o "$WORK/inject.dylib" "$WORK/inject.c"
   codesign --force --sign - --timestamp=none "$WORK/inject.dylib"
 
-  # 2. DYLD_INSERT_LIBRARIES：对照组被注入，Hardened Runtime 下被忽略
+  # 2. DYLD_INSERT_LIBRARIES：对照组被注入，Hardened Runtime 下被忽略。系统完整性保护（SIP）关闭时，系统不按
+  #    Hardened Runtime 限制 DYLD_* 环境变量（GitHub 的 macOS 运行器即是如此），这一项无从验证，只在 SIP 开启时实测
+  SIP="$(csrutil status 2>/dev/null || echo "System Integrity Protection status: unknown.")"
+  echo "  · ${SIP}"
   KEEVO_INJECT_MARKER="$WORK/plain.marker" DYLD_INSERT_LIBRARIES="$WORK/inject.dylib" \
     "$WORK/smoke-plain" --dlopen /usr/lib/libz.dylib >/dev/null 2>&1 || true
   [[ -f "$WORK/plain.marker" ]] || fail "对照组没有被注入，测试本身无效"
   KEEVO_INJECT_MARKER="$WORK/runtime.marker" DYLD_INSERT_LIBRARIES="$WORK/inject.dylib" \
     "$WORK/smoke-runtime" --dlopen /usr/lib/libz.dylib >/dev/null 2>&1 || true
-  [[ ! -f "$WORK/runtime.marker" ]] || fail "Hardened Runtime 下 DYLD_INSERT_LIBRARIES 仍然生效"
-  pass "DYLD_INSERT_LIBRARIES 被忽略（对照组被注入）"
+  if [[ ! -f "$WORK/runtime.marker" ]]; then
+    pass "DYLD_INSERT_LIBRARIES 被忽略（对照组被注入）"
+  elif grep -q "disabled" <<<"$SIP"; then
+    echo "  ! 跳过 DYLD_INSERT_LIBRARIES 的实测：本机关闭了系统完整性保护，系统不限制 DYLD_*；SIP 开启的机器上必须通过"
+  else
+    fail "Hardened Runtime 下 DYLD_INSERT_LIBRARIES 仍然生效"
+  fi
 
   # 3. Library Validation：系统库可以加载，临时签名的库被拒绝；对照组可以加载
   "$WORK/smoke-runtime" --dlopen /usr/lib/libz.dylib >/dev/null || fail "Hardened Runtime 下无法加载系统库"
