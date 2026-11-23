@@ -82,7 +82,7 @@ function render(note?: { kind: "info" | "danger"; text: string }): void {
     if (init.topOrigin !== init.origin) {
       const warn = el(
         "p",
-        t("这个输入框嵌在 {} 的页面中，来自 {}。确认这是你要登录的网站再填充。", String(init.topOrigin ? host(init.topOrigin) : t("另一个网站")), String(host(init.origin))),
+        t("嵌在 {} 的页面中", String(init.topOrigin ? host(init.topOrigin) : t("另一个网站"))),
         "banner warning",
       );
       root.append(warn);
@@ -93,7 +93,7 @@ function render(note?: { kind: "info" | "danger"; text: string }): void {
       const warn = el("div", undefined, "banner warning");
       warn.append(
         el("strong", t("这个网站没有匹配的登录。")),
-        document.createTextNode(t("Keevo 只在条目中保存的网站上填充。如果这是你常用的网站，网址却对不上，可能是仿冒网站。")),
+        document.createTextNode(t("如果这是你常用的网站，网址却对不上，可能是仿冒网站。")),
       );
       root.append(warn);
     }
@@ -105,8 +105,8 @@ function render(note?: { kind: "info" | "danger"; text: string }): void {
   }
   if (note) root.append(el("p", note.text, `banner ${note.kind}`));
   updateReady();
-  // body 的高度就是内容的高度；documentElement.scrollHeight 不会小于 iframe 当前的高度，菜单只会变高不会变矮
-  void ask({ type: "menu_size", height: Math.ceil(document.body.getBoundingClientRect().height) });
+  // 报告内容本身（main）的高度：body 与菜单窗口一样大，scrollHeight 也不会小于窗口，用它们菜单只会变高不会变矮
+  void ask({ type: "menu_size", height: Math.ceil(root.getBoundingClientRect().height) });
 }
 
 function row(c: Candidate): HTMLElement {
@@ -135,11 +135,11 @@ async function choose(c: Candidate): Promise<void> {
   // 跨域 iframe 中的输入框：第一次点击只要求确认（docs/security.md §12）
   if (init.topOrigin !== init.origin && pendingConfirm !== c.item_id) {
     pendingConfirm = c.item_id;
-    render({ kind: "info", text: t("再次点击「{}」，确认填充到 {}。", String(c.title), String(host(init.origin))) });
+    render({ kind: "info", text: t("再点一次「{}」填充", String(c.title)) });
     return;
   }
   busy = true;
-  render({ kind: "info", text: t("正在向 Keevo 取用。第一次在这个网站上使用这个条目时，请在 Keevo 中确认。") });
+  render({ kind: "info", text: t("正在向 Keevo 取用。第一次在这个网站使用时，请在 Keevo 中确认") });
   const r = await ask({ type: "menu_fill", itemId: c.item_id, confirmed: pendingConfirm === c.item_id });
   busy = false;
   pendingConfirm = null;

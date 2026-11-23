@@ -1,5 +1,9 @@
 /* 页内菜单样式。颜色、间距、圆角、字体一律取自 tokens.css。 */
 html, body { margin: 0; background: var(--kv-bg-raised); color: var(--kv-fg-primary); font: var(--kv-type-body); }
+/* body 与菜单的窗口一样大，放不下的内容在 body 内滚动：点击防护观察的 body 才能完整可见（矮小的 iframe 中菜单被限高时） */
+html, body { height: 100%; }
+html { overflow: hidden; }
+body { overflow-y: auto; }
 main { padding: var(--kv-space-2); }
 .head { display: flex; align-items: center; gap: var(--kv-space-1-5); padding: var(--kv-space-1) var(--kv-space-1-5) var(--kv-space-2); }
 .label { font: var(--kv-type-footnote); color: var(--kv-fg-secondary); white-space: nowrap; }

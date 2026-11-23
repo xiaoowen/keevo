@@ -402,10 +402,16 @@
     if (!menu || !anchor) return;
     const r = anchor.getBoundingClientRect();
     const left = Math.min(Math.max(8, r.left), Math.max(8, innerWidth - MENU_WIDTH - 8));
-    // 第一次摆放时决定放在输入框下方还是上方，之后改变高度也不再翻转（避免菜单在用户眼前跳动）
-    menu.above ??= r.bottom + 4 + height > innerHeight - 8 && r.top - height - 4 > 8;
-    const top = menu.above ? r.top - height - 4 : r.bottom + 4;
-    menu.host.style.setProperty("height", `${height}px`, "important");
+    const below = innerHeight - 8 - (r.bottom + 4);
+    const above = r.top - 4 - 8;
+    // 第一次摆放时决定放在输入框下方还是上方：下方放得下就放下方，否则放空间更大的一侧；之后改变高度也不再翻转
+    // （避免菜单在用户眼前跳动）
+    menu.above ??= height > below && above > below;
+    // 高度不超出可用的空间，放不下的内容在菜单内滚动：嵌在矮小 iframe 中的登录框（如阿里云），菜单超出 iframe 的
+    // 部分会被裁掉，从不"完全可见"，点击防护也就一直不放行
+    const fitted = Math.min(height, Math.max(menu.above ? above : below, 60));
+    const top = menu.above ? r.top - fitted - 4 : r.bottom + 4;
+    menu.host.style.setProperty("height", `${fitted}px`, "important");
     place(menu.host, left, top);
   }
 

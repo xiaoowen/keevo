@@ -430,6 +430,8 @@ struct SecurityChecksPopover: View {
     @Environment(AppModel.self) private var model
     /// 打开"已泄露"：关闭面板，弹出确认。
     let requestBreach: () -> Void
+    /// 弹出时焦点给面板本身（不画焦点框），否则焦点框一直停在第一个开关上；用 Tab 才进入各个开关。
+    @FocusState private var containerFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -467,6 +469,10 @@ struct SecurityChecksPopover: View {
         }
         .padding(.bottom, 8)
         .frame(width: 300)
+        .focusable()
+        .focusEffectDisabled()
+        .focused($containerFocused)
+        .onAppear { containerFocused = true }
     }
 }
 

@@ -103,6 +103,11 @@ const server = createServer((req, res) => {
     "/frame": html(
       `<p>嵌入的登录框：</p><iframe id="fr" src="http://localhost:${port}/login" style="width:600px;height:460px;border:0"></iframe>`,
     ),
+    // 很矮的嵌入登录框（反馈：阿里云）：输入框上下都放不下完整的菜单
+    "/login-short": html(FORM),
+    "/frame-short": html(
+      `<p>嵌入的登录框：</p><iframe id="fr" src="http://localhost:${port}/login-short" style="width:600px;height:200px;border:0"></iframe>`,
+    ),
   };
   res.writeHead(pages[path] ? 200 : 404, { "content-type": "text/html; charset=utf-8" });
   res.end(pages[path] ?? "not found");
@@ -320,7 +325,7 @@ for (const [path, what] of [
   );
   const { menu, at } = await openMenu(page, frame, offset);
   const warning = await menu.eval(`document.querySelector(".banner.warning")?.textContent ?? ""`);
-  assert.match(warning, new RegExp(`嵌在 127\\.0\\.0\\.1:${PORT} 的页面中，来自 localhost:${PORT}`));
+  assert.match(warning, new RegExp(`嵌在 127\\.0\\.0\\.1:${PORT} 的页面中`));
   await waitFor(() => menu.eval(`document.body.classList.contains("armed")`), "菜单可用");
   await shot(page, "menu-frame");
   await click(page, at.x, at.y);
@@ -338,6 +343,30 @@ for (const [path, what] of [
   await click(page, offset.x + host.x + again.x, offset.y + host.y + again.y);
   await waitFor(async () => JSON.stringify(await values(frame)) === JSON.stringify(filled), "确认后填入");
   ok("跨域 iframe：菜单写明嵌入关系，第一次点击只要求确认，确认后填入");
+}
+
+// 4b. 很矮的 iframe：菜单放在空间较大的一侧，高度不超出 iframe，完整可见后可以使用（放不下的内容在菜单内滚动）
+{
+  const page = await open(`http://127.0.0.1:${PORT}/frame-short`);
+  const target = await waitFor(async () => {
+    const { targetInfos } = await browser.send("Target.getTargets");
+    return targetInfos.find((t) => t.type === "iframe" && t.url === `${LOCAL}/login-short`);
+  }, "矮的嵌入登录页");
+  const frame = await attach(browser, target.targetId);
+  await waitFor(() => frame.eval(`document.readyState === "complete"`), "矮的嵌入登录页加载");
+  const offset = await page.eval(
+    `(() => { const r = document.getElementById("fr").getBoundingClientRect(); return { x: r.left, y: r.top }; })()`,
+  );
+  const { menu } = await openMenu(page, frame, offset);
+  // 菜单报告高度之后才会收缩到可用的空间
+  await sleep(300);
+  const box = await frame.eval(
+    `(() => { const r = [...document.querySelectorAll("div[popover]")].at(-1).getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: innerHeight }; })()`,
+  );
+  assert.ok(box.top >= 0 && box.bottom <= box.height, `菜单超出了 iframe：${JSON.stringify(box)}`);
+  await waitFor(() => menu.eval(`document.body.classList.contains("armed")`), "矮的 iframe 中菜单可用");
+  await shot(page, "menu-frame-short");
+  ok("矮的 iframe：菜单不超出 iframe，完整可见后可以使用");
 }
 
 // 6. 保存与更新（协议 v2）：提交后的页面顶部出现保存栏（扩展源 iframe，同样的点击劫持防护）
