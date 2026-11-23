@@ -849,7 +849,7 @@ dependencies = [
 
 [[package]]
 name = "keevo-cli"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "keevo-core",
  "keevo-crypto",
@@ -863,7 +863,7 @@ dependencies = [
 
 [[package]]
 name = "keevo-core"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "base64",
  "keevo-crypto",
@@ -881,7 +881,7 @@ dependencies = [
 
 [[package]]
 name = "keevo-crypto"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "aes",
  "argon2",
@@ -905,7 +905,7 @@ dependencies = [
 
 [[package]]
 name = "keevo-ffi"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "keevo-core",
  "keevo-crypto",
@@ -921,7 +921,7 @@ dependencies = [
 
 [[package]]
 name = "keevo-format"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "keevo-crypto",
  "serde",
@@ -931,7 +931,7 @@ dependencies = [
 
 [[package]]
 name = "keevo-generator"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "keevo-crypto",
  "zeroize",
@@ -939,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "keevo-ipc"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "base64",
  "keevo-crypto",
@@ -950,7 +950,7 @@ dependencies = [
 
 [[package]]
 name = "keevo-macos"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "core-foundation",
  "libc",
@@ -959,7 +959,7 @@ dependencies = [
 
 [[package]]
 name = "keevo-native-host"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "keevo-core",
  "keevo-crypto",
@@ -971,7 +971,7 @@ dependencies = [
 
 [[package]]
 name = "keevo-service"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "keevo-core",
  "keevo-crypto",
@@ -985,11 +985,11 @@ dependencies = [
 
 [[package]]
 name = "keevo-site"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 
 [[package]]
 name = "keevo-ssh"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "base64",
  "hex",
@@ -999,7 +999,7 @@ dependencies = [
 
 [[package]]
 name = "keevo-store"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "keevo-crypto",
  "rusqlite",
@@ -1007,7 +1007,7 @@ dependencies = [
 
 [[package]]
 name = "keevo-wasm"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "keevo-crypto",
  "keevo-generator",
@@ -1647,7 +1647,7 @@ dependencies = [
 
 [[package]]
 name = "uniffi-bindgen"
-version = "0.0.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "uniffi",
 ]

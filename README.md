@@ -4,7 +4,7 @@
 
 Keevo 保存你的密码、双因素验证、SSH 密钥、API 令牌、数据库凭证和环境变量。数据默认只在你的设备上；需要多设备时，通过你自己的 iCloud、云盘或 NAS 端到端加密同步。除了你，没有人能读取，包括我们。
 
-> **状态：M0（基础建设）**。目前只有设计文档、规范和密码学核心，**还不能使用**，请勿用来存放真实数据。
+> **状态：Alpha（0.1.0-alpha.1，内测）**。macOS 应用、Chrome 扩展、SSH Agent 与命令行工具已经可以使用；数据只保存在本机，还没有同步。这是早期版本，请保管好应急包，并留意自动备份。安装前请阅读[安装说明](docs/alpha/install.md)（应用没有经过 Apple 公证，需要先用 Sigstore 核对下载的文件）。
 
 ## 核心理念
 
@@ -17,7 +17,7 @@ Keevo 保存你的密码、双因素验证、SSH 密钥、API 令牌、数据库
 - **自托管**：同步可以只走你自己的存储，不需要运行任何服务端。
 - **卓越体验**：原生 macOS 应用与 Chrome 扩展，对标一流的密码管理器。
 
-首发平台：macOS，Chrome 及 Chromium 系浏览器。
+支持平台：macOS 15 及以上，Google Chrome。其他 Chromium 系浏览器要先按[白名单流程](docs/browser-allowlist.md)核实后加入。
 
 ## 文档
 
@@ -25,9 +25,9 @@ Keevo 保存你的密码、双因素验证、SSH 密钥、API 令牌、数据库
 |---|---|
 | 产品与技术设计 | [docs/](docs/README.md) |
 | 威胁模型与安全设计 | [docs/security.md](docs/security.md) |
-| 加密规范 v0.1 | [spec/crypto.md](spec/crypto.md) |
-| 修订模型规范 v0.1 | [spec/revisions.md](spec/revisions.md) |
+| 规范（加密、修订模型、保险库格式、本地通信、导出等）与冻结清单 | [spec/](spec/README.md) |
 | 路线图 | [docs/roadmap.md](docs/roadmap.md) |
+| 安装与发布说明（Alpha） | [docs/alpha/install.md](docs/alpha/install.md)、[发布说明](docs/alpha/release-notes-0.1.0-alpha.1.md) |
 
 ## 仓库结构
 
@@ -62,6 +62,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets
 scripts/build-macos.sh --smoke     # 构建 macOS 空壳应用并运行 Swift 端冒烟测试
 scripts/build-extension.sh --test  # 构建浏览器扩展并运行端到端测试
+scripts/package-release.sh         # 组装发布包：Keevo.app 与扩展的 zip、SHA-256（正式发布由 v* 标签触发 .github/workflows/release.yml）
 ```
 
 ### 在 Chrome 中试用扩展原型（只用演示数据）

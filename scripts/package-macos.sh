@@ -45,8 +45,10 @@ CLI_CDHASH="$(codesign -dvvv "$HOST_STAGE/keevo" 2>&1 | sed -n 's/^CDHash=//p')"
 # 2. 把 cdhash 编译进主程序，再构建应用。运行时不从磁盘读取（§3.1，第二轮评审 G6）
 KEEVO_HOST_CDHASHES="$HOST_CDHASH" KEEVO_CLI_CDHASHES="$CLI_CDHASH" "$ROOT/scripts/build-macos.sh" >/dev/null
 
-# 版本：短版本取自 Cargo 工作区，构建号为提交数（可复现，不含时间戳）
+# 版本：取自 Cargo 工作区。CFBundleShortVersionString 只能是三段数字，去掉预发布后缀（0.1.0-alpha.1 → 0.1.0）；
+# 构建号为提交数（可复现，不含时间戳）
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
+SHORT_VERSION="${VERSION%%-*}"
 BUILD="$(git -C "$ROOT" rev-list --count HEAD)"
 
 rm -rf "$APP"
@@ -76,7 +78,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>Keevo</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleShortVersionString</key><string>$SHORT_VERSION</string>
   <key>CFBundleVersion</key><string>$BUILD</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>LSMinimumSystemVersion</key><string>15.0</string>

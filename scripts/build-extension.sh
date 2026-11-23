@@ -28,6 +28,16 @@ cd "$EXT"
 rm -rf dist
 npx tsc -p .
 cp -R static/. dist/
+# 版本取自 Cargo 工作区：Chrome 的 version 只能是数字，预发布后缀放进 version_name（0.1.0-alpha.1 → 0.1.0）
+VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
+node -e '
+  const fs = require("fs");
+  const [file, full] = process.argv.slice(1);
+  const m = JSON.parse(fs.readFileSync(file, "utf8"));
+  m.version = full.split("-")[0];
+  if (full.includes("-")) m.version_name = full; else delete m.version_name;
+  fs.writeFileSync(file, JSON.stringify(m, null, 2) + "\n");
+' dist/manifest.json "$VERSION"
 mkdir -p dist/wasm
 cp src/wasm/keevo_wasm.js src/wasm/keevo_wasm_bg.wasm dist/wasm/
 echo "扩展已构建：$EXT/dist（在 chrome://extensions 中用「加载已解压的扩展程序」载入）"

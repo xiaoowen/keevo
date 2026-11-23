@@ -274,7 +274,7 @@ M1.1–M1.5 的代码与自动化测试已完成；Alpha 验收（§3.8）只剩
 | 3 | 内部安全评审 | **已完成**（2026-11-20）：第五轮评审（预审、外部模型的正式评审与六次确认，[docs/reviews/](reviews/)）覆盖附件格式（crypto §8.9、vault-format §2.5、revisions §7.3）、导出格式（export.md）、泄露检查、恢复与本机状态；发现全部处理，附件与导出文件格式已冻结。导出密码强度筛选的已知局限见 export §3 |
 | 4 | 可用性测试 | **取消（2026-11-23，作者决定）**：Alpha 不做可用性测试，§3.8"体验"一项不作为 Alpha 的验收条件。准备好的方案保留在 [alpha/usability-test.md](alpha/usability-test.md)，之后需要时可以直接使用 |
 | 5 | 各节的人工检查 | **已完成（2026-11-23）：23 项全部通过**。§3.3–§3.7 列出的人工检查与 ADR-0003 的待验证项，汇总为一份可勾选的清单：[alpha/manual-checks.md](alpha/manual-checks.md) |
-| 6 | 准备发布 Alpha | **进行中（2026-11-23）**：统一版本号、发布说明与已知限制、安装说明（临时签名的应用、开发者模式加载的扩展）、发布包与校验和。模糊测试通过后发布 |
+| 6 | 准备发布 Alpha | **已就绪（2026-11-23）**：版本统一为 0.1.0-alpha.1（取自 Cargo 工作区，应用的短版本与扩展的 `version` 去掉预发布后缀）；`scripts/package-release.sh` 组装发布包；`.github/workflows/release.yml` 在 `v*` 标签上构建、用 Sigstore 签名 `SHA256SUMS` 并创建发布草稿（仓库必须公开）；[安装说明](alpha/install.md)与[发布说明](alpha/release-notes-0.1.0-alpha.1.md)。模糊测试通过、仓库公开后推送标签 |
 
 **待决定**：
 

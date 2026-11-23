@@ -1,0 +1,42 @@
+Keevo 的第一个内测版本：一个纯本地运行的密码管理器，包含 macOS 应用、Chrome 扩展、SSH Agent 与命令行工具。数据只保存在你的 Mac 上，这个版本没有同步。
+
+**安装之前请先阅读[安装说明](https://github.com/xiaoowen/keevo/blob/v0.1.0-alpha.1/docs/alpha/install.md)**：应用没有经过 Apple 公证，安装前要用 Sigstore 核对下载的文件，第一次打开需要在系统设置中放行。
+
+## 包含什么
+
+**macOS 应用**（macOS 15 及以上）
+- 首次使用：主密码、应急包（账户密钥与二维码，可保存或打印）、Touch ID。
+- 8 种条目类型、自定义字段与分区、本地附件（单个 50 MB）、标签与收藏；搜索语法（`type:`、`tag:`、`is:fav`、`is:weak` 等）。
+- 密码生成器、一次性密码（可从图片、剪贴板或屏幕上的二维码导入）、历史版本与回收站。
+- 安全中心：弱密码、重复使用、未开启两步验证等 8 项检查，每项可以单独关闭；泄露检查默认关闭，开启后只发送密码哈希的前 5 位。
+- 导入：1Password（1PUX）、Bitwarden（JSON，含有密码保护的导出）、Chrome / Safari / Firefox / LastPass（CSV）、Keevo 导出文件。导出：Keevo 加密文件、JSON、CSV。
+- 每天自动加密备份，可以从备份恢复。
+- 快速访问浮窗（默认 `⌥⌘K`）、菜单栏图标；`⌘Q` 退到后台，`⌥⌘Q` 退出。
+- 简体中文与 English。
+
+**Chrome 扩展**
+- 与 Keevo 配对（两边核对 6 个词），之后经本机通道通信，不经过网络。
+- 弹窗中搜索、填充、复制；输入框旁的图标与页内菜单；一次性密码填充；保存新登录与更新密码；注册页生成密码。
+- 点击劫持防护：页内菜单完整可见 500 毫秒后才接受点击；跨站 iframe 中的输入框要再确认一次。
+- 每个扩展第一次在某个网站上使用某个条目时，在 Keevo 中确认；也可以选"所有网站"，之后不再询问。
+
+**开发者**
+- SSH Agent（Ed25519 密钥），`~/.ssh/config` 助手，Git 提交签名。
+- 命令行工具 `keevo`：`read`、`run`、`inject`、`item`、`totp`、`generate`、`lock`；`keevo://` 引用（在 Keevo 中右键点字段，选"复制 keevo:// 引用"）。
+
+## 已知限制
+
+- **没有同步**：数据只在这台 Mac 上。请保管好应急包，并留意"设置 → 备份"。
+- **没有自动更新**：新版本需要手动下载替换（见安装说明的"更新"）。
+- **只支持 Chrome**：其他浏览器的 native host 不在白名单中。Safari 与系统级自动填充需要 Apple 开发者团队，不在计划内。
+- **SSH 密钥只支持 Ed25519**：RSA 与 ECDSA 所需的密码学库还没有通过供应链审计。
+- **不能导入 KeePass（KDBX）**。
+- **导出不包含附件**。
+- 自动填充的识别在 105 个真实网站的登录页上测试过，有 1 个失败（Udemy）。
+- 安全检查对 1 万个条目约需 1.8 秒（在后台进行）。
+- 构建尚不可复现；软件物料清单（SBOM）与 SLSA 来源证明之后再加入。
+
+## 反馈
+
+- 问题与建议：在 GitHub 上提 issue。
+- **安全问题请不要公开提 issue**，使用仓库的 Security → Report a vulnerability（见 [SECURITY.md](https://github.com/xiaoowen/keevo/blob/v0.1.0-alpha.1/SECURITY.md)）。

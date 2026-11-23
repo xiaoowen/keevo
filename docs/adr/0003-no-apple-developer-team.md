@@ -25,7 +25,7 @@ ADR-0002 决定不使用任何现有团队，但仍计划在正式发布前（�
    - **更新**：Sparkle 的 EdDSA 签名，公钥编译进应用。首次安装的信任来自对安装包的 Sigstore 验证。
    - 可复现构建用于核对源码与产物是否一致，不单独证明源码或构建者可信。
    - 不公证也就没有 Apple 的恶意软件检查，签名不能替代它。
-   - 可执行的验证步骤（工具的取得方式、命令、版本与降级规则）M3 定稿。
+   - 可执行的验证步骤（工具的取得方式、命令、版本与降级规则）M3 定稿。Alpha 起（2026-11-23）已按本条实施：`.github/workflows/release.yml` 在 `v*` 标签上构建并用 cosign 无密钥签名 `SHA256SUMS`，验证步骤见 [docs/alpha/install.md](../alpha/install.md)；可复现构建、SBOM 与 SLSA 来源证明尚未实现。
 7. **范围**：本决定只涉及 Apple 开发者团队。Chrome 网上应用店的发布账号不受影响。
 
 ## 影响
@@ -65,7 +65,7 @@ ADR-0002 决定不使用任何现有团队，但仍计划在正式发布前（�
 - ~~完整的 SwiftUI 应用在临时签名 + Hardened Runtime 下能否正常运行，Rust 核心改为静态链接~~：已实测。`scripts/package-macos.sh --verify` 组装并签名 `Keevo.app`，逐项检查：flags 为 adhoc + runtime、没有 Team ID 与 entitlement、只链接系统库；Hardened Runtime 下冒烟测试（含 Secure Enclave）通过；`DYLD_INSERT_LIBRARIES` 被忽略；Library Validation 拒绝临时签名的库（"mapping process and mapped file (non-platform) have different Team IDs"）、放行系统库；后两项都有不加 Hardened Runtime 的对照组，证明测试本身有效。`--launch` 确认应用能正常启动。CI 的 macOS 任务每次运行 `--verify`。
 - 构建流程：先签名辅助程序，把 cdhash 编译进主程序，再签名主程序。
 - macOS 的"App 管理"保护能否阻止其他应用修改拖拽安装的 Keevo.app。
-- 未公证应用下载后的首次打开流程（M3 写安装说明前）。
+- ~~未公证应用下载后的首次打开流程（M3 写安装说明前）~~：已实测（2026-11-23，macOS 27.0.1，人工检查 A1），步骤写入 [docs/alpha/install.md](../alpha/install.md)。
 
 ## 备选方案
 
