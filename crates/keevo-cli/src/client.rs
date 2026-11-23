@@ -102,9 +102,12 @@ impl Client {
             version: env!("CARGO_PKG_VERSION").into(),
         })
         .map_err(|e| CliError::Other(e.to_string()))?;
+        // 服务只接受编译进 Keevo 的那份命令行工具（cdhash，spec/cli.md §2）。最常见的原因是 Keevo 更新或重新构建后，
+        // 旧的进程还在后台运行：磁盘上的 keevo 已是新的，旧进程不认识它
         let rejected = || {
             CliError::Connect(
-                "Keevo 拒绝了这个 keevo 命令：请使用 Keevo.app 自带的命令行工具（设置 → 开发者 → 命令行工具）"
+                "Keevo 拒绝了这个 keevo 命令。如果刚更新或重新构建过 Keevo，请用 ⌥⌘Q 退出 Keevo 后重新打开（⌘Q 只是退到后台）；\
+                 否则请使用 Keevo.app 自带的命令行工具（设置 → 开发者 → 命令行工具）"
                     .into(),
             )
         };
