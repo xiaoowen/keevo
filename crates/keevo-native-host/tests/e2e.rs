@@ -22,7 +22,7 @@ use keevo_crypto::{Id128, StaticKeypair};
 use keevo_ipc::client::{ClientEvent, ExtensionClient};
 use keevo_ipc::frame::{read_native_frame, write_native_frame};
 use keevo_ipc::message::{Call, CallResult, ControlFrame, ErrorCode, ServerMessage};
-use keevo_service::{PairingPrompt, PeerPolicy, VaultService, bind};
+use keevo_service::{FillDecision, PairingPrompt, PeerPolicy, VaultService, bind};
 
 const ORIGIN: &str = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
 const HOST: &str = env!("CARGO_BIN_EXE_keevo-native-host");
@@ -38,7 +38,11 @@ impl PairingPrompt for AutoConfirm {
     }
 
     /// 首次取用的授权（spec/ipc.md §5.2）：界面收到规范化后的站点与条目概要。
-    fn authorize_fill(&self, r: &keevo_ipc::service::FillRequest, _: std::time::Instant) -> bool {
+    fn authorize_fill(
+        &self,
+        r: &keevo_ipc::service::FillRequest,
+        _: std::time::Instant,
+    ) -> FillDecision {
         assert_eq!(
             (
                 r.site.as_str(),
@@ -48,7 +52,7 @@ impl PairingPrompt for AutoConfirm {
             ),
             ("https://github.com", "GitHub", "octocat", "Chrome · 测试")
         );
-        true
+        FillDecision::ThisSite
     }
 }
 

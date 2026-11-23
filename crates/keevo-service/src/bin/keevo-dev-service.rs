@@ -28,7 +28,7 @@ use keevo_core::{
 };
 use keevo_crypto::StaticKeypair;
 use keevo_ipc::service::{FillRequest, SearchRequest, WriteOp, WriteRequest};
-use keevo_service::{PairingPrompt, PeerPolicy, VaultService, bind};
+use keevo_service::{FillDecision, PairingPrompt, PeerPolicy, VaultService, bind};
 use zeroize::Zeroizing;
 
 const DEMO_PASSWORD: &str = "keevo-dev-only-password";
@@ -68,7 +68,7 @@ impl PairingPrompt for TerminalPrompt {
         ok
     }
 
-    fn authorize_fill(&self, r: &FillRequest, deadline: std::time::Instant) -> bool {
+    fn authorize_fill(&self, r: &FillRequest, deadline: std::time::Instant) -> FillDecision {
         eprintln!(
             "\n「{}」（{}）请求在 {} 上取用「{}」（{}）的凭据。",
             r.pairing_name, r.browser, r.site, r.title, r.username
@@ -79,12 +79,16 @@ impl PairingPrompt for TerminalPrompt {
         eprintln!(
             "{}",
             if ok {
-                "已允许。"
+                "已允许（仅这个网站）。"
             } else {
                 "已拒绝（或超时）。"
             }
         );
-        ok
+        if ok {
+            FillDecision::ThisSite
+        } else {
+            FillDecision::Deny
+        }
     }
 
     fn fill_paused(&self, _: &[u8; 32], name: &str, _: &str) {
@@ -188,12 +192,12 @@ impl PairingPrompt for AutoConfirm {
         true
     }
 
-    fn authorize_fill(&self, r: &FillRequest, _: std::time::Instant) -> bool {
+    fn authorize_fill(&self, r: &FillRequest, _: std::time::Instant) -> FillDecision {
         eprintln!(
             "[auto-confirm] 已自动允许在 {} 上取用「{}」",
             r.site, r.title
         );
-        true
+        FillDecision::ThisSite
     }
 
     fn confirm_update(&self, r: &WriteRequest, _: bool, _: std::time::Instant) -> bool {

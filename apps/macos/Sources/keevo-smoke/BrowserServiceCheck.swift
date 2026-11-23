@@ -29,9 +29,9 @@ final class AutoBrowserPrompt: BrowserPrompt, @unchecked Sendable {
         return true
     }
 
-    func authorizeFill(request: BrowserFillRequest, timeoutMs: UInt64) -> Bool {
+    func authorizeFill(request: BrowserFillRequest, timeoutMs: UInt64) -> BrowserFillDecision {
         emit("authorize_fill \(request.site) \(request.title)")
-        return true
+        return .thisSite
     }
 
     func fillPaused(pairingId: String, name: String, browser: String) {

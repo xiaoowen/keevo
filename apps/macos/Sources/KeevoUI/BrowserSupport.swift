@@ -16,12 +16,12 @@ struct PairingRequest: Identifiable {
     let answer: (Bool) -> Void
 }
 
-/// 一次等待授权的填充（spec/ipc.md §5.2 第 1 条）。
+/// 一次等待授权的填充（spec/ipc.md §5.2 第 1 条）：拒绝、只允许这个网站，或这个扩展在所有网站上都不再询问。
 struct FillAuthorizationRequest: Identifiable {
     let id = UUID()
     let request: BrowserFillRequest
     let deadline: Date
-    let answer: (Bool) -> Void
+    let answer: (BrowserFillDecision) -> Void
 }
 
 /// 一次等待确认的密码更新（spec/ipc.md §5.5）。
@@ -142,17 +142,24 @@ final class BrowserPromptBridge: BrowserPrompt, @unchecked Sendable {
         }
     }
 
-    func authorizeFill(request: BrowserFillRequest, timeoutMs: UInt64) -> Bool {
+    func authorizeFill(request: BrowserFillRequest, timeoutMs: UInt64) -> BrowserFillDecision {
+        // 通用的等待只带回"是否允许"；允许的方式（这个网站或所有网站）另外记下
+        let lock = NSLock()
+        var decision = BrowserFillDecision.deny
         let accepted = ask(timeoutMs: timeoutMs) { deadline, answer in
-            .fill(FillAuthorizationRequest(request: request, deadline: deadline, answer: answer))
+            .fill(FillAuthorizationRequest(request: request, deadline: deadline) { d in
+                lock.withLock { decision = d }
+                answer(d != .deny)
+            })
         }
-        if accepted {
+        let result = accepted ? lock.withLock { decision } : .deny
+        if result != .deny {
             // 授权由 Rust 在这里返回之后写入；稍后刷新"设置 → 浏览器"的列表
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 self?.model?.refreshBrowserPairings()
             }
         }
-        return accepted
+        return result
     }
 
     func confirmUpdate(request: BrowserUpdateRequest, changed: Bool, timeoutMs: UInt64) -> Bool {
@@ -296,7 +303,8 @@ struct PairingConfirmSheet: View {
 }
 
 /// 填充授权：某个配对第一次为某个条目在某个站点取用凭据（spec/ipc.md §5.2 第 1 条）。
-/// 显示规范化后的站点、条目标题与用户名、发起请求的配对。默认按钮不是"允许"，回车不会误放行。
+/// 显示规范化后的站点、条目标题与用户名、发起请求的配对。可以只允许这个网站，或让这个扩展在所有网站上都不再询问。
+/// 没有默认按钮，回车不会误放行；Esc 等于拒绝。
 struct FillAuthorizationSheet: View {
     @Environment(AppModel.self) private var model
     let request: FillAuthorizationRequest
@@ -341,16 +349,18 @@ struct FillAuthorizationSheet: View {
                         CardRowDivider()
                         PromptItemRow(title: r.title, username: r.username, url: r.site)
                     }
-                    Text(tr("这是这个扩展第一次在这个网站上使用这个条目。允许后不再询问，可在「设置 → 浏览器」中撤销。如果你没有在浏览器中点击填充，或者网站不是你正在访问的那个，请选择「拒绝」。"))
+                    Text(tr("选「所有网站」后，这个扩展以后填充都不再询问，可在「设置 → 浏览器」中改回。没有在浏览器中点击填充时，请选择「拒绝」。"))
                         .font(KV.Typography.footnote)
                         .foregroundStyle(KV.Colors.fgSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             } footer: {
-                Button(tr("拒绝")) { answer(false) }
+                Button(tr("拒绝")) { answer(.deny) }
                     .buttonStyle(.kvSecondary)
                     .keyboardShortcut(.cancelAction)
-                Button(tr("允许")) { answer(true) }
+                Button(tr("仅这个网站")) { answer(.thisSite) }
+                    .buttonStyle(.kvSecondary)
+                Button(tr("所有网站")) { answer(.allSites) }
                     .buttonStyle(.kvSecondary)
             }
             .onChange(of: left) { if left == 0, model.browserDialog?.id == request.id { model.browserDialog = nil } }
@@ -358,8 +368,9 @@ struct FillAuthorizationSheet: View {
         .kvContainerFocus()
     }
 
-    private func answer(_ accepted: Bool) {
-        request.answer(accepted && Date() < request.deadline)
+    private func answer(_ decision: BrowserFillDecision) {
+        // 截止时间之后的回答一律按拒绝处理（Rust 端也会再检查一次）
+        request.answer(Date() < request.deadline ? decision : .deny)
         model.browserDialog = nil
     }
 }
@@ -575,6 +586,9 @@ struct BrowserSettings: View {
             if model.pendingRevocationWarning {
                 Banner(kind: .warning, message: tr("有撤销没能写入数据库，重启 Keevo 后可能失效。下次解锁时会自动重试。"))
             }
+            if model.fillScopeSaveFailed {
+                Banner(kind: .warning, message: tr("填充确认的设置没能保存，请稍后再试一次。"))
+            }
             if model.authorizationRevokeWarning {
                 Banner(kind: .warning, message: tr("撤销授权没能写入数据库，重启 Keevo 后这项授权可能恢复。请稍后再试一次。"))
             }
@@ -628,7 +642,34 @@ struct BrowserSettings: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            AuthorizationList(pairing: p)
+            CardRowDivider().padding(.leading, 58)
+            HStack(spacing: KV.Space.s2) {
+                Text(tr("填充确认")).font(KV.Typography.body)
+                Spacer(minLength: KV.Space.s2)
+                Picker(tr("填充确认"), selection: Binding(
+                    get: { p.fillAllSites },
+                    set: { model.setBrowserFillAllSites(id: p.id, enabled: $0) }
+                )) {
+                    Text(tr("逐个网站确认")).tag(false)
+                    Text(tr("所有网站都不再确认")).tag(true)
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
+            }
+            .padding(.leading, 58)
+            .padding(.trailing, 14)
+            .padding(.vertical, 8)
+            if p.fillAllSites {
+                Text(tr("这个扩展在任何网站上填充都不再询问。"))
+                    .font(KV.Typography.footnote)
+                    .foregroundStyle(KV.Colors.fgSecondary)
+                    .padding(.leading, 58)
+                    .padding(.trailing, 14)
+                    .padding(.bottom, KV.Space.s3)
+            } else {
+                AuthorizationList(pairing: p)
+            }
         }
     }
 

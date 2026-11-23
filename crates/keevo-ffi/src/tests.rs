@@ -750,7 +750,12 @@ fn browser_service_pairs_lists_and_revokes() {
     use keevo_ipc::message::HostHello;
     use std::os::unix::net::UnixStream;
 
-    struct Accept(Mutex<Vec<String>>, Mutex<std::collections::VecDeque<bool>>);
+    /// 记录收到的请求；按队列回答允许与否；第三项为真时，下一次填充授权回答"所有网站"。
+    struct Accept(
+        Mutex<Vec<String>>,
+        Mutex<std::collections::VecDeque<bool>>,
+        Mutex<bool>,
+    );
     impl BrowserPrompt for Accept {
         fn pairing_started(&self, browser: String) {
             self.0.lock().unwrap().push(format!("started {browser}"));
@@ -771,13 +776,19 @@ fn browser_service_pairs_lists_and_revokes() {
                 .push(format!("confirm {name} {}", zh.join(" ")));
             true
         }
-        fn authorize_fill(&self, r: BrowserFillRequest, timeout_ms: u64) -> bool {
+        fn authorize_fill(&self, r: BrowserFillRequest, timeout_ms: u64) -> BrowserFillDecision {
             assert!(timeout_ms > 0 && timeout_ms <= 60_000);
             self.0.lock().unwrap().push(format!(
                 "authorize {} {} {} {}",
                 r.pairing_name, r.title, r.username, r.site
             ));
-            self.1.lock().unwrap().pop_front().unwrap_or(false)
+            if std::mem::take(&mut *self.2.lock().unwrap()) {
+                BrowserFillDecision::AllSites
+            } else if self.1.lock().unwrap().pop_front().unwrap_or(false) {
+                BrowserFillDecision::ThisSite
+            } else {
+                BrowserFillDecision::Deny
+            }
         }
         fn fill_paused(&self, _: String, name: String, _: String) {
             self.0.lock().unwrap().push(format!("paused {name}"));
@@ -832,7 +843,11 @@ fn browser_service_pairs_lists_and_revokes() {
         }
     }
     let _cleanup = Cleanup(short.clone());
-    let prompt = Arc::new(Accept(Mutex::new(Vec::new()), Mutex::default()));
+    let prompt = Arc::new(Accept(
+        Mutex::new(Vec::new()),
+        Mutex::default(),
+        Mutex::default(),
+    ));
     let info = f.vault.start_service_at(prompt.clone(), &socket).unwrap();
     assert!(info.new_identity);
     let again = f.vault.start_service_at(prompt.clone(), &socket).unwrap();
@@ -963,6 +978,39 @@ fn browser_service_pairs_lists_and_revokes() {
     assert_eq!(asked(&prompt), 2);
     assert!(!f.vault.browser_pairings()[0].paused);
 
+    // "所有网站"（§5.2 第 1 条）：选了之后这个配对不再询问，设置页能看到并改回；改回后重新询问
+    assert!(!f.vault.browser_pairings()[0].fill_all_sites);
+    *prompt.2.lock().unwrap() = true;
+    assert!(is_fill(&fill(&mut client, &mut stream)), "选了所有网站");
+    assert!(f.vault.browser_pairings()[0].fill_all_sites);
+    assert!(
+        is_fill(&fill(&mut client, &mut stream)),
+        "所有网站：不再询问"
+    );
+    assert_eq!(asked(&prompt), 3);
+    assert!(
+        f.vault
+            .set_browser_fill_all_sites(pairings[0].id.clone(), false)
+            .unwrap()
+    );
+    assert!(!f.vault.browser_pairings()[0].fill_all_sites);
+    assert!(is_denied(&fill(&mut client, &mut stream)), "改回后重新询问");
+    assert_eq!(asked(&prompt), 4);
+    assert!(
+        f.vault
+            .set_browser_fill_all_sites(pairings[0].id.clone(), true)
+            .unwrap()
+    );
+    assert!(
+        is_fill(&fill(&mut client, &mut stream)),
+        "设置页中选所有网站"
+    );
+    assert!(
+        f.vault
+            .set_browser_fill_all_sites(pairings[0].id.clone(), false)
+            .unwrap()
+    );
+
     // 协议 v2（§5.5）：保存新登录不需要确认，保存后可以直接填充（凭据本来就是扩展提供的）；
     // 更新每次都要确认，拒绝时不改动，确认后填充得到新密码
     let call = |client: &mut ExtensionClient, stream: &mut UnixStream, c| {
@@ -1013,7 +1061,7 @@ fn browser_service_pairs_lists_and_revokes() {
         matches!(&fill_new, keevo_ipc::message::ServerMessage::Ok { result: keevo_ipc::message::CallResult::Fill(d), .. } if d.password == "saved-pass"),
         "{fill_new:?}"
     );
-    assert_eq!(asked(&prompt), 2, "保存的条目不再询问授权");
+    assert_eq!(asked(&prompt), 4, "保存的条目不再询问授权");
     let update = |pw: &str| keevo_ipc::message::Call::Update {
         item_id: gh.clone(),
         url: "https://github.com/settings".into(),

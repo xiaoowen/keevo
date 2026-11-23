@@ -19,7 +19,9 @@ use keevo_ipc::service::{
 };
 
 use crate::backend::CoreBackend;
-use crate::pairing::{Authorization, Bound, Live, LoadReport, PairingCache, ReadOnly};
+use crate::pairing::{
+    Authorization, Bound, FillDecision, Live, LoadReport, PairingCache, ReadOnly,
+};
 
 /// socket 对端的校验策略（`spec/ipc.md` §3.1）。
 #[derive(Debug, Clone)]
@@ -47,10 +49,11 @@ pub trait PairingPrompt: Send + Sync {
         deadline: std::time::Instant,
     ) -> bool;
     /// 某个配对第一次为某个条目在某个站点取用凭据：在原生界面显示站点、条目与配对，请用户确认
-    /// （`spec/ipc.md` §5.2）。必须在 `deadline` 到达时关闭界面并返回 `false`。默认拒绝。
-    fn authorize_fill(&self, request: &FillRequest, deadline: std::time::Instant) -> bool {
+    /// （`spec/ipc.md` §5.2）。用户可以只允许这个站点，或允许这个配对在所有站点上取用。必须在 `deadline`
+    /// 到达时关闭界面并返回 [`FillDecision::Deny`]。默认拒绝。
+    fn authorize_fill(&self, request: &FillRequest, deadline: std::time::Instant) -> FillDecision {
         let _ = (request, deadline);
-        false
+        FillDecision::Deny
     }
     /// 这个配对因频率限制被暂停（§5.2 第 3 条）：在 Keevo.app 中提示，用户确认后调用 [`VaultService::resume`]。
     fn fill_paused(&self, extension_public: &[u8; 32], name: &str, browser: &str) {
@@ -201,6 +204,30 @@ impl VaultService {
     #[must_use]
     pub fn authorizations(&self, extension_public: &[u8; 32]) -> Vec<Authorization> {
         lock(&self.pairings).authorizations(extension_public)
+    }
+
+    /// 这个配对是否选了"所有网站"（"设置 → 浏览器"）。
+    #[must_use]
+    pub fn fills_all_sites(&self, extension_public: &[u8; 32]) -> bool {
+        lock(&self.pairings).fills_all_sites(extension_public)
+    }
+
+    /// 选择或取消"所有网站"（§5.2 第 1 条）。取消后，之前逐项授权的条目仍然有效。
+    ///
+    /// # Errors
+    /// 配对不存在、已锁定或写入数据库失败时返回错误；此时设置不变。
+    pub fn set_fills_all_sites(
+        &self,
+        extension_public: &[u8; 32],
+        enabled: bool,
+    ) -> std::io::Result<()> {
+        let mut vault = lock(&self.vault);
+        let mut cache = lock(&self.pairings);
+        Bound {
+            cache: &mut cache,
+            vault: &mut vault,
+        }
+        .set_all_sites(extension_public, enabled)
     }
 
     /// 撤销一项站点授权（§5.2 第 2 条）。之后这个配对再为该条目在该站点取用凭据，需要重新确认。
@@ -364,19 +391,30 @@ impl VaultService {
                     // 等待用户确认期间不持有任何锁（§5.2）
                     let now = std::time::Instant::now();
                     let deadline = now.checked_add(FILL_AUTHORIZATION_TIMEOUT).unwrap_or(now);
-                    let accepted = self.prompt.authorize_fill(&request, deadline)
-                        && std::time::Instant::now() <= deadline;
+                    let decision = self.prompt.authorize_fill(&request, deadline);
+                    let in_time = std::time::Instant::now() <= deadline;
                     let more = {
                         let mut vault = lock(&self.vault);
                         let mut cache = lock(&self.pairings);
+                        let mut bound = Bound {
+                            cache: &mut cache,
+                            vault: &mut vault,
+                        };
                         // 先写入授权，成功后才放行；写入失败（如等待期间已锁定）按拒绝处理
-                        let granted = accepted
-                            && Bound {
-                                cache: &mut cache,
-                                vault: &mut vault,
-                            }
-                            .authorize(&request.extension_public, &request.item_id, &request.site)
-                            .is_ok();
+                        let granted = in_time
+                            && match decision {
+                                FillDecision::Deny => false,
+                                FillDecision::ThisSite => bound
+                                    .authorize(
+                                        &request.extension_public,
+                                        &request.item_id,
+                                        &request.site,
+                                    )
+                                    .is_ok(),
+                                FillDecision::AllSites => {
+                                    bound.set_all_sites(&request.extension_public, true).is_ok()
+                                }
+                            };
                         conn.resolve_fill(granted, &mut Live(&mut cache), &CoreBackend::new(&vault))
                     };
                     if !self.emit(id, stream, conn, more) {
@@ -551,8 +589,8 @@ mod tests {
         fn confirm(&self, _: [u8; 6], _: &str, _: &str, _: Instant) -> bool {
             true
         }
-        fn authorize_fill(&self, _: &FillRequest, _: Instant) -> bool {
-            true
+        fn authorize_fill(&self, _: &FillRequest, _: Instant) -> FillDecision {
+            FillDecision::ThisSite
         }
     }
 

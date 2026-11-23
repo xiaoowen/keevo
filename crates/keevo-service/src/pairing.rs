@@ -38,10 +38,24 @@ pub struct Authorization {
     pub granted_at_ms: u64,
 }
 
+/// 填充授权确认的回答（`spec/ipc.md` §5.2 第 1 条）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FillDecision {
+    /// 拒绝（含超时）。
+    Deny,
+    /// 只允许这个条目在这个站点上。
+    ThisSite,
+    /// 这个配对以后在所有站点上取用凭据都不再询问。
+    AllSites,
+}
+
+/// 授权记录的明文。v1 只有逐项授权；v2 增加 `all_sites`（"所有网站"）。写入一律用 v2。
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AuthorizationsJson {
     v: u32,
+    #[serde(default)]
+    all_sites: bool,
     items: Vec<Authorization>,
 }
 
@@ -62,6 +76,8 @@ pub struct PairingCache {
     loaded: bool,
     pending_revocations: BTreeSet<[u8; 32]>,
     authorizations: BTreeMap<[u8; 32], BTreeSet<Authorization>>,
+    /// 选了"所有网站"的配对：取用任何条目都不再询问（频率限制照旧）。
+    all_sites: BTreeSet<[u8; 32]>,
     usage: HashMap<[u8; 32], VecDeque<(Instant, String)>>,
     paused: HashSet<[u8; 32]>,
     saves: HashMap<[u8; 32], VecDeque<Instant>>,
@@ -128,6 +144,7 @@ impl PairingCache {
             }
         }
         let mut authorizations = BTreeMap::new();
+        let mut all_sites = BTreeSet::new();
         let (rows, auth_skipped) = vault
             .local_records(AUTHORIZATION_KIND)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -145,7 +162,11 @@ impl PairingCache {
                 continue;
             }
             match serde_json::from_slice::<AuthorizationsJson>(&plain) {
-                Ok(a) if a.v == 1 => {
+                // v1 没有 all_sites 字段；出现了也不认（按 v1 的格式它是未知字段）
+                Ok(a) if (a.v == 1 && !a.all_sites) || a.v == 2 => {
+                    if a.all_sites {
+                        all_sites.insert(pk);
+                    }
                     authorizations.insert(pk, a.items.into_iter().collect());
                 }
                 _ => skipped = skipped.saturating_add(1),
@@ -153,6 +174,7 @@ impl PairingCache {
         }
         self.records = records;
         self.authorizations = authorizations;
+        self.all_sites = all_sites;
         self.loaded = true;
         Ok(LoadReport {
             records: self.records.len(),
@@ -182,6 +204,12 @@ impl PairingCache {
             .unwrap_or_default()
     }
 
+    /// 这个配对是否选了"所有网站"（取用任何条目都不再询问）。
+    #[must_use]
+    pub fn fills_all_sites(&self, extension_public: &[u8; 32]) -> bool {
+        self.all_sites.contains(extension_public)
+    }
+
     /// 这个配对是否因频率限制被暂停。
     #[must_use]
     pub fn is_paused(&self, extension_public: &[u8; 32]) -> bool {
@@ -195,9 +223,11 @@ impl PairingCache {
     }
 
     fn authorized(&self, pk: &[u8; 32], item_id: &str, site: &str) -> bool {
-        self.authorizations
-            .get(pk)
-            .is_some_and(|s| s.iter().any(|a| a.item_id == item_id && a.site == site))
+        self.all_sites.contains(pk)
+            || self
+                .authorizations
+                .get(pk)
+                .is_some_and(|s| s.iter().any(|a| a.item_id == item_id && a.site == site))
     }
 
     /// 授权检查与频率限制（`spec/ipc.md` §5.2）：先看是否暂停，再看是否已授权；允许时记下这次使用，
@@ -381,14 +411,19 @@ fn find(cache: &PairingCache, extension_public: &[u8; 32]) -> Option<PairingReco
 impl Bound<'_> {
     fn persist_authorizations(&mut self, pk: &[u8; 32]) -> std::io::Result<()> {
         let items: Vec<Authorization> = self.cache.authorizations(pk);
-        if items.is_empty() {
+        let all_sites = self.cache.all_sites.contains(pk);
+        if items.is_empty() && !all_sites {
             return self
                 .vault
                 .delete_local_record(AUTHORIZATION_KIND, pk)
                 .map_err(|e| std::io::Error::other(e.to_string()));
         }
-        let bytes = serde_json::to_vec(&AuthorizationsJson { v: 1, items })
-            .map_err(std::io::Error::other)?;
+        let bytes = serde_json::to_vec(&AuthorizationsJson {
+            v: 2,
+            all_sites,
+            items,
+        })
+        .map_err(std::io::Error::other)?;
         self.vault
             .put_local_record(AUTHORIZATION_KIND, pk, &bytes)
             .map_err(|e| std::io::Error::other(e.to_string()))
@@ -424,6 +459,29 @@ impl Bound<'_> {
                 Some(b) => self.cache.authorizations.insert(*pk, b),
                 None => self.cache.authorizations.remove(pk),
             };
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// 选择或取消"所有网站"（填充确认窗口，或"设置 → 浏览器"）：先写数据库，成功后才生效。取消后，之前逐项
+    /// 授权的条目仍然有效。
+    pub(crate) fn set_all_sites(&mut self, pk: &[u8; 32], enabled: bool) -> std::io::Result<()> {
+        if find(self.cache, pk).is_none() {
+            return Err(std::io::ErrorKind::NotFound.into());
+        }
+        let before = self.cache.all_sites.contains(pk);
+        if enabled {
+            self.cache.all_sites.insert(*pk);
+        } else {
+            self.cache.all_sites.remove(pk);
+        }
+        if let Err(e) = self.persist_authorizations(pk) {
+            if before {
+                self.cache.all_sites.insert(*pk);
+            } else {
+                self.cache.all_sites.remove(pk);
+            }
             return Err(e);
         }
         Ok(())
@@ -472,6 +530,7 @@ impl PairingStore for Bound<'_> {
             .delete_local_record(AUTHORIZATION_KIND, &record.extension_public)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         self.cache.authorizations.remove(&record.extension_public);
+        self.cache.all_sites.remove(&record.extension_public);
         self.vault
             .put_local_record(PAIRING_KIND, &record.extension_public, &bytes)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -491,6 +550,7 @@ impl PairingStore for Bound<'_> {
             .records
             .retain(|r| &r.extension_public != extension_public);
         self.cache.authorizations.remove(extension_public);
+        self.cache.all_sites.remove(extension_public);
         self.cache.usage.remove(extension_public);
         self.cache.paused.remove(extension_public);
         self.cache.saves.remove(extension_public);
@@ -762,6 +822,140 @@ mod tests {
         let mut after = PairingCache::default();
         after.load(&mut vault).unwrap();
         assert!(after.authorizations(&pk).is_empty(), "孤立的授权记录不复活");
+    }
+
+    #[test]
+    fn all_sites() {
+        let params = KdfParams::new(KdfParams::MIN_M_KIB, KdfParams::MIN_T, 1, [6; 16]).unwrap();
+        let (mut vault, _) =
+            Vault::create_with_store(Store::open_in_memory().unwrap(), "pw", params).unwrap();
+        let mut cache = PairingCache::default();
+        cache.load(&mut vault).unwrap();
+        for n in [1, 2] {
+            Bound {
+                cache: &mut cache,
+                vault: &mut vault,
+            }
+            .save(record(n))
+            .unwrap();
+        }
+        let (pk, other) = ([1u8; 32], [2u8; 32]);
+        let t0 = Instant::now();
+        let mut bound = Bound {
+            cache: &mut cache,
+            vault: &mut vault,
+        };
+        bound.authorize(&pk, "i0", "https://github.com").unwrap();
+        bound.set_all_sites(&pk, true).unwrap();
+        assert!(
+            bound.set_all_sites(&[9; 32], true).is_err(),
+            "未配对的不能设置"
+        );
+        assert!(cache.fills_all_sites(&pk) && !cache.fills_all_sites(&other));
+        // 任何条目、任何站点都不再询问；只对这一个配对
+        assert_eq!(
+            Live(&mut cache).fill_gate(&pk, "i1", "https://example.org", t0),
+            FillGate::Allowed
+        );
+        assert_eq!(
+            Live(&mut cache).fill_gate(&other, "i1", "https://example.org", t0),
+            FillGate::NeedsAuthorization
+        );
+        // 频率限制照旧：第 6 个不同条目暂停
+        for i in 2..6 {
+            assert_eq!(
+                Live(&mut cache).fill_gate(&pk, &format!("i{i}"), "https://example.org", t0),
+                FillGate::Allowed
+            );
+        }
+        assert_eq!(
+            Live(&mut cache).fill_gate(&pk, "i6", "https://example.org", t0),
+            FillGate::Paused
+        );
+
+        // 存入加密数据库（v2），重新读入后仍然有效，逐项授权也在
+        let mut fresh = PairingCache::default();
+        fresh.load(&mut vault).unwrap();
+        assert!(fresh.fills_all_sites(&pk));
+        assert_eq!(fresh.authorizations(&pk).len(), 1);
+
+        // 改回逐个网站确认：之前逐项授权的仍然有效
+        Bound {
+            cache: &mut fresh,
+            vault: &mut vault,
+        }
+        .set_all_sites(&pk, false)
+        .unwrap();
+        assert_eq!(
+            Live(&mut fresh).fill_gate(&pk, "i0", "https://github.com", t0),
+            FillGate::Allowed
+        );
+        assert_eq!(
+            Live(&mut fresh).fill_gate(&pk, "i1", "https://example.org", t0),
+            FillGate::NeedsAuthorization
+        );
+        let mut reloaded = PairingCache::default();
+        reloaded.load(&mut vault).unwrap();
+        assert!(!reloaded.fills_all_sites(&pk));
+
+        // 撤销配对、重新配对后回到逐个网站确认
+        let mut bound = Bound {
+            cache: &mut reloaded,
+            vault: &mut vault,
+        };
+        bound.set_all_sites(&pk, true).unwrap();
+        bound.revoke(&pk).unwrap();
+        bound.save(record(1)).unwrap();
+        assert!(!reloaded.fills_all_sites(&pk));
+        let mut after = PairingCache::default();
+        after.load(&mut vault).unwrap();
+        assert!(!after.fills_all_sites(&pk));
+    }
+
+    #[test]
+    fn authorization_record_versions() {
+        let params = KdfParams::new(KdfParams::MIN_M_KIB, KdfParams::MIN_T, 1, [7; 16]).unwrap();
+        let (mut vault, _) =
+            Vault::create_with_store(Store::open_in_memory().unwrap(), "pw", params).unwrap();
+        let mut cache = PairingCache::default();
+        cache.load(&mut vault).unwrap();
+        Bound {
+            cache: &mut cache,
+            vault: &mut vault,
+        }
+        .save(record(1))
+        .unwrap();
+        let pk = [1u8; 32];
+        let load = |vault: &mut Vault| {
+            let mut c = PairingCache::default();
+            let report = c.load(vault).unwrap();
+            (c, report.skipped)
+        };
+        // v1（只有逐项授权）照常读入
+        let v1 =
+            br#"{"v":1,"items":[{"item_id":"i0","site":"https://github.com","granted_at_ms":1}]}"#;
+        vault.put_local_record(AUTHORIZATION_KIND, &pk, v1).unwrap();
+        let (c, skipped) = load(&mut vault);
+        assert_eq!(
+            (c.authorizations(&pk).len(), c.fills_all_sites(&pk), skipped),
+            (1, false, 0)
+        );
+        // v1 不认 all_sites：跳过整条记录（失败的方向是"需要确认"）
+        let bad = br#"{"v":1,"all_sites":true,"items":[]}"#;
+        vault
+            .put_local_record(AUTHORIZATION_KIND, &pk, bad)
+            .unwrap();
+        let (c, skipped) = load(&mut vault);
+        assert_eq!((c.fills_all_sites(&pk), skipped), (false, 1));
+        // 未知版本同样跳过
+        let v3 = br#"{"v":3,"all_sites":true,"items":[]}"#;
+        vault.put_local_record(AUTHORIZATION_KIND, &pk, v3).unwrap();
+        let (c, skipped) = load(&mut vault);
+        assert_eq!((c.fills_all_sites(&pk), skipped), (false, 1));
+        let v2 = br#"{"v":2,"all_sites":true,"items":[]}"#;
+        vault.put_local_record(AUTHORIZATION_KIND, &pk, v2).unwrap();
+        let (c, skipped) = load(&mut vault);
+        assert_eq!((c.fills_all_sites(&pk), skipped), (true, 0));
     }
 
     #[test]

@@ -1628,6 +1628,7 @@ impl KeevoVault {
                     name: r.name,
                     browser: r.browser,
                     paused: svc.is_paused(&r.extension_public),
+                    fill_all_sites: svc.fills_all_sites(&r.extension_public),
                     extension_origin: r.extension_origin,
                     paired_at_ms: r.paired_at_ms,
                 })
@@ -1674,6 +1675,20 @@ impl KeevoVault {
                 granted_at_ms: a.granted_at_ms,
             })
             .collect())
+    }
+
+    /// 选择或取消"所有网站"（"设置 → 浏览器"）。返回 `false` 表示没有生效（已锁定或写入数据库失败）。
+    ///
+    /// # Errors
+    /// 服务未启动或 ID 不合法时返回错误。
+    pub fn set_browser_fill_all_sites(
+        &self,
+        pairing_id: String,
+        enabled: bool,
+    ) -> Result<bool, KeevoError> {
+        let pk = pairing_key(&pairing_id)?;
+        self.with_service(|svc| svc.set_fills_all_sites(&pk, enabled).is_ok())
+            .ok_or_else(service_not_started)
     }
 
     /// 撤销一项站点授权。返回 `false` 表示写入数据库失败：内存中已撤销，但重启后可能恢复。
@@ -1885,9 +1900,9 @@ pub trait BrowserPrompt: Send + Sync {
         browser: String,
         timeout_ms: u64,
     ) -> bool;
-    /// 某个配对第一次为某个条目在某个站点取用凭据（`spec/ipc.md` §5.2）：显示站点、条目与配对，请用户确认。
-    /// 必须在 `timeout_ms` 毫秒内返回，超时按拒绝处理。
-    fn authorize_fill(&self, request: BrowserFillRequest, timeout_ms: u64) -> bool;
+    /// 某个配对第一次为某个条目在某个站点取用凭据（`spec/ipc.md` §5.2）：显示站点、条目与配对，请用户确认；
+    /// 用户可以只允许这个网站，或允许这个配对在所有网站上取用。必须在 `timeout_ms` 毫秒内返回，超时按拒绝处理。
+    fn authorize_fill(&self, request: BrowserFillRequest, timeout_ms: u64) -> BrowserFillDecision;
     /// 这个配对因频率限制被暂停（§5.2 第 3 条）：提示用户，用户确认后调用
     /// [`KeevoVault::resume_browser_pairing`]。
     fn fill_paused(&self, pairing_id: String, name: String, browser: String);
@@ -2017,10 +2032,11 @@ impl keevo_service::PairingPrompt for PromptAdapter {
         &self,
         r: &keevo_ipc::service::FillRequest,
         deadline: std::time::Instant,
-    ) -> bool {
+    ) -> keevo_service::FillDecision {
+        use keevo_service::FillDecision;
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         if left.is_zero() {
-            return false;
+            return FillDecision::Deny;
         }
         let ms = u64::try_from(left.as_millis()).unwrap_or(u64::MAX);
         let request = BrowserFillRequest {
@@ -2032,7 +2048,15 @@ impl keevo_service::PairingPrompt for PromptAdapter {
             username: r.username.clone(),
             site: r.site.clone(),
         };
-        self.0.authorize_fill(request, ms) && std::time::Instant::now() <= deadline
+        let decision = self.0.authorize_fill(request, ms);
+        if std::time::Instant::now() > deadline {
+            return FillDecision::Deny;
+        }
+        match decision {
+            BrowserFillDecision::Deny => FillDecision::Deny,
+            BrowserFillDecision::ThisSite => FillDecision::ThisSite,
+            BrowserFillDecision::AllSites => FillDecision::AllSites,
+        }
     }
 
     fn fill_paused(&self, extension_public: &[u8; 32], name: &str, browser: &str) {
@@ -2140,6 +2164,19 @@ pub struct BrowserPairing {
     pub paired_at_ms: u64,
     /// 因频率限制被暂停（`spec/ipc.md` §5.2 第 3 条）。
     pub paused: bool,
+    /// 选了"所有网站"：取用任何条目都不再询问（§5.2 第 1 条）。
+    pub fill_all_sites: bool,
+}
+
+/// 填充授权确认的回答（`spec/ipc.md` §5.2 第 1 条）。
+#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserFillDecision {
+    /// 拒绝。
+    Deny,
+    /// 只允许这个条目在这个网站上。
+    ThisSite,
+    /// 这个扩展以后在所有网站上填充都不再询问。
+    AllSites,
 }
 
 const fn kdf_info(p: &KdfParams) -> KdfInfo {

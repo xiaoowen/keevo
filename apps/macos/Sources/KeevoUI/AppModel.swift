@@ -126,6 +126,8 @@ final class AppModel {
     private(set) var browserAuthorizations: [String: [BrowserAuthorization]] = [:]
     /// 撤销授权没能写入数据库。
     private(set) var authorizationRevokeWarning = false
+    /// "填充确认"的设置没能保存（已锁定或写入数据库失败）。
+    private(set) var fillScopeSaveFailed = false
     /// 浏览器服务没有启动的原因。
     private(set) var browserServiceError: String?
     /// 有撤销没能写入数据库（spec/ipc.md §4.4）。
@@ -412,6 +414,13 @@ final class AppModel {
         guard let vault else { return }
         let persisted = (try? vault.revokeBrowserAuthorization(pairingId: pairingId, itemId: itemId, site: site)) ?? false
         authorizationRevokeWarning = !persisted
+        refreshBrowserPairings()
+    }
+
+    /// 填充确认：逐个网站确认，或这个扩展在所有网站上都不再询问（spec/ipc.md §5.2 第 1 条）。
+    /// 改回逐个网站确认后，之前逐项授权的网站仍然有效。
+    func setBrowserFillAllSites(id: String, enabled: Bool) {
+        fillScopeSaveFailed = !((try? vault?.setBrowserFillAllSites(pairingId: id, enabled: enabled)) ?? false)
         refreshBrowserPairings()
     }
 
