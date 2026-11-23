@@ -273,7 +273,7 @@ function writeResults(results, t) {
     "|---|---|---|---|",
     ...results.map(
       ({ site, problems }) =>
-        `| ${site.name} | ${groups[site.group] ?? site.group} | ${captured(site.id)} | ${problems.length ? `✗ ${problems.join("；").replace(/\|/g, "\\|")}` : "✓"} |`,
+        `| ${site.name} | ${groups[site.group] ?? site.group} | ${captured(site.id)} | ${problems.length ? `✗ ${problems.join("；").replace(/\|/g, "\\|")}${site.note ? `（备注：${site.note}）` : ""}` : "✓"} |`,
     ),
     "",
   ];

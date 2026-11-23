@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Acme</title>
+<!-- 自动填充回归语料（合成页面）。预期结果见 keevo-expect：icons 为聚焦各字段后应出现的图标（login、otp，null 为不出现）；
+     fills 为填充后各字段的值（anchor 为 null 表示从弹窗填充）。$U、$P、$T 为测试用的用户名、密码与一次性密码。 -->
+<script type="application/json" id="keevo-expect">
+{
+  "title": "用户名与密码分别在两个网页组件中",
+  "pattern": "两个开放的 shadow root 各有一个输入框，外层不是原生 form（如 Reddit）",
+  "icons": {
+    "#u >>> input": "login",
+    "#p >>> input": "login"
+  },
+  "fills": [
+    {
+      "anchor": "#u >>> input",
+      "expect": {
+        "#u >>> input": "$U",
+        "#p >>> input": "$P"
+      }
+    },
+    {
+      "anchor": null,
+      "expect": {
+        "#u >>> input": "$U",
+        "#p >>> input": "$P"
+      }
+    }
+  ]
+}
+</script>
+<body style="margin:40px;font:16px sans-serif">
+<x-form><fieldset style="border:0;padding:0"><x-field id="u"><template shadowrootmode="open"><input name="username" placeholder="Username" style="width:280px;height:32px"></template></x-field><br><x-field id="p"><template shadowrootmode="open"><input name="password" type="password" placeholder="Password" style="width:280px;height:32px"></template></x-field></fieldset><button>Log In</button></x-form>
+</body>
+</html>

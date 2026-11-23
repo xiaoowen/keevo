@@ -65,7 +65,19 @@
   }
 
   const TEXTUAL = new Set(["text", "email", "tel", ""]);
+  const TEXT_INPUTS = 'input[type="email"], input[type="text"], input[type="tel"], input:not([type])';
   const USER_HINT = /user|login|email|account|mail|phone|账号|帐号|用户|邮箱|手机/i;
+  /** 搜索框：不是账号框，也不算作"范围内的其他字段"。 */
+  const SEARCH_HINT = /search|搜索|查找/i;
+  /** 按钮文字："看起来是登录"（下一步、继续也算：分步登录的第一步常用）。 */
+  const LOGIN_ACTION = /登录|登入|下一步|继续|log\s*in|sign\s*in|next|continue/i;
+  /** 只认登录本身的字样，用于区分登录与注册。 */
+  const LOGIN_STRICT = /登录|登入|log\s*in|sign\s*in/i;
+  const SIGNUP_ACTION = /注册|创建账号|创建帐号|sign\s*up|register|create\s+(an\s+)?account/i;
+  /** 订阅一类的表单：单独的邮箱框不是账号框。 */
+  const SUBSCRIBE_ACTION = /订阅|subscribe|newsletter/i;
+  /** 页面标题或网址路径中的登录字样。 */
+  const LOGIN_CONTEXT = /log\s*-?\s*in|sign\s*-?\s*in|signin|登录|登入/i;
 
   function autocomplete(el: HTMLInputElement): string[] {
     return (el.getAttribute("autocomplete") ?? "").toLowerCase().split(/\s+/);
@@ -85,6 +97,86 @@
     return el.form ?? (el.getRootNode() as Document | ShadowRoot);
   }
 
+  /**
+   * 找密码框的范围。字段在 shadow root 中、而这个 shadow root 中没有密码框时（用户名与密码分别在两个网页组件中，
+   * 如 Reddit），从宿主向外逐层找最近的、含有密码框的容器：最多 5 层，不到 body，不跨 iframe。找不到时仍是原来的范围，
+   * 不会与页面上其他地方的密码框配对。
+   */
+  function loginScope(el: HTMLInputElement): ParentNode {
+    const own = scopeOfField(el);
+    if (!(own instanceof ShadowRoot) || passwordFields(own).length > 0) return own;
+    let node: Element | null = own.host;
+    for (let i = 0; i < 5 && node; i++) {
+      const root: Node = node.getRootNode();
+      node = node.parentElement ?? (root instanceof ShadowRoot ? root.host : null);
+      if (!node || node === document.body || node === document.documentElement) break;
+      if (passwordFields(node).length > 0) return node;
+    }
+    return own;
+  }
+
+  /** 字段外层的范围：穿过 shadow root，到最近的表单，没有表单时是文档。 */
+  function outerScope(el: Element): ParentNode {
+    let node = el;
+    for (;;) {
+      const form = (node instanceof HTMLInputElement && node.form) || node.closest("form");
+      if (form) return form;
+      const root = node.getRootNode();
+      if (!(root instanceof ShadowRoot)) return root as Document;
+      node = root.host;
+    }
+  }
+
+  /** 组合树（展开 shadow root 之后）中的先后：负数表示 a 在 b 之前。 */
+  function composedCompare(a: Node, b: Node): number {
+    if (a === b) return 0;
+    const chain = (n: Node): Node[] => {
+      const out = [n];
+      for (let root = n.getRootNode(); root instanceof ShadowRoot; root = root.host.getRootNode()) out.unshift(root.host);
+      return out;
+    };
+    const ca = chain(a);
+    const cb = chain(b);
+    for (let i = 0; ; i++) {
+      const x = ca[i];
+      const y = cb[i];
+      if (x === undefined) return -1;
+      if (y === undefined) return 1;
+      if (x !== y) return x.compareDocumentPosition(y) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+    }
+  }
+
+  /** 字段的标签文字：<label> 与 aria-labelledby。 */
+  function labelText(el: HTMLInputElement): string {
+    const parts = Array.from(el.labels ?? [], (l) => l.textContent ?? "");
+    const root = el.getRootNode() as Document | ShadowRoot;
+    for (const id of (el.getAttribute("aria-labelledby") ?? "").split(/\s+/).filter(Boolean)) {
+      parts.push(root.getElementById(id)?.textContent ?? "");
+    }
+    return parts.join(" ");
+  }
+
+  function hintOf(el: HTMLInputElement): string {
+    return [el.name, el.id, el.placeholder, el.getAttribute("aria-label") ?? "", labelText(el)].join(" ");
+  }
+
+  function isSearch(el: HTMLInputElement): boolean {
+    return (
+      el.type === "search" ||
+      el.closest('[role="search"]') !== null ||
+      ["q", "query", "keyword", "wd"].includes(el.name) ||
+      SEARCH_HINT.test([el.name, el.id, el.placeholder, el.getAttribute("aria-label") ?? ""].join(" "))
+    );
+  }
+
+  /** 范围内可见按钮的文字。 */
+  function actionTexts(root: ParentNode): string[] {
+    return deepQuery<HTMLElement>(root, 'button, input[type="submit"], input[type="button"], [role="button"]')
+      .filter(visible)
+      .map((b) => `${b instanceof HTMLInputElement ? b.value : (b.textContent ?? "")} ${b.getAttribute("aria-label") ?? ""}`.trim())
+      .filter((t) => t !== "");
+  }
+
   /** 可以填写的字段：可见、没有禁用、不是只读。 */
   function editable(el: HTMLInputElement): boolean {
     return !el.disabled && !el.readOnly && visible(el);
@@ -97,14 +189,49 @@
     return current.length > 0 ? current : all;
   }
 
-  /** 位于密码框之前的最后一个可见文本框：通常就是用户名。 */
+  /**
+   * 位于密码框之前的最后一个可见文本框：通常就是用户名。在密码框外层的表单（或文档）中按组合树的顺序找，
+   * 用户名与密码分别在两个 shadow root 中时也能找到；跳过搜索框。
+   */
   function usernameBefore(password: HTMLInputElement): HTMLInputElement | undefined {
-    return deepQuery<HTMLInputElement>(
-      scopeOfField(password),
-      'input[type="email"], input[type="text"], input[type="tel"], input:not([type])',
-    )
-      .filter((el) => editable(el) && (el.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0)
+    return deepQuery<HTMLInputElement>(outerScope(password), TEXT_INPUTS)
+      .filter((el) => editable(el) && !isSearch(el) && composedCompare(el, password) < 0)
+      .sort(composedCompare)
       .at(-1);
+  }
+
+  /**
+   * 登录表单中被标为 new-password 的密码框（有的网站在登录页误用这个标注）：外层范围中唯一的可见密码框（没有
+   * 确认框），并且按钮没有明确的注册字样（有注册按钮、却没有登录按钮）。两个以上的新密码框是注册或修改密码。
+   */
+  function loginLikeNewPassword(el: HTMLInputElement): boolean {
+    const scope = outerScope(el);
+    const all = deepQuery<HTMLInputElement>(scope, 'input[type="password"]').filter(editable);
+    if (all.length !== 1 || all[0] !== el) return false;
+    const actions = actionTexts(scope);
+    return !(actions.some((t) => SIGNUP_ACTION.test(t)) && !actions.some((t) => LOGIN_STRICT.test(t)));
+  }
+
+  /**
+   * 分步登录的第一步：没有密码框，只有一个账号框（用户名、邮箱或手机号）。外层范围中唯一的可见账号类文本框，
+   * 看起来是账号（标注、类型或提示），并且看起来是登录（webauthn 标注、按钮文字、页面标题或网址路径），
+   * 不是订阅一类的表单。只会填入用户名。
+   */
+  function loneIdentifier(el: HTMLInputElement, ac: string[], hint: string): boolean {
+    if (isSearch(el)) return false;
+    const identity =
+      ac.includes("webauthn") || ac.includes("email") || ac.some((t) => t.startsWith("tel")) || el.type === "email" || USER_HINT.test(hint);
+    if (!identity || SUBSCRIBE_ACTION.test(hint)) return false;
+    const scope = outerScope(el);
+    if (deepQuery<HTMLInputElement>(scope, TEXT_INPUTS).some((o) => o !== el && editable(o) && !isSearch(o))) return false;
+    const actions = actionTexts(scope);
+    if (actions.some((t) => SUBSCRIBE_ACTION.test(t))) return false;
+    return (
+      ac.includes("webauthn") ||
+      actions.some((t) => LOGIN_ACTION.test(t)) ||
+      LOGIN_CONTEXT.test(document.title) ||
+      LOGIN_CONTEXT.test(location.pathname)
+    );
   }
 
   /** 没有 autocomplete 标注的验证码框：名称或提示看起来像一次性密码。 */
@@ -114,10 +241,10 @@
     if (!(target instanceof HTMLInputElement) || target.disabled || target.readOnly) return null;
     const ac = autocomplete(target);
     if (ac.includes("one-time-code")) return "otp";
-    if (target.type === "password") return ac.includes("new-password") ? null : "login";
+    if (target.type === "password") return ac.includes("new-password") && !loginLikeNewPassword(target) ? null : "login";
     if (!TEXTUAL.has(target.type) && target.type !== "number") return null;
     if (ac.includes("username")) return "login";
-    const hint = [target.name, target.id, target.placeholder, target.getAttribute("aria-label") ?? ""].join(" ");
+    const hint = hintOf(target);
     // 验证码框常标为数字输入、最多 8 位
     const short = target.maxLength > 0 && target.maxLength <= 8;
     if (OTP_HINT.test(hint) && (short || target.inputMode === "numeric" || target.type === "number" || target.type === "tel")) {
@@ -125,8 +252,8 @@
     }
     if (target.type === "number") return null;
     // 与密码框同在一个表单中、看起来像用户名的文本框，或密码框之前的那个文本框
-    const password = passwordFields(scopeOfField(target))[0];
-    if (!password) return null;
+    const password = passwordFields(loginScope(target))[0];
+    if (!password) return loneIdentifier(target, ac, hint) ? "login" : null;
     return USER_HINT.test(hint) || ac.includes("email") || usernameBefore(password) === target ? "login" : null;
   }
 
@@ -312,7 +439,7 @@
     if (m.anchored && anchor && editable(anchor)) {
       if (anchor.type === "password") password = anchor;
       else username = anchor;
-      password ??= passwordFields(scopeOfField(anchor))[0];
+      password ??= passwordFields(loginScope(anchor))[0];
       if (password && !username) username = usernameBefore(password);
     } else {
       password = passwordFields(document)[0];
@@ -345,7 +472,10 @@
   function captured(root: ParentNode): { username: string; password: string; change: boolean } | null {
     const all = deepQuery<HTMLInputElement>(root, 'input[type="password"]').filter((el) => el.value !== "");
     if (all.length === 0) return null;
-    const fresh = all.filter((el) => autocomplete(el).includes("new-password"));
+    // 登录页误标为 new-password 的唯一密码框不算修改密码
+    const fresh = all.filter(
+      (el) => autocomplete(el).includes("new-password") && !(all.length === 1 && loginLikeNewPassword(el)),
+    );
     const change = fresh.length > 0 || all.length >= 2;
     // 注册表单常有"确认密码"，修改密码表单是"当前 / 新 / 确认"：取新密码
     let password = all[0];
