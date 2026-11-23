@@ -846,6 +846,7 @@ let englishTableJSON = #"""
  "连接浏览器": "Connect Your Browser",
  "迭代次数": "Iterations",
  "退出 Keevo": "Quit Keevo",
+ "退到后台": "Move to Background",
  "选「所有网站」后，这个扩展以后填充都不再询问，可在「设置 → 浏览器」中改回。没有在浏览器中点击填充时，请选择「拒绝」。": "Choose “All Sites” and this extension won't ask again on any site. You can change this in Settings → Browser. If you didn't click fill in your browser, choose “Deny”.",
  "选择": "Choose",
  "选择一个条目": "Select an Item",

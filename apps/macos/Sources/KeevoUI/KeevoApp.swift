@@ -31,6 +31,14 @@ public struct KeevoApp: App {
                 Button(tr("立即锁定")) { model.lock() }
                     .keyboardShortcut("l", modifiers: [.command, .shift])
             }
+            // ⌘Q 退到后台，不结束进程：浏览器扩展、命令行工具、SSH Agent 与快速访问都要 Keevo 在运行。
+            // 真正退出用 ⌥⌘Q，或菜单栏、程序坞中的"退出"
+            CommandGroup(replacing: .appTermination) {
+                Button(tr("退到后台")) { AppDelegate.moveToBackground() }
+                    .keyboardShortcut("q")
+                Button(tr("退出 Keevo")) { NSApp.terminate(nil) }
+                    .keyboardShortcut("q", modifiers: [.command, .option])
+            }
             CommandGroup(replacing: .newItem) {
                 let unlocked = model.phase == .unlocked && !model.vaults.isEmpty
                 Button(tr("新建登录")) { model.mainRequest = .newItem(NewItemChoice.all[0]) }
@@ -144,6 +152,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
+        // 退到后台之后，普通窗口再次出现（菜单栏"打开 Keevo"、浏览器的确认界面、再次打开应用、设置、生成器）时
+        // 恢复程序坞图标与应用菜单。快速访问是不激活应用的浮窗（NSPanel），不算在内
+        NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { note in
+            guard let window = note.object as? NSWindow, !(window is NSPanel) else { return }
+            MainActor.assumeIsolated { Self.returnToForeground() }
+        }
+    }
+
+    /// ⌘Q：退到后台。隐藏全部窗口（窗口里的状态保留）；菜单栏中显示 Keevo 时同时隐藏程序坞图标，只留菜单栏图标。
+    /// 解锁状态不变，照常按设置的时间自动锁定。
+    @MainActor static func moveToBackground() {
+        NSApp.hide(nil)
+        if UserDefaults.standard.object(forKey: AppModel.menuBarKey) as? Bool ?? true {
+            NSApp.setActivationPolicy(.accessory)
+        }
+    }
+
+    @MainActor private static func returnToForeground() {
+        guard NSApp.activationPolicy() != .regular else { return }
+        NSApp.setActivationPolicy(.regular)
+        // 从 accessory 切回 regular 时，应用菜单要重新激活一次才会出现在屏幕顶部
+        DispatchQueue.main.async { NSApp.activate() }
     }
 
     /// 菜单栏中显示 Keevo 时，关闭窗口后继续运行（快速访问与菜单栏仍可用）。
