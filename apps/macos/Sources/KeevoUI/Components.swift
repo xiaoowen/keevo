@@ -59,14 +59,21 @@ struct SecretText: View {
     let secret: SecretValue
     let revealed: Bool
     var multiline = false
+    /// 显示时能否选中文字。详情的字段行双击即复制，关掉选择（否则双击会选中一个词）；历史版本与冲突视图没有
+    /// 复制按钮，保留选择。
+    var selectable = true
 
     var body: some View {
         if revealed {
             // 显示时逐字符分色，便于分辨 0/O、1/l 等易混字符（design/README.md"字符分色"）
-            classifiedText(secret.expose(), font: KV.Typography.mono)
-                .textSelection(.enabled)
+            let text = classifiedText(secret.expose(), font: KV.Typography.mono)
                 .lineLimit(multiline ? nil : 1)
                 .fixedSize(horizontal: false, vertical: multiline)
+            if selectable {
+                text.textSelection(.enabled)
+            } else {
+                text
+            }
         } else {
             Text(String(repeating: "•", count: 10))
                 .font(KV.Typography.mono)

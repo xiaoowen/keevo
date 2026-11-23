@@ -72,10 +72,12 @@ struct FieldDisplay: View {
 }
 
 /// 条目字段的一行（设计稿"条目的展示、编辑与新建"）：标签在上（品牌色小字），值在下；右侧的附加信息（强度、
-/// 倒计时）一直显示，复制、显示等操作只在悬停时出现。点一下值即可复制的行由各自的值视图处理。
+/// 倒计时）一直显示，复制、显示等操作只在悬停时出现。`copy` 不为空时双击整行即复制（设计稿"强度、双击复制、
+/// 排序与检查更新"）。
 struct ItemFieldRow<Value: View, Accessory: View, Actions: View>: View {
     let label: String
     var highlighted = false
+    var copy: (() -> Void)?
     @ViewBuilder let value: Value
     @ViewBuilder let accessory: Accessory
     @ViewBuilder let actions: Actions
@@ -101,12 +103,39 @@ struct ItemFieldRow<Value: View, Accessory: View, Actions: View>: View {
         .background(highlighted ? KV.Colors.bgSelected : (hovering ? KV.Colors.bgSurface : Color.clear))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
+        .doubleClickToCopy(copy)
     }
 }
 
 extension ItemFieldRow where Accessory == EmptyView {
-    init(label: String, highlighted: Bool = false, @ViewBuilder value: () -> Value, @ViewBuilder actions: () -> Actions) {
-        self.init(label: label, highlighted: highlighted, value: value, accessory: { EmptyView() }, actions: actions)
+    init(
+        label: String,
+        highlighted: Bool = false,
+        copy: (() -> Void)? = nil,
+        @ViewBuilder value: () -> Value,
+        @ViewBuilder actions: () -> Actions
+    ) {
+        self.init(label: label, highlighted: highlighted, copy: copy, value: value, accessory: { EmptyView() }, actions: actions)
+    }
+}
+
+extension View {
+    /// 双击即复制，悬停时提示"双击复制"。`copy` 为空时不改变视图。值不要开启文字选择：双击会被当作选中一个词。
+    @ViewBuilder
+    func doubleClickToCopy(_ copy: (() -> Void)?) -> some View {
+        if let copy {
+            self.onTapGesture(count: 2, perform: copy).help(tr("双击复制"))
+        } else {
+            self
+        }
+    }
+}
+
+extension AppModel {
+    /// 复制字段的值（复制按钮与双击）：剪贴板在 Clipboard.clearAfter 秒后清除，底部提示。
+    func copyField(label: String, value: String) {
+        Clipboard.copy(value)
+        showToast(tr("已复制{} · {} 秒后清除", "\(tr(label))", "\(Int(Clipboard.clearAfter))"))
     }
 }
 
@@ -134,15 +163,19 @@ struct StrengthBadge: View {
     }
 }
 
-/// 卡片下方的"网站"（设计稿）：每个网址一行链接，悬停时可以复制。
+/// 卡片下方的"网站"（设计稿）：每个网址一行链接，悬停时可以复制，双击行的空白处也可以复制。
 struct WebsitesBlock: View {
+    @Environment(AppModel.self) private var model
     let itemId: String
     let fields: [FieldEntry]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(fields.enumerated()), id: \.element.id) { index, field in
-                ItemFieldRow(label: index == 0 ? field.label : "") {
+                ItemFieldRow(
+                    label: index == 0 ? field.label : "",
+                    copy: { model.copyField(label: field.label, value: field.value.expose()) }
+                ) {
                     if let url = URL(string: field.value.expose()), url.scheme == "https" || url.scheme == "http" {
                         Link(FieldRow.display(url), destination: url)
                             .font(KV.Typography.body)
@@ -153,7 +186,6 @@ struct WebsitesBlock: View {
                         Text(field.value.expose())
                             .font(KV.Typography.body)
                             .foregroundStyle(KV.Colors.fgPrimary)
-                            .textSelection(.enabled)
                             .lineLimit(1)
                     }
                 } actions: {
@@ -192,6 +224,8 @@ struct CardRow<Value: View, Actions: View>: View {
     var labelWidth: CGFloat = 92
     var multiline = false
     var highlighted = false
+    /// 不为空时双击整行即复制。
+    var copy: (() -> Void)?
     @ViewBuilder let value: Value
     @ViewBuilder let actions: Actions
 
@@ -210,11 +244,14 @@ struct CardRow<Value: View, Actions: View>: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
         .background(highlighted ? KV.Colors.bgSelected : .clear)
+        .contentShape(Rectangle())
+        .doubleClickToCopy(copy)
     }
 }
 
 /// 普通字段与秘密字段。
 struct FieldRow: View {
+    @Environment(AppModel.self) private var model
     let field: FieldEntry
     let revealed: Bool
     let toggle: () -> Void
@@ -226,7 +263,11 @@ struct FieldRow: View {
     }
 
     var body: some View {
-        ItemFieldRow(label: field.label, highlighted: field.concealed && revealed) {
+        ItemFieldRow(
+            label: field.label,
+            highlighted: field.concealed && revealed,
+            copy: { model.copyField(label: field.label, value: field.value.expose()) }
+        ) {
             valueView
         } accessory: {
             if let strength { StrengthBadge(strength: strength) }
@@ -247,7 +288,7 @@ struct FieldRow: View {
     @ViewBuilder
     private var valueView: some View {
         if field.concealed {
-            SecretText(secret: field.value, revealed: revealed, multiline: multiline)
+            SecretText(secret: field.value, revealed: revealed, multiline: multiline, selectable: false)
         } else if field.kind == "url", let url = URL(string: field.value.expose()),
                   url.scheme == "https" || url.scheme == "http" {
             Link(Self.display(url), destination: url)
@@ -259,7 +300,6 @@ struct FieldRow: View {
             Text(field.value.expose())
                 .font(Self.looksLikeKey(field.value.expose()) ? KV.Typography.mono : KV.Typography.body)
                 .foregroundStyle(KV.Colors.fgPrimary)
-                .textSelection(.enabled)
                 .lineLimit(multiline ? nil : 1)
                 .fixedSize(horizontal: false, vertical: multiline)
         }
@@ -299,8 +339,7 @@ struct CopyButton: View {
             label: tr("复制{}", "\(tr(label))"),
             help: tr("复制（{} 秒后自动清除）", "\(Int(Clipboard.clearAfter))")
         ) {
-            Clipboard.copy(value())
-            model.showToast(tr("已复制{} · {} 秒后清除", "\(tr(label))", "\(Int(Clipboard.clearAfter))"))
+            model.copyField(label: label, value: value())
         }
     }
 }
@@ -317,7 +356,10 @@ struct OtpRow: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let remaining = max(0, expiresAt.timeIntervalSince(context.date))
-            ItemFieldRow(label: field.label) {
+            ItemFieldRow(
+                label: field.label,
+                copy: code.flatMap { c in invalid ? nil : { model.copyField(label: field.label, value: c.code.expose()) } }
+            ) {
                 if invalid {
                     Text(tr("配置无效，请在编辑器中检查")).font(KV.Typography.footnote).foregroundStyle(KV.Colors.statusDangerFg)
                 } else if let code {
@@ -327,7 +369,6 @@ struct OtpRow: View {
                             .font(.system(size: 16, weight: .medium, design: .monospaced))
                             .tracking(1)
                             .foregroundStyle(KV.Colors.fgPrimary)
-                            .textSelection(.enabled)
                             .accessibilityLabel(tr("验证码 {}", "\(code.code.expose().map(String.init).joined(separator: " "))"))
                         CountdownRing(fraction: remaining / Double(code.period), seconds: seconds)
                         Text("\(seconds)")
@@ -388,8 +429,9 @@ struct CountdownRing: View {
     }
 }
 
-/// 键值对（环境变量等）：键为等宽粗体，值为等宽；秘密值默认隐藏，显示时整行高亮，30 秒后自动隐藏。
+/// 键值对（环境变量等）：键为等宽粗体，值为等宽；秘密值默认隐藏，显示时整行高亮，30 秒后自动隐藏。双击一项复制它的值。
 struct KvRows: View {
+    @Environment(AppModel.self) private var model
     let itemId: String
     let field: FieldEntry
     let revealed: Set<String>
@@ -415,7 +457,8 @@ struct KvRows: View {
                 labelFont: .system(size: 13, weight: .semibold, design: .monospaced),
                 labelColor: KV.Colors.fgPrimary,
                 labelWidth: 180,
-                highlighted: entry.concealed && shown
+                highlighted: entry.concealed && shown,
+                copy: { model.copyField(label: entry.key, value: entry.value.expose()) }
             ) {
                 if entry.concealed && !shown {
                     Text(String(repeating: "•", count: 10))
@@ -427,7 +470,6 @@ struct KvRows: View {
                     Text(entry.value.expose())
                         .font(KV.Typography.mono)
                         .foregroundStyle(KV.Colors.fgPrimary)
-                        .textSelection(.enabled)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -553,10 +595,17 @@ struct CodesRows: View {
         ForEach(Array(field.codes.enumerated()), id: \.offset) { index, code in
             CardRowDivider()
             HStack(spacing: 10) {
+                // 勾选框只标记"已使用"；代码与行的其余部分双击复制（点代码不再切换勾选，避免双击时勾两次）
                 Toggle(isOn: Binding(
                     get: { code.used },
                     set: { model.setCodeUsed(itemId: itemId, field: field, index: index, used: $0) }
                 )) {
+                    Text(code.used ? tr("标记为未使用") : tr("标记为已使用"))
+                }
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+                .help(code.used ? tr("标记为未使用") : tr("标记为已使用"))
+                HStack(spacing: 10) {
                     Group {
                         if revealed.contains(field.id) {
                             Text(code.code.expose()).font(KV.Typography.mono).strikethrough(code.used)
@@ -565,13 +614,13 @@ struct CodesRows: View {
                         }
                     }
                     .foregroundStyle(code.used ? KV.Colors.fgTertiary : KV.Colors.fgPrimary)
+                    if code.used {
+                        Text(tr("已使用")).font(KV.Typography.caption).foregroundStyle(KV.Colors.fgTertiary)
+                    }
+                    Spacer()
                 }
-                .toggleStyle(.checkbox)
-                .help(code.used ? tr("标记为未使用") : tr("标记为已使用"))
-                if code.used {
-                    Text(tr("已使用")).font(KV.Typography.caption).foregroundStyle(KV.Colors.fgTertiary)
-                }
-                Spacer()
+                .contentShape(Rectangle())
+                .doubleClickToCopy { model.copyField(label: tr("恢复码"), value: code.code.expose()) }
                 CopyButton(label: tr("恢复码")) { code.code.expose() }
             }
             .padding(.horizontal, 14)
