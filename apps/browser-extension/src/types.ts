@@ -142,10 +142,23 @@ export interface BarResponse {
   error?: string;
 }
 
+/** 视口坐标中的矩形。 */
+export interface Rect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
 /** 内容脚本发给 Service Worker 的消息。 */
 export type ContentRequest =
-  | { type: "inline_open"; kind: "login" | "otp" }
+  /** 打开页内菜单。`frame`：输入框在直接嵌在顶层页面中的 iframe 里，请顶层帧代为显示菜单，`rect` 是输入框在 iframe 中的位置。 */
+  | { type: "inline_open"; kind: "login" | "otp"; frame?: boolean; rect?: Rect }
   | { type: "inline_close" }
+  /** 顶层帧收到子帧的定位消息后，凭其中的随机数接手显示菜单。 */
+  | { type: "inline_locate"; nonce: string }
+  /** 输入框所在的帧中按 ↓：把焦点移入顶层帧代为显示的菜单。 */
+  | { type: "inline_focus" }
   /** 用户提交了带密码的表单。`change` 表示这是修改密码的表单。 */
   | { type: "submitted"; username: string; password: string; change: boolean }
   /** 分步登录的第一步：只提交了用户名。 */

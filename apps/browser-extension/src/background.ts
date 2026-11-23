@@ -27,6 +27,7 @@ import type {
   PopupRequest,
   PopupResponse,
   Recipe,
+  Rect,
   SasWord,
   Secret,
   ServerMessage,
@@ -251,6 +252,36 @@ async function activeTab(): Promise<{ id: number; url: string } | null> {
   return tab?.id !== undefined && tab.url ? { id: tab.id, url: tab.url } : null;
 }
 
+/**
+ * 弹窗填充的目标帧：顶层有可见的密码框（或者顶层还没有内容脚本，最小权限模式）时是顶层；否则是同站 iframe 中第一个有
+ * 可见密码框的帧（docs/security.md §12：同站的 iframe 与顶层一样，跨站的 iframe 不从弹窗填充）。帧的网址取自帧本身的
+ * location（页面不能把它改成其他来源），填入前内容脚本还会核对来源。
+ */
+async function loginFrame(tab: { id: number; url: string }): Promise<{ frameId: number; url: string }> {
+  const top = { frameId: 0, url: tab.url };
+  const probe = (frameId: number): Promise<boolean | null> =>
+    chrome.tabs.sendMessage(tab.id, { type: "probe_login" }, { frameId }).then(
+      (r) => r === true,
+      () => null,
+    );
+  if ((await probe(0)) !== false) return top;
+  const topOrigin = originOf(tab.url);
+  let frames: chrome.scripting.InjectionResult<unknown>[];
+  try {
+    frames = await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, func: () => location.href });
+  } catch {
+    return top;
+  }
+  await ready;
+  for (const f of frames) {
+    if (f.frameId === 0 || typeof f.result !== "string" || !/^https?:/.test(f.result)) continue;
+    const origin = originOf(f.result);
+    if (!origin || !topOrigin || !sameSite(origin, topOrigin)) continue;
+    if (await probe(f.frameId)) return { frameId: f.frameId, url: f.result };
+  }
+  return top;
+}
+
 /** 为当前标签页的网址取用条目的凭据（`fill`）：Keevo 再次核对网址，并按站点授权（spec/ipc.md §5.2）。 */
 async function fetchSecret(itemId: string, url: string): Promise<{ secret?: Secret; error?: string }> {
   const m = await request({ method: "fill", params: { item_id: itemId, url } }, FILL_TIMEOUT_MS);
@@ -424,21 +455,23 @@ async function handle(req: PopupRequest): Promise<PopupResponse> {
     case "candidates": {
       const tab = await activeTab();
       if (!tab) return { state, candidates: [] };
-      const m = await request({ method: "candidates", params: { url: tab.url } });
+      const target = await loginFrame(tab);
+      const m = await request({ method: "candidates", params: { url: target.url } });
       const candidates: Candidate[] = m && "result" in m && "items" in m.result ? m.result.items : [];
       const error = m && "error" in m ? m.error.code : undefined;
       if (error === "locked") state = { status: "connected", locked: true };
       // 查询过于频繁时 Keevo 拒绝回答（spec/ipc.md §5.2）：如实告诉用户，不显示成"没有匹配"
       const limited = error === "not_authorized" ? "queries_limited" : undefined;
-      return { state, candidates, origin: new URL(tab.url).origin, ...(limited ? { error: limited } : {}) };
+      return { state, candidates, origin: new URL(target.url).origin, ...(limited ? { error: limited } : {}) };
     }
     case "fill": {
       const tab = await activeTab();
       if (!tab) return { state, fill: "no_tab" };
-      const { secret, error } = await fetchSecret(req.itemId, tab.url);
+      // 弹窗填充顶层帧中第一个可见的登录表单；顶层没有时，填充同站 iframe 中的登录表单（Keevo 按 iframe 的网址核对条目）
+      const target = await loginFrame(tab);
+      const { secret, error } = await fetchSecret(req.itemId, target.url);
       if (!secret) return { state, fill: error ?? "failed" };
-      // 弹窗填充顶层帧中第一个可见的登录表单
-      const fill = await deliver(tab.id, 0, { origin: new URL(tab.url).origin, secret, anchored: false, kind: "login" });
+      const fill = await deliver(tab.id, target.frameId, { origin: new URL(target.url).origin, secret, anchored: false, kind: "login" });
       if (fill === "filled") await clearBlocked(tab.id);
       return { state, fill };
     }
@@ -494,7 +527,17 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 /** 一次页内菜单：由某个帧中的内容脚本在可信的用户手势后发起。网址与来源来自 Chrome 提供的 sender。 */
 interface InlineSession {
   tabId: number;
+  /** 输入框所在的帧：凭据只发给它。 */
   frameId: number;
+  /**
+   * 显示菜单的帧。通常就是输入框所在的帧；输入框在直接嵌在顶层页面中的 iframe 里时，由顶层帧（0）代为显示：
+   * iframe 的祖先带有透明度、滤镜（如毛玻璃 backdrop-filter）或变形时，iframe 中的一切都会被可见性检测判为不可见，
+   * 菜单在 iframe 中永远不能使用。
+   */
+  menuFrameId: number;
+  /** 等待顶层帧接手时的一次性随机数，以及输入框在 iframe 中的位置。 */
+  nonce?: string;
+  rect?: Rect;
   url: string;
   origin: string;
   topOrigin: string | null;
@@ -646,24 +689,72 @@ async function handleContent(req: ContentRequest, sender: chrome.runtime.Message
       // 顶层帧的网址同样来自 Chrome；拿不到时按跨站处理（要求确认）
       const topOrigin = frameId === 0 ? origin : originOf(sender.tab?.url);
       await ready;
+      // 直接嵌在顶层页面中的 iframe：顶层帧有内容脚本时由它代为显示菜单（最小权限模式下可能没有）
+      const rect = frameId !== 0 && req.frame === true && validRect(req.rect) ? req.rect : undefined;
+      const remote =
+        rect !== undefined &&
+        (await chrome.tabs.sendMessage(tabId, { type: "ping" }, { frameId: 0 }).then(
+          (r) => r === "pong",
+          () => false,
+        ));
       const session: InlineSession = {
         tabId,
         frameId,
+        menuFrameId: frameId,
         url,
         origin,
         topOrigin,
         // 同站（都是 HTTPS、可注册域名相同，如 account.aliyun.com 中的 passport.aliyun.com）不算跨站
         crossSite: topOrigin !== origin && !(topOrigin !== null && sameSite(origin, topOrigin)),
         kind: req.kind === "otp" ? "otp" : "login",
+        ...(remote ? { nonce: crypto.randomUUID(), rect } : {}),
       };
       await chrome.storage.session.set({ [`inline:${tabId}`]: session });
+      return { ok: true, nonce: session.nonce };
+    }
+    case "inline_locate": {
+      // 顶层帧凭子帧发出的随机数接手显示菜单；随机数只用一次。菜单仍只为输入框所在的帧取用、填充凭据
+      const s = await getSession(tabId);
+      if (frameId !== 0 || !s?.nonce || !s.rect || typeof req.nonce !== "string" || req.nonce !== s.nonce) return { ok: false };
+      const { nonce: _used, ...rest } = s;
+      await chrome.storage.session.set({ [`inline:${tabId}`]: { ...rest, menuFrameId: 0 } satisfies InlineSession });
+      await chrome.tabs.sendMessage(tabId, { type: "menu_shown" }, { frameId: s.frameId }).catch(() => {});
+      return { ok: true, rect: s.rect };
+    }
+    case "inline_focus": {
+      const s = await getSession(tabId);
+      if (s && s.frameId === frameId && s.menuFrameId !== frameId) {
+        await chrome.tabs.sendMessage(tabId, { type: "focus_menu" }, { frameId: s.menuFrameId }).catch(() => {});
+      }
       return { ok: true };
     }
     case "inline_close": {
+      // 输入框所在的帧或显示菜单的帧自己关闭了菜单：关闭另一帧中的部分
       const s = await getSession(tabId);
-      if (s && s.frameId === frameId) await chrome.storage.session.remove(`inline:${tabId}`);
+      if (s && (s.frameId === frameId || s.menuFrameId === frameId)) await endInline(s, { except: frameId });
       return { ok: true };
     }
+  }
+}
+
+function validRect(r: unknown): r is Rect {
+  if (!r || typeof r !== "object") return false;
+  const { left, top, right, bottom } = r as Record<string, unknown>;
+  const n = [left, top, right, bottom];
+  if (!n.every((v) => typeof v === "number" && Number.isFinite(v) && Math.abs(v) < 100_000)) return false;
+  return (right as number) >= (left as number) && (bottom as number) >= (top as number);
+}
+
+/**
+ * 结束页内菜单：删除会话，关闭输入框所在的帧与显示菜单的帧中的部分。`except`：已经自己关闭的帧。
+ * `refocus`：让输入框所在的帧把焦点还给输入框。
+ */
+async function endInline(s: InlineSession, opts: { except?: number; refocus?: boolean } = {}): Promise<void> {
+  await chrome.storage.session.remove(`inline:${s.tabId}`);
+  for (const frameId of new Set([s.frameId, s.menuFrameId])) {
+    if (frameId === opts.except) continue;
+    const refocus = opts.refocus === true && frameId === s.frameId;
+    await chrome.tabs.sendMessage(s.tabId, { type: "close_menu", refocus }, { frameId }).catch(() => {});
   }
 }
 
@@ -704,25 +795,23 @@ async function handleMenu(req: MenuRequest, sender: chrome.runtime.MessageSender
         anchored: true,
         kind: session.kind,
       });
-      if (fill === "filled") await chrome.storage.session.remove(`inline:${tabId}`);
+      // 输入框所在的帧填入后自己关闭菜单
+      if (fill === "filled") await endInline(session, { except: session.frameId });
       return { fill };
     }
     case "menu_close":
-      if (session) await chrome.tabs.sendMessage(session.tabId, { type: "close_menu" }, { frameId: session.frameId }).catch(() => {});
+      if (session) await endInline(session, { refocus: true });
       return {};
     case "menu_size":
       if (session && Number.isFinite(req.height)) {
         await chrome.tabs
-          .sendMessage(session.tabId, { type: "menu_size", height: req.height }, { frameId: session.frameId })
+          .sendMessage(session.tabId, { type: "menu_size", height: req.height }, { frameId: session.menuFrameId })
           .catch(() => {});
       }
       return {};
     case "menu_blocked":
       // 菜单在不可见时被点击：可能是点击劫持。关闭菜单，改用工具栏中的弹窗（降级为弹窗内确认）
-      if (session) {
-        await chrome.tabs.sendMessage(session.tabId, { type: "close_menu" }, { frameId: session.frameId }).catch(() => {});
-        await chrome.storage.session.remove(`inline:${tabId}`);
-      }
+      if (session) await endInline(session);
       await chrome.storage.session.set({ [`blocked:${tabId}`]: true });
       await chrome.action.setBadgeText({ tabId, text: "!" });
       await chrome.action.setBadgeBackgroundColor({ tabId, color: "#b45309" });
@@ -793,7 +882,7 @@ const POPUP_TYPES = new Set([
   "save_login",
 ]);
 const MENU_TYPES = new Set(["menu_init", "menu_fill", "menu_close", "menu_size", "menu_blocked"]);
-const CONTENT_TYPES = new Set(["inline_open", "inline_close", "submitted", "username_step", "offer_query"]);
+const CONTENT_TYPES = new Set(["inline_open", "inline_locate", "inline_focus", "inline_close", "submitted", "username_step", "offer_query"]);
 const BAR_TYPES = new Set(["bar_init", "bar_save", "bar_dismiss", "bar_never", "bar_close"]);
 
 chrome.runtime.onMessage.addListener((req: { type?: string; target?: string }, sender, sendResponse) => {

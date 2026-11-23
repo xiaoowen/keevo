@@ -12,9 +12,11 @@
 // 由 scripts/build-extension.sh --test 调用；没有 Chrome 时跳过。
 
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
+import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -86,9 +88,17 @@ const SIGNUP = `<form method="post" action="/done"><p><input id="u" name="userna
 const CHANGE = `<form method="post" action="/done"><input id="u" name="username" autocomplete="username" value="admin" hidden><p><input id="cur" type="password" autocomplete="current-password" style="width:280px;height:32px"></p><p><input id="p" type="password" autocomplete="new-password" style="width:280px;height:32px"></p><p><input id="p2" type="password" autocomplete="new-password" style="width:280px;height:32px"></p><button id="go" type="submit">修改密码</button></form>`;
 const html = (body) => `<!doctype html><meta charset="utf-8"><title>测试</title><body style="margin:40px;font:16px sans-serif">${body}</body>`;
 
-const server = createServer((req, res) => {
+// 同站的测试要用 HTTPS（同站要求两边都是 HTTPS）：临时的自签名证书，Chrome 以 --ignore-certificate-errors 启动
+execFileSync(
+  "openssl",
+  ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", join(dir, "tls.key"), "-out", join(dir, "tls.crt"), "-subj", "/CN=localhost", "-days", "2"],
+  { stdio: "ignore" },
+);
+const tlsOptions = { key: readFileSync(join(dir, "tls.key")), cert: readFileSync(join(dir, "tls.crt")) };
+
+const serve = (req, res) => {
   const path = new URL(req.url, "http://x").pathname;
-  const port = server.address().port;
+  const port = PORT;
   const pages = {
     "/login": html(FORM),
     "/opacity": html(FORM + ATTACKS.opacity),
@@ -108,14 +118,40 @@ const server = createServer((req, res) => {
     "/frame-short": html(
       `<p>嵌入的登录框：</p><iframe id="fr" src="http://localhost:${port}/login-short" style="width:600px;height:200px;border:0"></iframe>`,
     ),
+    // 多层嵌套：登录框的父帧不是顶层，菜单仍在登录框所在的帧中显示
+    "/frame-nested": html(
+      `<p>嵌套的登录框：</p><iframe id="fr" src="http://localhost:${port}/wrap" style="width:640px;height:260px;border:0"></iframe>`,
+    ),
+    "/wrap": html(`<iframe id="inner" src="/login-short" style="width:600px;height:200px;border:0"></iframe>`),
+    // 同站（HTTPS、主机相同、端口不同）的矮登录框，外层带毛玻璃：复现阿里云（account.aliyun.com 中的 passport.aliyun.com）
+    "/frame-same": html(
+      `<div style="backdrop-filter:blur(6px);background:rgba(240,240,240,.7);padding:12px;border-radius:16px;width:600px"><iframe id="fr" src="https://localhost:${port}/login" style="width:600px;height:200px;border:0"></iframe></div>`,
+    ),
   };
   res.writeHead(pages[path] ? 200 : 404, { "content-type": "text/html; charset=utf-8" });
   res.end(pages[path] ?? "not found");
+};
+// 同一个端口上同时提供 HTTP 与 HTTPS（按第一个字节区分 TLS 握手）：演示条目的网址是 http://localhost:PORT，
+// 按网址匹配规则也能用于 https://localhost:PORT
+const server = createServer(serve);
+const tls = createHttpsServer(tlsOptions, serve);
+const mux = createNetServer((socket) => {
+  socket.once("data", (head) => {
+    socket.pause();
+    socket.unshift(head);
+    (head[0] === 0x16 ? tls : server).emit("connection", socket);
+    process.nextTick(() => socket.resume());
+  });
 });
-await new Promise((r) => server.listen(0, "127.0.0.1", r));
-cleanups.push(() => server.close());
-const PORT = server.address().port;
+await new Promise((r) => mux.listen(0, "127.0.0.1", r));
+cleanups.push(() => mux.close());
+const PORT = mux.address().port;
 const LOCAL = `http://localhost:${PORT}`;
+// 另一个端口上的 HTTPS 顶层页面：与 https://localhost:PORT 同站、不同源
+const topServer = createHttpsServer(tlsOptions, serve);
+await new Promise((r) => topServer.listen(0, "127.0.0.1", r));
+cleanups.push(() => topServer.close());
+const SAME_SITE_TOP = `https://localhost:${topServer.address().port}`;
 
 // ---- 开发服务（自动确认配对与授权）
 
@@ -157,7 +193,17 @@ writeFileSync(join(ext, "manifest.json"), JSON.stringify(manifest));
 // 父进程校验（只在 debug 构建生效）。真实 Chrome 的父进程校验由打包产物的测试 packaged.mjs 覆盖。
 const browser = await launchChrome(
   CHROME,
-  ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", `--user-data-dir=${profile}`, "--window-size=1200,900", "about:blank"],
+  [
+    "--headless=new",
+    "--disable-gpu",
+    "--no-first-run",
+    "--no-default-browser-check",
+    `--user-data-dir=${profile}`,
+    "--window-size=1200,900",
+    // 同站测试用的自签名证书
+    "--ignore-certificate-errors",
+    "about:blank",
+  ],
   { ...env, KEEVO_DEV_ALLOW_ANY_PARENT: "1" },
 );
 cleanups.push(() => browser.close());
@@ -207,8 +253,11 @@ async function menuFrame() {
   return attach(browser, target.targetId);
 }
 
-/** 在 `frame`（页面或其中的 iframe）中聚焦用户名，点击图标，返回菜单及其在页面中的位置。 */
-async function openMenu(page, frame = page, offset = { x: 0, y: 0 }, subtitle = "admin") {
+/**
+ * 在 `frame`（页面或其中的 iframe）中聚焦用户名，点击图标，返回菜单及其在页面中的位置。`menuIn`：菜单宿主所在的文档
+ * （直接嵌在顶层页面中的 iframe 由顶层页面显示菜单），`menuOffset` 是它在页面中的位置。
+ */
+async function openMenu(page, frame = page, offset = { x: 0, y: 0 }, subtitle = "admin", { menuIn = frame, menuOffset = offset } = {}) {
   const input = await waitFor(async () => {
     await frame.eval(`document.getElementById("u").focus()`);
     return frame.eval(
@@ -226,10 +275,12 @@ async function openMenu(page, frame = page, offset = { x: 0, y: 0 }, subtitle = 
     const state = await frame.eval(`({ hosts: document.querySelectorAll("div[popover]").length, active: document.activeElement?.id })`);
     throw new Error(`点击图标后没有出现菜单：${JSON.stringify(state)}`);
   }
+  // 与输入框同一文档时，第一个宿主是图标
+  const least = menuIn === frame ? 2 : 1;
   const host = await waitFor(
     () =>
-      frame.eval(
-        `(() => { const hosts = [...document.querySelectorAll("div[popover]:not(#decoy)")]; if (hosts.length < 2) return null; const r = hosts.at(-1).getBoundingClientRect(); return { x: r.left, y: r.top }; })()`,
+      menuIn.eval(
+        `(() => { const hosts = [...document.querySelectorAll("div[popover]:not(#decoy)")]; if (hosts.length < ${least}) return null; const r = hosts.at(-1).getBoundingClientRect(); return { x: r.left, y: r.top }; })()`,
       ),
     "菜单宿主",
   );
@@ -242,7 +293,29 @@ async function openMenu(page, frame = page, offset = { x: 0, y: 0 }, subtitle = 
       ),
     `菜单中的「${subtitle}」`,
   );
-  return { menu, at: { x: offset.x + host.x + button.x, y: offset.y + host.y + button.y } };
+  return { menu, at: { x: menuOffset.x + host.x + button.x, y: menuOffset.y + host.y + button.y } };
+}
+
+/** 与父帧同一进程的子帧（同站的 iframe 不是独立的目标）：在它的隔离环境中执行脚本（与页面共享 DOM）。 */
+async function childFrame(parent, urlPart) {
+  const info = await waitFor(async () => {
+    const { frameTree } = await parent.send("Page.getFrameTree");
+    const all = [];
+    const walk = (t) => {
+      all.push(t.frame);
+      for (const c of t.childFrames ?? []) walk(c);
+    };
+    walk(frameTree);
+    return all.find((f) => f.parentId && f.url.includes(urlPart));
+  }, `子帧 ${urlPart}`);
+  const { executionContextId } = await parent.send("Page.createIsolatedWorld", { frameId: info.id, worldName: "keevo-test" });
+  return {
+    async eval(expression) {
+      const r = await parent.send("Runtime.evaluate", { expression, contextId: executionContextId, awaitPromise: true, returnByValue: true });
+      if (r.exceptionDetails) throw new Error(`页面脚本出错：${r.exceptionDetails.exception?.description ?? r.exceptionDetails.text}`);
+      return r.result.value;
+    },
+  };
 }
 
 const values = (frame) => frame.eval(`[document.getElementById("u").value, document.getElementById("p").value]`);
@@ -311,7 +384,7 @@ for (const [path, what] of [
   ok(`对照：${what}不影响菜单，正常填充`);
 }
 
-// 4. 跨域 iframe 中的登录框
+// 4. 跨站 iframe 中的登录框：菜单由顶层页面显示（iframe 直接嵌在顶层页面中）
 {
   const page = await open(`http://127.0.0.1:${PORT}/frame`);
   const target = await waitFor(async () => {
@@ -323,7 +396,9 @@ for (const [path, what] of [
   const offset = await page.eval(
     `(() => { const r = document.getElementById("fr").getBoundingClientRect(); return { x: r.left, y: r.top }; })()`,
   );
-  const { menu, at } = await openMenu(page, frame, offset);
+  const top = { menuIn: page, menuOffset: { x: 0, y: 0 } };
+  const { menu, at } = await openMenu(page, frame, offset, "admin", top);
+  assert.equal(await frame.eval(`document.querySelectorAll("div[popover]").length`), 1, "iframe 中只有图标，菜单在顶层页面中");
   const warning = await menu.eval(`document.querySelector(".banner.warning")?.textContent ?? ""`);
   assert.match(warning, new RegExp(`嵌在 127\\.0\\.0\\.1:${PORT} 的页面中`));
   await waitFor(() => menu.eval(`document.body.classList.contains("armed")`), "菜单可用");
@@ -337,15 +412,16 @@ for (const [path, what] of [
   const again = await menu.eval(
     `(() => { const r = document.querySelector("button.item").getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`,
   );
-  const host = await frame.eval(
+  const host = await page.eval(
     `(() => { const r = [...document.querySelectorAll("div[popover]")].at(-1).getBoundingClientRect(); return { x: r.left, y: r.top }; })()`,
   );
-  await click(page, offset.x + host.x + again.x, offset.y + host.y + again.y);
+  await click(page, host.x + again.x, host.y + again.y);
   await waitFor(async () => JSON.stringify(await values(frame)) === JSON.stringify(filled), "确认后填入");
-  ok("跨域 iframe：菜单写明嵌入关系，第一次点击只要求确认，确认后填入");
+  await waitFor(() => page.eval(`document.querySelectorAll("div[popover]").length === 0`), "填入后顶层页面中的菜单关闭");
+  ok("跨站 iframe：菜单由顶层页面显示并写明嵌入关系，第一次点击只要求确认，确认后填入并关闭");
 }
 
-// 4b. 很矮的 iframe：菜单放在空间较大的一侧，高度不超出 iframe，完整可见后可以使用（放不下的内容在菜单内滚动）
+// 4b. 很矮的 iframe：菜单由顶层页面显示，不受 iframe 大小的限制
 {
   const page = await open(`http://127.0.0.1:${PORT}/frame-short`);
   const target = await waitFor(async () => {
@@ -357,6 +433,53 @@ for (const [path, what] of [
   const offset = await page.eval(
     `(() => { const r = document.getElementById("fr").getBoundingClientRect(); return { x: r.left, y: r.top }; })()`,
   );
+  const { menu } = await openMenu(page, frame, offset, "admin", { menuIn: page, menuOffset: { x: 0, y: 0 } });
+  await waitFor(() => menu.eval(`document.body.classList.contains("armed")`), "矮的 iframe：菜单可用");
+  // 菜单在用户名下方展开，超出 iframe 的底边
+  const box = await page.eval(
+    `(() => { const m = [...document.querySelectorAll("div[popover]")].at(-1).getBoundingClientRect(); const f = document.getElementById("fr").getBoundingClientRect(); return { menuTop: m.top, menuBottom: m.bottom, frameTop: f.top, frameBottom: f.bottom }; })()`,
+  );
+  assert.ok(box.menuTop > box.frameTop && box.menuBottom > box.frameBottom, `菜单的位置不对：${JSON.stringify(box)}`);
+  await shot(page, "menu-frame-short");
+  // Esc 关闭：两部分都关闭
+  await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await waitFor(() => page.eval(`document.querySelectorAll("div[popover]").length === 0`), "Esc 后菜单关闭");
+  ok("矮的 iframe：菜单由顶层页面显示，可以超出 iframe，完整可见后可以使用；Esc 关闭");
+}
+
+// 4c. 同站 iframe 外层带毛玻璃（反馈：阿里云）：iframe 祖先的 backdrop-filter 让 iframe 中的一切都被判为不可见，
+// 菜单只能由顶层页面显示。同站不显示嵌入提示，点一次即填入
+{
+  const page = await open(`${SAME_SITE_TOP}/frame-same`);
+  await waitFor(() => page.eval(`document.readyState === "complete"`), "同站嵌入页加载");
+  const frame = await childFrame(page, `localhost:${PORT}/login`);
+  await waitFor(() => frame.eval(`document.readyState === "complete" && !!document.getElementById("u")`), "同站嵌入的登录页加载");
+  const offset = await page.eval(
+    `(() => { const r = document.getElementById("fr").getBoundingClientRect(); return { x: r.left, y: r.top }; })()`,
+  );
+  const { menu, at } = await openMenu(page, frame, offset, "admin", { menuIn: page, menuOffset: { x: 0, y: 0 } });
+  await waitFor(() => menu.eval(`document.body.classList.contains("armed")`), "毛玻璃下的同站 iframe：菜单可用");
+  assert.equal(await menu.eval(`!!document.querySelector(".banner.warning")`), false, "同站不显示嵌入提示");
+  await shot(page, "menu-frame-same");
+  await click(page, at.x, at.y);
+  await waitFor(async () => JSON.stringify(await values(frame)) === JSON.stringify(filled), "点一次即填入");
+  ok("同站 iframe（外层带毛玻璃）：菜单由顶层页面显示，可以使用，不显示嵌入提示，点一次即填入");
+}
+
+// 4d. 多层嵌套的 iframe：登录框的父帧不是顶层，菜单在登录框所在的帧中显示，高度不超出它（放不下的内容在菜单内滚动）
+{
+  const page = await open(`http://127.0.0.1:${PORT}/frame-nested`);
+  const target = await waitFor(async () => {
+    const { targetInfos } = await browser.send("Target.getTargets");
+    return targetInfos.find((t) => t.type === "iframe" && t.url === `${LOCAL}/wrap`);
+  }, "外层 iframe");
+  const wrap = await attach(browser, target.targetId);
+  const frame = await childFrame(wrap, "/login-short");
+  await waitFor(() => frame.eval(`document.readyState === "complete" && !!document.getElementById("u")`), "嵌套的登录页加载");
+  const outer = await page.eval(`(() => { const r = document.getElementById("fr").getBoundingClientRect(); return { x: r.left, y: r.top }; })()`);
+  const inner = await wrap.eval(`(() => { const r = document.getElementById("inner").getBoundingClientRect(); return { x: r.left, y: r.top }; })()`);
+  const offset = { x: outer.x + inner.x, y: outer.y + inner.y };
   const { menu } = await openMenu(page, frame, offset);
   // 菜单报告高度之后才会收缩到可用的空间
   await sleep(300);
@@ -364,9 +487,9 @@ for (const [path, what] of [
     `(() => { const r = [...document.querySelectorAll("div[popover]")].at(-1).getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: innerHeight }; })()`,
   );
   assert.ok(box.top >= 0 && box.bottom <= box.height, `菜单超出了 iframe：${JSON.stringify(box)}`);
-  await waitFor(() => menu.eval(`document.body.classList.contains("armed")`), "矮的 iframe 中菜单可用");
-  await shot(page, "menu-frame-short");
-  ok("矮的 iframe：菜单不超出 iframe，完整可见后可以使用");
+  await waitFor(() => menu.eval(`document.body.classList.contains("armed")`), "嵌套的 iframe 中菜单可用");
+  await shot(page, "menu-frame-nested");
+  ok("多层嵌套的 iframe：菜单在登录框所在的帧中显示，不超出 iframe，完整可见后可以使用");
 }
 
 // 6. 保存与更新（协议 v2）：提交后的页面顶部出现保存栏（扩展源 iframe，同样的点击劫持防护）
@@ -478,6 +601,28 @@ async function lookup(username) {
   // 前面的更新测试已把演示条目的密码改为 rotated-pass
   assert.deepEqual(await values(page), ["admin", "rotated-pass"]);
   ok("弹窗填充经内容脚本填入当前标签页的登录表单（得到更新后的密码）");
+}
+
+// 5b. 弹窗填充：顶层没有登录表单时，填入同站 iframe 中的登录表单（按 iframe 的网址列出条目）；跨站的 iframe 不从弹窗填充
+{
+  const page = await open(`${SAME_SITE_TOP}/frame-same`);
+  await waitFor(() => page.eval(`document.readyState === "complete"`), "同站嵌入页加载");
+  const frame = await childFrame(page, `localhost:${PORT}/login`);
+  await waitFor(() => frame.eval(`document.readyState === "complete" && !!document.getElementById("u")`), "同站嵌入的登录页加载");
+  const result = await popup.eval(`(async () => {
+    const c = await chrome.runtime.sendMessage({ type: "candidates" });
+    const item = c.candidates.find((x) => x.title === "本地开发（演示）");
+    if (!item) return { origin: c.origin };
+    const r = await chrome.runtime.sendMessage({ type: "fill", itemId: item.item_id });
+    return { origin: c.origin, fill: r.fill };
+  })()`);
+  assert.deepEqual(result, { origin: `https://localhost:${PORT}`, fill: "filled" });
+  assert.deepEqual(await values(frame), ["admin", "rotated-pass"]);
+  const cross = await open(`http://127.0.0.1:${PORT}/frame`);
+  await waitFor(() => cross.eval(`document.readyState === "complete"`), "跨站嵌入页加载");
+  const crossOrigin = await popup.eval(`chrome.runtime.sendMessage({ type: "candidates" }).then((c) => c.origin)`);
+  assert.equal(crossOrigin, `http://127.0.0.1:${PORT}`, "跨站 iframe：弹窗仍按顶层网址列出条目");
+  ok("弹窗填充：顶层没有登录表单时填入同站 iframe（按它的网址列出条目），跨站 iframe 不从弹窗填充");
 }
 
 // 7. 弹窗的补充功能（设计稿"扩展 · 弹窗：搜索、生成密码、新建登录与解锁"）

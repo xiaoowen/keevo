@@ -38,7 +38,16 @@
   type Incoming =
     | FillMessage
     | FillNewPasswordMessage
-    | { type: "close_menu" }
+    /** 关闭菜单（Service Worker 发起，已删除会话，不必回告）。`refocus`：把焦点还给输入框。 */
+    | { type: "close_menu"; refocus?: boolean }
+    /** 顶层帧已接手显示菜单。 */
+    | { type: "menu_shown" }
+    /** 把焦点移入本帧代为显示的菜单。 */
+    | { type: "focus_menu" }
+    /** 本帧有内容脚本吗。 */
+    | { type: "ping" }
+    /** 本帧有可见的密码框吗（弹窗填充选择目标帧）。 */
+    | { type: "probe_login" }
     | { type: "menu_size"; height: number }
     | { type: "open_menu" }
     | { type: "show_bar" }
@@ -50,7 +59,21 @@
   let anchor: HTMLInputElement | null = null;
   let anchorKind: Kind = "login";
   let icon: { host: HTMLElement; button: HTMLButtonElement } | null = null;
-  let menu: { host: HTMLElement; frame: HTMLIFrameElement; above: boolean | null; raises: number } | null = null;
+  interface Rect {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  }
+  /** 页内菜单。`rect`：顶层帧代为显示时，子帧中的输入框在本页面中的位置。 */
+  let menu: { host: HTMLElement; frame: HTMLIFrameElement; above: boolean | null; raises: number; rect?: Rect } | null = null;
+  /**
+   * 输入框在直接嵌在顶层页面中的 iframe 里时，菜单由顶层帧代为显示（iframe 的祖先带有透明度、滤镜或变形时，iframe 中的
+   * 一切都会被可见性检测判为不可见，菜单在 iframe 中永远不能使用）。`shown`：顶层帧已接手。
+   */
+  let remote: { nonce: string; shown: boolean } | null = null;
+  /** 顶层帧：处理过的定位随机数。每个只接受第一条消息。 */
+  const located = new Set<string>();
   let bar: { host: HTMLElement; raises: number } | null = null;
   /** 页面在菜单之后打开顶层元素时，最多把菜单重新放到最上面几次（防止与页面无休止地互相抢）。 */
   const MAX_RAISES = 3;
@@ -347,7 +370,7 @@
       button.addEventListener("mousedown", (e) => e.preventDefault());
       button.addEventListener("click", (e) => {
         if (!e.isTrusted) return;
-        if (menu) closeMenu(true);
+        if (menu || remote) closeMenu(true);
         else void openMenu();
       });
       root.append(button);
@@ -369,11 +392,49 @@
 
   // ---- 页内菜单
 
-  async function openMenu(): Promise<void> {
-    if (!anchor || menu) return;
+  /** 打开页内菜单。`inFrame`：即使在直接嵌在顶层页面中的 iframe 里，也在本帧中显示（顶层帧没有接手时）。 */
+  async function openMenu(inFrame = false): Promise<void> {
+    if (!anchor || menu || remote) return;
     const field = anchor;
-    const r = (await chrome.runtime.sendMessage({ type: "inline_open", kind: anchorKind })) as { ok?: boolean } | undefined;
+    const child = !inFrame && window !== window.top && window.parent === window.top;
+    const b = field.getBoundingClientRect();
+    const r = (await chrome.runtime.sendMessage({
+      type: "inline_open",
+      kind: anchorKind,
+      ...(child ? { frame: true, rect: { left: b.left, top: b.top, right: b.right, bottom: b.bottom } } : {}),
+    })) as { ok?: boolean; nonce?: string } | undefined;
     if (!r?.ok || anchor !== field) return;
+    if (r.nonce) {
+      // 请顶层帧代为显示：它凭消息的来源窗口（由浏览器填写，页面无法伪造）找到本帧的 iframe 元素，再凭随机数向
+      // Service Worker 接手。页面拦下了消息或找不到 iframe 元素时，改在本帧中显示
+      const nonce = r.nonce;
+      remote = { nonce, shown: false };
+      window.parent.postMessage({ keevoLocate: nonce }, "*");
+      setTimeout(async () => {
+        if (remote?.nonce !== nonce || remote.shown) return;
+        remote = null;
+        await chrome.runtime.sendMessage({ type: "inline_close" }).catch(() => undefined);
+        void openMenu(true);
+      }, 1000);
+      return;
+    }
+    showMenu();
+  }
+
+  /** 顶层帧：子帧中的输入框请求代为显示菜单。 */
+  async function openFrameMenu(nonce: string, owner: HTMLIFrameElement): Promise<void> {
+    const r = (await chrome.runtime.sendMessage({ type: "inline_locate", nonce })) as { ok?: boolean; rect?: Rect } | undefined;
+    if (!r?.ok || !r.rect) return;
+    if (menu) closeMenu(false, false);
+    // 输入框的位置加上 iframe 内容区（边框与内边距之内）在本页面中的位置
+    const box = owner.getBoundingClientRect();
+    const style = getComputedStyle(owner);
+    const x = box.left + owner.clientLeft + (parseFloat(style.paddingLeft) || 0);
+    const y = box.top + owner.clientTop + (parseFloat(style.paddingTop) || 0);
+    showMenu({ left: x + r.rect.left, top: y + r.rect.top, right: x + r.rect.right, bottom: y + r.rect.bottom });
+  }
+
+  function showMenu(rect?: Rect): void {
     const { host, root } = topLayerHost(MENU_WIDTH, 120);
     const frame = document.createElement("iframe");
     frame.src = chrome.runtime.getURL("menu.html");
@@ -393,14 +454,15 @@
       frame.style.setProperty(k, v);
     }
     root.append(frame);
-    menu = { host, frame, above: null, raises: 0 };
+    menu = { host, frame, above: null, raises: 0, ...(rect ? { rect } : {}) };
     positionMenu(120);
     frame.addEventListener("load", () => frame.contentWindow?.focus(), { once: true });
   }
 
   function positionMenu(height: number): void {
-    if (!menu || !anchor) return;
-    const r = anchor.getBoundingClientRect();
+    if (!menu) return;
+    const r = menu.rect ?? anchor?.getBoundingClientRect();
+    if (!r) return;
     const left = Math.min(Math.max(8, r.left), Math.max(8, innerWidth - MENU_WIDTH - 8));
     const below = innerHeight - 8 - (r.bottom + 4);
     const above = r.top - 4 - 8;
@@ -415,12 +477,18 @@
     place(menu.host, left, top);
   }
 
-  function closeMenu(refocus: boolean): void {
-    if (!menu) return;
-    menu.host.remove();
+  /**
+   * 关闭菜单。`notify`：告诉 Service Worker，由它删除会话、关闭另一帧中的部分；收到它发来的关闭消息时不再回告。
+   * 顶层帧代为显示的菜单关闭时不移动焦点：输入框不在本帧中，由它所在的帧处理。
+   */
+  function closeMenu(refocus: boolean, notify = true): void {
+    if (!menu && !remote) return;
+    const forChild = menu?.rect !== undefined;
+    menu?.host.remove();
     menu = null;
-    void chrome.runtime.sendMessage({ type: "inline_close" });
-    if (refocus) anchor?.focus();
+    remote = null;
+    if (notify) void chrome.runtime.sendMessage({ type: "inline_close" });
+    if (refocus && !forChild) anchor?.focus();
   }
 
   // ---- 填充
@@ -628,7 +696,7 @@
     () => {
       // 焦点进入菜单（iframe）时保留图标；稍后再判断，等新的焦点落定
       setTimeout(() => {
-        if (!menu && deepActive() !== anchor) hideIcon();
+        if (!menu && !remote && deepActive() !== anchor) hideIcon();
       }, 150);
     },
     true,
@@ -637,7 +705,7 @@
   document.addEventListener(
     "pointerdown",
     (e) => {
-      if (!menu || !e.isTrusted || (icon && e.composedPath().includes(icon.host))) return;
+      if (!(menu || remote) || !e.isTrusted || (icon && e.composedPath().includes(icon.host))) return;
       closeMenu(false);
     },
     true,
@@ -646,12 +714,13 @@
     "keydown",
     (e) => {
       if (!e.isTrusted || !anchor || e.composedPath()[0] !== anchor) return;
-      if (e.key === "Escape" && menu) closeMenu(true);
-      // 在字段中按 ↓：菜单已打开时把焦点移入菜单；字段为空时打开菜单。
+      if (e.key === "Escape" && (menu || remote)) closeMenu(true);
+      // 在字段中按 ↓：菜单已打开时把焦点移入菜单（顶层帧代为显示时请它移入）；字段为空时打开菜单。
       // 字段有内容时不拦截，留给浏览器自带的自动填充下拉
-      if (e.key === "ArrowDown" && icon && (menu || anchor.value === "")) {
+      if (e.key === "ArrowDown" && icon && (menu || remote || anchor.value === "")) {
         e.preventDefault();
         if (menu) menu.frame.contentWindow?.focus();
+        else if (remote) void chrome.runtime.sendMessage({ type: "inline_focus" });
         else void openMenu();
       }
     },
@@ -678,10 +747,22 @@
 
   const reposition = (): void => {
     if (anchor && icon) positionIcon(anchor);
-    if (menu) closeMenu(false);
+    if (menu || remote) closeMenu(false);
   };
   addEventListener("scroll", reposition, true);
   addEventListener("resize", reposition);
+
+  // 顶层帧：直接嵌在本页面中的 iframe 请求代为显示菜单。消息的来源窗口由浏览器填写，页面无法伪造；先到的消息
+  // 才算数（页面看不到随机数之前无法抢先）。随机数由 Service Worker 核对，每个只用一次
+  if (window === window.top) {
+    addEventListener("message", (e) => {
+      const nonce = (e.data as { keevoLocate?: unknown } | null)?.keevoLocate;
+      if (typeof nonce !== "string" || located.has(nonce) || !e.source) return;
+      located.add(nonce);
+      const owner = deepQuery<HTMLIFrameElement>(document, "iframe").find((f) => f.contentWindow === e.source);
+      if (owner) void openFrameMenu(nonce, owner);
+    });
+  }
 
   chrome.runtime.onMessage.addListener((m: Incoming, sender, sendResponse) => {
     // 只接受本扩展的 Service Worker
@@ -697,7 +778,19 @@
         sendResponse(fillNewPassword(m));
         return false;
       case "close_menu":
-        closeMenu(true);
+        closeMenu(m.refocus === true, false);
+        return false;
+      case "menu_shown":
+        if (remote) remote.shown = true;
+        return false;
+      case "focus_menu":
+        menu?.frame.contentWindow?.focus();
+        return false;
+      case "ping":
+        sendResponse("pong");
+        return false;
+      case "probe_login":
+        sendResponse(passwordFields(document).length > 0);
         return false;
       case "menu_size":
         positionMenu(Math.min(Math.max(Math.round(m.height), 60), 360));
