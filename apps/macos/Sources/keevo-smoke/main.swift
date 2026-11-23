@@ -72,15 +72,19 @@ final class SoftwareEnclave: SecureEnclaveProvider, @unchecked Sendable {
     }
 }
 
-/// 能否真正使用 Secure Enclave：按应用的路径走一遍（建密钥 → 与临时公钥协商 → 从 blob 重新载入再协商），用途
-/// 不要求用户在场，不会弹出提示。GitHub 的 macOS 运行器（虚拟机）报告 Secure Enclave 可用，实际却建不了密钥，
-/// 只看 `SecureEnclave.isAvailable` 不够。`KEEVO_SMOKE_SOFTWARE_ENCLAVE=1` 强制使用软件实现，用于在本机验证 CI 走的路径。
+/// 能否真正使用 Secure Enclave：按应用的路径走一遍。
+/// - 不要求用户在场的用途：建密钥 → 与临时公钥协商 → 从 blob 重新载入再协商；
+/// - AUK（绑定 Touch ID，`.biometryCurrentSet`）：只建密钥。建密钥不弹出提示，使用时才要求用户在场；没有登记指纹时
+///   建不了，创建账户就会失败。
+/// GitHub 的 macOS 运行器（虚拟机）报告 Secure Enclave 可用，却没有登记指纹，只看 `SecureEnclave.isAvailable` 不够。
+/// `KEEVO_SMOKE_SOFTWARE_ENCLAVE=1` 强制使用软件实现，用于在本机验证 CI 走的路径。
 func secureEnclaveWorks() -> Bool {
     guard SecureEnclave.isAvailable,
           ProcessInfo.processInfo.environment["KEEVO_SMOKE_SOFTWARE_ENCLAVE"] != "1" else { return false }
     let bridge = SecureEnclaveBridge(touchIDReason: "Keevo 冒烟测试")
     let purpose: UInt8 = 0x02  // 不是 AUK（0x01）：不要求用户在场
-    guard let key = try? bridge.createKey(purpose: purpose),
+    guard (try? bridge.createKey(purpose: 0x01)) != nil,
+          let key = try? bridge.createKey(purpose: purpose),
           let ephemeral = try? bridge.agreeEphemeral(publicKey: key.publicKey),
           let shared = try? bridge.agree(purpose: purpose, keyBlob: key.blob, ephemeralPublic: ephemeral.ephemeralPublic)
     else { return false }
@@ -94,6 +98,7 @@ let enclave: SecureEnclaveProvider = useSecureEnclave
 let password = "主密码 correct horse battery"
 
 print("Keevo 冒烟测试（Swift → UniFFI → Rust）")
+print(useSecureEnclave ? "本机密钥包裹：Secure Enclave" : "本机密钥包裹：软件实现（本机的 Secure Enclave 不可用或没有登记指纹，或已指定）")
 
 // 第一阶段放在单独的作用域里：离开作用域时第一个实例被释放。同一数据库同时只能有一个打开者
 // （spec/revisions.md §7.2），重新打开之前必须先关闭。
@@ -218,8 +223,7 @@ if let filter = CIFilter(name: "CIQRCodeGenerator") {
 check(Ordering.longestIncreasing([0, 3, 1, 2]) == [0, 2, 3], "编辑器的移动计算：保持顺序的字段不动")
 check(Ordering.longestIncreasing([-1, 2, 0, 1]) == [2, 3], "来自其他分区的字段不参与")
 
-// M1.1：本机密钥包裹（spec/crypto.md §8.7），使用真实的 Secure Enclave
-print(useSecureEnclave ? "本机密钥包裹（Secure Enclave）" : "本机密钥包裹（软件实现：本机没有 Secure Enclave，或已指定）")
+// M1.1：本机密钥包裹（spec/crypto.md §8.7），实现见开头的选择
 let db2 = dir.appendingPathComponent("vault2.sqlite").path
 let local2 = dir.appendingPathComponent("local2").path
 let fm = FileManager.default
