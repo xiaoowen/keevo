@@ -121,7 +121,7 @@ public enum Snapshots {
             }
         }
         await shooter.shoot("new-login", sheet: true) {
-            NewLoginSheet(defaultVault: model.vaults.first?.id) { _ in }
+            NewLoginSheet(defaultVault: model.vaults.first?.id, chooseType: { _ in }) { _ in }
         }
         await shooter.shoot("dialog-reverify", sheet: true) {
             ReverifySheet(title: "解除「Chrome · 个人」的配对", message: "解除后，这个扩展立即断开，不能再取用任何密码。请先确认是你本人。", confirmTitle: "解除配对", destructive: true) { _ in false }

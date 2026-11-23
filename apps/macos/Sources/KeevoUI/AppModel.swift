@@ -41,6 +41,14 @@ final class AppModel {
     var breachCheckEnabled = UserDefaults.standard.bool(forKey: "security.breachCheck") {
         didSet { UserDefaults.standard.set(breachCheckEnabled, forKey: "security.breachCheck") }
     }
+    /// 关闭的检查项（安全中心的"检查项"，设计稿"安全中心：可以关闭的检查项"）。只存在这台 Mac 上，不随保险库同步；
+    /// "已泄露"不在其中，它对应 `breachCheckEnabled`。
+    var disabledChecks = Set(UserDefaults.standard.stringArray(forKey: "security.disabledChecks") ?? []) {
+        didSet {
+            UserDefaults.standard.set(disabledChecks.sorted(), forKey: "security.disabledChecks")
+            securityVersion &+= 1
+        }
+    }
     /// 每次检查结果更新时加 1。详情的"安全"区据此重新读取。
     var securityVersion = 0
     @ObservationIgnored var securityTask: Task<Void, Never>?

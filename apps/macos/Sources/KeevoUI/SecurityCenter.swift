@@ -35,6 +35,23 @@ extension AppModel {
         try? vault?.itemSecurity(itemId: itemId)
     }
 
+    /// 这一类检查是否开启（"检查项"中的开关）。"已泄露"就是泄露检查的开关。
+    func checkEnabled(_ check: String) -> Bool {
+        check == "breached" ? breachCheckEnabled : !disabledChecks.contains(check)
+    }
+
+    func setCheck(_ check: String, enabled: Bool) {
+        if enabled { disabledChecks.remove(check) } else { disabledChecks.insert(check) }
+    }
+
+    /// 开启的检查发现的问题：卡片、列表与侧边栏的数字都只算这些。
+    var visibleFindings: [SecurityFinding] {
+        (securityReport?.findings ?? []).filter { checkEnabled($0.check) }
+    }
+
+    /// 有问题的条目数（只算开启的检查）。
+    var visibleAffectedItems: Int { Set(visibleFindings.map(\.itemId)).count }
+
     /// "忽略这个条目的提醒" / "恢复提醒"。
     func setSecurityAlerts(itemId: String, enabled: Bool) {
         guard let vault else { return }
@@ -145,20 +162,6 @@ enum SecurityText {
         }
     }
 
-    static func advice(_ check: String) -> String {
-        switch check {
-        case "weak": tr("用生成器生成随机密码或口令短语。修改后这里自动更新。")
-        case "reused": tr("为每个网站使用不同的密码：一个网站泄露时，其他账户不受影响。修改后这里自动更新。")
-        case "breached": tr("这些密码出现在公开的泄露数据中，攻击者会优先尝试。请尽快在对应网站修改。")
-        case "missing_totp": tr("在网站的安全设置中开启两步验证，并把一次性密码保存到条目中。")
-        case "expiring": tr("在服务商处续期或更换后，更新条目中的过期时间。")
-        case "insecure_url": tr("确认网站是否支持 https://，支持时更新条目中的网址。")
-        case "outdated_ssh_key": tr("生成新的 Ed25519 密钥，并在服务器上替换旧的公钥。")
-        case "few_recovery_codes": tr("在网站上重新生成一组恢复码，并保存到条目中。")
-        default: ""
-        }
-    }
-
     /// 强度的主要问题（keevo-core::strength::Warning）。
     static func warning(_ code: String?, _ detail: String?) -> String? {
         switch code {
@@ -234,45 +237,59 @@ struct SecurityCenterView: View {
     @Environment(AppModel.self) private var model
     @ViewState private var selected: String?
     @ViewState private var confirmingBreach = false
+    @ViewState private var showingChecks = false
 
-    private var findings: [SecurityFinding] { model.securityReport?.findings ?? [] }
+    private var findings: [SecurityFinding] { model.visibleFindings }
+    private var enabledChecks: [String] { securityChecks().filter(model.checkEnabled) }
+    private var disabledCount: Int { securityChecks().count - enabledChecks.count }
 
     private func count(_ check: String) -> Int {
         Set(findings.filter { $0.check == check }.map(\.itemId)).count
     }
 
-    /// 默认选中第一个有问题的检查。
-    private var current: String {
-        selected ?? securityChecks().first { count($0) > 0 } ?? "weak"
+    /// 默认选中第一个有问题的检查；选中的检查被关闭后改选其他的。
+    private var current: String? {
+        if let selected, model.checkEnabled(selected) { return selected }
+        return enabledChecks.first { count($0) > 0 } ?? enabledChecks.first
     }
 
     var body: some View {
         VStack(spacing: 0) {
             DetailTopBar {
-                if model.securityChecking {
+                if model.securityChecking || model.breachChecking {
                     ProgressView().controlSize(.small)
                 } else if let at = model.securityReport?.checkedAtMs {
-                    Text(tr("上次检查：{}", "\(ItemDetailView.relative(at))"))
+                    Text(tr("{}检查过", "\(ItemDetailView.relative(at))"))
                         .font(KV.Typography.footnote)
                         .foregroundStyle(KV.Colors.fgSecondary)
                 }
-                Button(tr("重新检查")) {
+                Button {
                     if model.breachCheckEnabled {
                         Task { await model.runBreachCheck() }
                     } else {
                         model.scheduleSecurityCheck()
                     }
+                } label: {
+                    Label(tr("重新检查"), systemImage: "arrow.clockwise")
                 }
-                .buttonStyle(.kvBordered)
+                .buttonStyle(.kvToolbar)
                 .disabled(model.securityChecking || model.breachChecking)
+                Button { showingChecks.toggle() } label: {
+                    Label(tr("检查项"), systemImage: "slider.horizontal.3")
+                }
+                .buttonStyle(.kvToolbar)
+                .popover(isPresented: $showingChecks, arrowEdge: .bottom) {
+                    SecurityChecksPopover {
+                        showingChecks = false
+                        confirmingBreach = true
+                    }
+                }
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: KV.Space.s4) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(tr("安全中心")).font(KV.Typography.largeTitle).foregroundStyle(KV.Colors.fgPrimary)
-                        Text(tr("所有检查都在这台 Mac 上完成。点一项查看涉及的条目。"))
-                            .font(KV.Typography.body)
-                            .foregroundStyle(KV.Colors.fgSecondary)
+                    Text(tr("安全中心")).font(KV.Typography.largeTitle).foregroundStyle(KV.Colors.fgPrimary)
+                    if let error = model.breachError {
+                        Banner(kind: .warning, message: error)
                     }
                     if model.securityReport == nil {
                         HStack(spacing: KV.Space.s2) {
@@ -281,11 +298,11 @@ struct SecurityCenterView: View {
                         }
                     } else {
                         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), spacing: 10) {
-                            ForEach(securityChecks(), id: \.self) { check in card(check) }
+                            ForEach(enabledChecks, id: \.self) { check in card(check) }
+                            if disabledCount > 0 { disabledTile }
                         }
+                        if let current { list(current) }
                     }
-                    breachCard
-                    if model.securityReport != nil { list(current) }
                 }
                 .padding(.horizontal, 28)
                 .padding(.vertical, 22)
@@ -298,31 +315,25 @@ struct SecurityCenterView: View {
         .onAppear { if model.securityReport == nil { model.scheduleSecurityCheck() } }
     }
 
+    /// 卡片只有名称与数字，说明放在悬停提示里（设计稿）。
     private func card(_ check: String) -> some View {
         let n = count(check)
-        let off = check == "breached" && !(model.securityReport?.breachChecked ?? false)
-        let color = off ? KV.Colors.fgTertiary : (n == 0 ? KV.Colors.statusSuccessFg : KV.Colors.statusWarningFg)
+        // 泄露检查开启后还没有查询完：数字未知
+        let pending = check == "breached" && !(model.securityReport?.breachChecked ?? false)
+        let color = pending ? KV.Colors.fgTertiary : (n == 0 ? KV.Colors.statusSuccessFg : KV.Colors.statusWarningFg)
         let isSelected = current == check
         return Button { selected = check } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(SecurityText.title(check)).font(KV.Typography.bodyStrong).foregroundStyle(KV.Colors.fgPrimary)
-                    Spacer(minLength: 4)
-                    Text(off ? "—" : "\(n)")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(color)
-                }
-                Text(off ? (model.breachCheckEnabled ? (model.breachChecking ? tr("正在查询…") : tr("已开启。点「重新检查」查询")) : tr("没有开启。开启后在下方说明")) : SecurityText.summary(check))
-                    .font(KV.Typography.caption)
-                    .foregroundStyle(KV.Colors.fgSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .multilineTextAlignment(.leading)
-                Spacer(minLength: 0)
+            HStack(alignment: .firstTextBaseline) {
+                Text(SecurityText.title(check)).font(KV.Typography.bodyStrong).foregroundStyle(KV.Colors.fgPrimary)
+                Spacer(minLength: 4)
+                Text(pending ? "—" : "\(n)")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(color)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
-            .background(KV.Colors.bgRaised, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? KV.Colors.accentSubtle : KV.Colors.bgRaised, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(isSelected ? KV.Colors.focusRing : KV.Colors.borderSubtle, lineWidth: isSelected ? 2 : 1)
@@ -330,37 +341,29 @@ struct SecurityCenterView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(tr("{}，{}", "\(SecurityText.title(check))", "\(off ? tr("没有开启") : tr("{} 个", "\(n)"))"))
+        .focusable(false)
+        .help(pending ? tr("正在查询…") : SecurityText.summary(check))
+        .accessibilityLabel(tr("{}，{}", "\(SecurityText.title(check))", "\(pending ? tr("正在查询") : tr("{} 个", "\(n)"))"))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    private var breachCard: some View {
-        HStack(alignment: .top, spacing: KV.Space.s3) {
-            Image(systemName: "globe").foregroundStyle(KV.Colors.fgSecondary).padding(.top, 2)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(tr("检查已泄露的密码")).font(KV.Typography.bodyStrong)
-                Text(tr("使用 Have I Been Pwned：只发送每个密码 SHA-1 哈希的前 5 位，在这台 Mac 上比对其余部分；密码与完整哈希不会离开 Keevo。默认关闭。"))
-                    .font(KV.Typography.footnote)
-                    .foregroundStyle(KV.Colors.fgSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let error = model.breachError {
-                    Text(error).font(KV.Typography.footnote).foregroundStyle(KV.Colors.statusWarningFg)
-                } else if model.breachChecking {
-                    Text(tr("正在查询…")).font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
-                }
-            }
-            Spacer(minLength: KV.Space.s3)
-            Toggle("", isOn: Binding(
-                get: { model.breachCheckEnabled },
-                set: { on in if on { confirmingBreach = true } else { model.setBreachCheck(enabled: false) } }
-            ))
-            .toggleStyle(.switch)
-            .labelsHidden()
-            .accessibilityLabel(tr("检查已泄露的密码"))
+    /// 卡片区末尾的虚线格"已关闭 N 项"：点它打开检查项。
+    private var disabledTile: some View {
+        Button { showingChecks = true } label: {
+            Label(tr("已关闭 {} 项", "\(disabledCount)"), systemImage: "slider.horizontal.3")
+                .font(KV.Typography.body)
+                .foregroundStyle(KV.Colors.fgSecondary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(KV.Colors.borderControl, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                )
+                .contentShape(Rectangle())
         }
-        .padding(14)
-        .background(KV.Colors.bgSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(KV.Colors.borderSubtle))
+        .buttonStyle(.plain)
+        .focusable(false)
     }
 
     @ViewBuilder
@@ -370,23 +373,19 @@ struct SecurityCenterView: View {
             if shown.isEmpty {
                 HStack(spacing: KV.Space.s2) {
                     Image(systemName: "checkmark.circle").foregroundStyle(KV.Colors.statusSuccessFg)
-                    Text(check == "breached" && !(model.securityReport?.breachChecked ?? false)
-                        ? tr("开启泄露检查后，这里列出出现在已知泄露中的密码。")
-                        : tr("{}：没有问题。", "\(SecurityText.title(check))"))
+                    Text(check == "breached" && !(model.securityReport?.breachChecked ?? false) ? tr("正在查询…") : tr("没有问题"))
                         .font(KV.Typography.body)
                         .foregroundStyle(KV.Colors.fgSecondary)
                 }
             } else if check == "reused" {
                 let groups = Dictionary(grouping: shown, by: \.group).sorted { $0.key < $1.key }
                 ForEach(groups, id: \.key) { _, members in
-                    GroupTitle(text: tr("重复使用 · 这 {} 个条目使用同一个密码", "\(members.count)"))
+                    GroupTitle(text: tr("这 {} 个条目使用同一个密码", "\(members.count)"))
                     KVCard { rows(members) }
                 }
-                note(check)
             } else {
-                GroupTitle(text: tr("{} · {} 个条目", "\(SecurityText.title(check))", "\(shown.count)"))
+                GroupTitle(text: tr("{} · {}", "\(SecurityText.title(check))", "\(shown.count)"))
                 KVCard { rows(shown) }
-                note(check)
             }
         }
     }
@@ -408,18 +407,66 @@ struct SecurityCenterView: View {
                 Button(["weak", "reused", "breached"].contains(f.check) ? tr("修改密码") : tr("打开")) {
                     model.mainRequest = ["weak", "reused", "breached"].contains(f.check) ? .editItem(f.itemId) : .showItem(f.itemId)
                 }
-                .buttonStyle(.kvLink)
+                .buttonStyle(.kvToolbarAccent)
+                Menu {
+                    Button(tr("忽略这个条目的提醒")) { model.setSecurityAlerts(itemId: f.itemId, enabled: false) }
+                } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 13, weight: .medium))
+                }
+                .menuStyle(.button)
+                .buttonStyle(.kvToolbar)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel(tr("更多操作"))
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 9)
+            .padding(.vertical, 8)
         }
     }
+}
 
-    private func note(_ check: String) -> some View {
-        Text(SecurityText.advice(check))
-            .font(KV.Typography.footnote)
-            .foregroundStyle(KV.Colors.fgSecondary)
-            .fixedSize(horizontal: false, vertical: true)
+/// "检查项"的弹出面板（设计稿）：每一类检查一个开关。打开"已泄露"即开启泄露检查，先确认会发送什么。
+struct SecurityChecksPopover: View {
+    @Environment(AppModel.self) private var model
+    /// 打开"已泄露"：关闭面板，弹出确认。
+    let requestBreach: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(tr("检查项"))
+                .font(KV.Typography.bodyStrong)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 6)
+            ForEach(securityChecks(), id: \.self) { check in
+                Toggle(isOn: Binding(
+                    get: { model.checkEnabled(check) },
+                    set: { on in
+                        if check == "breached" {
+                            if on { requestBreach() } else { model.setBreachCheck(enabled: false) }
+                        } else {
+                            model.setCheck(check, enabled: on)
+                        }
+                    }
+                )) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(SecurityText.title(check)).font(KV.Typography.body)
+                        if check == "breached" {
+                            Text(tr("联网检查，只发送哈希的前 5 位"))
+                                .font(KV.Typography.caption)
+                                .foregroundStyle(KV.Colors.fgSecondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+            }
+        }
+        .padding(.bottom, 8)
+        .frame(width: 300)
     }
 }
 
@@ -456,7 +503,7 @@ struct BreachCheckConfirmSheet: View {
                     CardRowDivider()
                     CardRow(label: tr("时机")) { Text(tr("开启时与每次「重新检查」，结果只在内存中")).font(KV.Typography.body) } actions: {}
                 }
-                Text(tr("这是 Keevo 少数会主动发起的网络请求之一，可以随时关闭（docs/governance.md §5）。"))
+                Text(tr("可以随时在「检查项」中关闭"))
                     .font(KV.Typography.footnote)
                     .foregroundStyle(KV.Colors.fgSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -483,78 +530,65 @@ struct ItemSecuritySection: View {
     let info: ItemSecurity?
     let edit: () -> Void
 
-    private var hasProblem: Bool {
-        guard let info else { return false }
-        return (info.strength.map { $0.score <= 2 } ?? false) || !info.reusedWith.isEmpty
-            || (info.breachCount ?? 0) > 0 || info.totpDomain != nil || !info.others.isEmpty
+    /// 只列出开启的检查发现的问题（设计稿：强度显示在密码一行，没有问题时不显示这一区）。
+    private func problems(_ info: ItemSecurity) -> [(title: String, detail: String, fix: Bool)] {
+        var out: [(String, String, Bool)] = []
+        if model.checkEnabled("weak"), let s = info.strength, s.score <= 2 {
+            out.append((SecurityText.title("weak"), SecurityText.warning(s.warning, s.warningDetail) ?? tr("容易被猜到"), true))
+        }
+        if model.checkEnabled("reused"), !info.reusedWith.isEmpty {
+            out.append((SecurityText.title("reused"), tr("与") + info.reusedWith.map { tr("「{}」", "\($0)") }.joined() + tr("使用同一个密码"), true))
+        }
+        if model.checkEnabled("breached"), let n = info.breachCount, n > 0 {
+            out.append((SecurityText.title("breached"), tr("在已知泄露中出现过 {} 次", "\(n.formatted())"), true))
+        }
+        if model.checkEnabled("missing_totp"), let domain = info.totpDomain {
+            out.append((SecurityText.title("missing_totp"), tr("{} 支持一次性密码", "\(domain)"), false))
+        }
+        for f in info.others where model.checkEnabled(f.check) {
+            out.append((SecurityText.title(f.check), SecurityText.detail(f), false))
+        }
+        return out
     }
 
     var body: some View {
-        Group {
-            if let info, info.strength != nil || hasProblem {
+        if let info {
+            let list = problems(info)
+            if info.ignored {
+                HStack(spacing: KV.Space.s2) {
+                    Text(tr("已忽略这个条目的安全提醒"))
+                        .font(KV.Typography.footnote)
+                        .foregroundStyle(KV.Colors.fgSecondary)
+                    Button(tr("恢复提醒")) { model.setSecurityAlerts(itemId: itemId, enabled: true) }
+                        .buttonStyle(.kvLink)
+                }
+                .padding(.horizontal, 14)
+            } else if !list.isEmpty {
                 VStack(alignment: .leading, spacing: KV.Space.s2) {
-                    GroupTitle(text: tr("安全"))
-                    if info.ignored {
-                        Banner(kind: .info, message: tr("已忽略这个条目的提醒：安全中心不再列出它。"))
-                    }
-                    KVCard { rows(info) }
-                    if hasProblem || info.ignored {
-                        HStack(spacing: KV.Space.s3) {
-                            if hasProblem {
-                                Button { edit() } label: { Label(tr("生成新密码并修改…"), systemImage: "wand.and.stars") }
-                                    .buttonStyle(.kvSecondary)
-                            }
-                            Spacer()
-                            Button(info.ignored ? tr("恢复提醒") : tr("忽略这个条目的提醒")) {
-                                model.setSecurityAlerts(itemId: itemId, enabled: info.ignored)
-                            }
-                            .buttonStyle(.kvLink)
+                    KVCard {
+                        ForEach(Array(list.enumerated()), id: \.offset) { index, p in
+                            if index > 0 { CardRowDivider() }
+                            ItemFieldRow(label: p.title) {
+                                Text(p.detail)
+                                    .font(KV.Typography.body)
+                                    .foregroundStyle(KV.Colors.statusWarningFg)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            } actions: {}
                         }
                     }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func rows(_ info: ItemSecurity) -> some View {
-        if let s = info.strength {
-            CardRow(label: tr("强度")) { ScoreMeter(strength: s) } actions: {}
-            CardRowDivider()
-            CardRow(label: tr("重复使用")) {
-                Text(info.reusedWith.isEmpty ? tr("没有") : tr("与") + info.reusedWith.map { tr("「{}」", "\($0)") }.joined() + tr("使用同一个密码"))
-                    .font(KV.Typography.body)
-                    .foregroundStyle(info.reusedWith.isEmpty ? KV.Colors.statusSuccessFg : KV.Colors.statusWarningFg)
-            } actions: {}
-            CardRowDivider()
-            CardRow(label: tr("泄露")) {
-                Group {
-                    switch info.breachCount {
-                    case nil: Text(tr("没有检查。可以在安全中心开启泄露检查。")).foregroundStyle(KV.Colors.fgSecondary)
-                    case 0: Text(tr("没有在已知泄露中出现")).foregroundStyle(KV.Colors.statusSuccessFg)
-                    case let n?: Text(tr("在已知泄露中出现过 {} 次，请立即修改", "\(n.formatted())")).foregroundStyle(KV.Colors.statusDangerFg)
+                    HStack(spacing: KV.Space.s3) {
+                        if list.contains(where: \.fix) {
+                            Button { edit() } label: { Label(tr("生成新密码并修改…"), systemImage: "wand.and.stars") }
+                                .buttonStyle(.kvToolbarAccent)
+                        } else if info.totpDomain != nil, model.checkEnabled("missing_totp") {
+                            Button(tr("添加一次性密码…")) { edit() }.buttonStyle(.kvToolbarAccent)
+                        }
+                        Spacer()
+                        Button(tr("忽略这个条目的提醒")) { model.setSecurityAlerts(itemId: itemId, enabled: false) }
+                            .buttonStyle(.kvLink)
                     }
                 }
-                .font(KV.Typography.body)
-            } actions: {}
-        }
-        if info.totpDomain != nil {
-            if info.strength != nil { CardRowDivider() }
-            CardRow(label: tr("两步验证")) {
-                Text(tr("这个网站支持一次性密码，你还没有保存。"))
-                    .font(KV.Typography.body)
-                    .foregroundStyle(KV.Colors.fgSecondary)
-            } actions: {
-                Button(tr("添加…")) { edit() }.buttonStyle(.kvLink)
             }
-        }
-        ForEach(Array(info.others.enumerated()), id: \.offset) { index, f in
-            if index > 0 || info.strength != nil || info.totpDomain != nil { CardRowDivider() }
-            CardRow(label: SecurityText.title(f.check)) {
-                Text(SecurityText.detail(f))
-                    .font(KV.Typography.body)
-                    .foregroundStyle(KV.Colors.statusWarningFg)
-            } actions: {}
         }
     }
 }

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later（附加 App Store 许可，见仓库根目录 LICENSE）
 //
-// 条目详情（docs/ux.md §2，设计稿“macOS · 主窗口”）：顶部操作、头部、提示、字段卡片、标签与修改时间；
-// 编辑在详情栏中直接进行（ItemEditor）；历史与冲突在单独的面板中。
+// 条目详情（docs/ux.md §2，设计稿"条目的展示、编辑与新建"）：顶部的无边框操作、大图标与标题、提示、字段卡片，
+// 卡片下方是网站、备注、各分区、安全问题、标签、附件与"最后编辑"；编辑在详情栏中直接进行（ItemEditor）；
+// 历史与冲突在单独的面板中。
 
 import AppKit
 import KeevoKit
@@ -26,6 +27,8 @@ struct ItemDetailView: View {
     @ViewState private var showingHistory = false
     @ViewState private var showingConflicts = false
     @ViewState private var confirmPurge = false
+    /// "最后编辑"展开后显示历史版本的入口。
+    @ViewState private var showingEdited = false
     /// 附件：拖放提示与超过上限的说明。
     @ViewState private var dropTargeted = false
     @ViewState private var tooBig: TooBigAttachment?
@@ -100,15 +103,14 @@ struct ItemDetailView: View {
                 model.setFavorite(itemId: d.id, !d.favorite)
             } label: {
                 Image(systemName: d.favorite ? "star.fill" : "star")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(d.favorite ? KV.Colors.statusWarningFg : KV.Colors.fgPrimary)
-                    .frame(width: 14)
             }
-            .buttonStyle(.kvBordered)
+            .buttonStyle(.kvToolbar)
             .help(d.favorite ? tr("取消收藏") : tr("收藏"))
             .accessibilityLabel(d.favorite ? tr("取消收藏") : tr("收藏"))
             Button(tr("编辑")) { editing = true }
-                .buttonStyle(.kvBordered)
+                .buttonStyle(.kvToolbarAccent)
                 .keyboardShortcut("e")
                 .help(tr("编辑（⌘E）"))
         }
@@ -124,10 +126,10 @@ struct ItemDetailView: View {
                     .keyboardShortcut(.delete)
             }
         } label: {
-            Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).frame(width: 14, height: 18)
+            Image(systemName: "ellipsis").font(.system(size: 14, weight: .medium)).frame(height: 18)
         }
         .menuStyle(.button)
-        .buttonStyle(.kvBordered)
+        .buttonStyle(.kvToolbar)
         .menuIndicator(.hidden)
         .fixedSize()
         .help(tr("更多"))
@@ -137,28 +139,42 @@ struct ItemDetailView: View {
     // MARK: - 内容
 
     private func content(_ d: ItemDetail) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 20) {
             header(d)
             if hasNotice(d) { notice(d) }
             let groups = fieldGroups(d)
             if groups.isEmpty {
-                Text(tr("还没有填写任何字段。点「编辑」添加。"))
+                Text(tr("还没有填写任何字段"))
                     .font(KV.Typography.footnote)
                     .foregroundStyle(KV.Colors.fgSecondary)
             } else if d.itemType == "environment" {
                 EnvironmentView(itemId: d.id, groups: groups, revealed: revealed, toggle: toggle)
             } else {
                 ForEach(groups, id: \.id) { group in
-                    VStack(alignment: .leading, spacing: KV.Space.s2) {
-                        if let label = group.label { GroupTitle(text: label) }
-                        FieldCard(itemId: d.id, fields: group.fields, revealed: revealed, toggle: toggle) {
-                            largeType = LargeTypeItem(value: $0)
+                    if group.label == nil {
+                        defaultGroup(d, group.fields)
+                    } else {
+                        VStack(alignment: .leading, spacing: KV.Space.s2) {
+                            if let label = group.label { GroupTitle(text: label) }
+                            FieldCard(itemId: d.id, fields: group.fields, revealed: revealed, toggle: toggle) {
+                                largeType = LargeTypeItem(value: $0)
+                            }
                         }
                     }
                 }
             }
             if d.itemType == "ssh_key", !d.trashed {
                 SshKeyAgentCard(itemId: d.id)
+            }
+            if !d.trashed {
+                ItemSecuritySection(itemId: d.id, info: security) { editing = true }
+            }
+            if !d.tags.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    FieldLabel(text: tr("标签"))
+                    FlowLayout { ForEach(d.tags, id: \.self) { Pill(text: $0) } }
+                }
+                .padding(.horizontal, 14)
             }
             if !d.trashed {
                 AttachmentsSection(
@@ -168,9 +184,6 @@ struct ItemDetailView: View {
                     tooBig: $tooBig
                 )
             }
-            if !d.trashed {
-                ItemSecuritySection(itemId: d.id, info: security) { editing = true }
-            }
             footer(d)
         }
         .padding(.horizontal, 28)
@@ -179,24 +192,30 @@ struct ItemDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func header(_ d: ItemDetail) -> some View {
-        HStack(spacing: 14) {
-            SiteIcon(title: d.title, url: d.fields.first { $0.kind == "url" }?.value.expose(), size: 48)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(d.title.isEmpty ? tr("（无标题）") : d.title)
-                    .font(KV.Typography.title)
-                    .foregroundStyle(KV.Colors.fgPrimary)
-                    .textSelection(.enabled)
-                Text("\(ItemTypeInfo.name(d.itemType)) · \(vaultName(d.vaultId))")
-                    .font(KV.Typography.footnote)
-                    .foregroundStyle(KV.Colors.fgSecondary)
+    /// 默认分区（设计稿）：常用字段在卡片里，网站与备注在卡片下方。
+    @ViewBuilder
+    private func defaultGroup(_ d: ItemDetail, _ fields: [FieldEntry]) -> some View {
+        let card = fields.filter { $0.kind != "url" && $0.purpose != "notes" }
+        let urls = fields.filter { $0.kind == "url" }
+        if !card.isEmpty {
+            FieldCard(itemId: d.id, fields: card, revealed: revealed, toggle: toggle, strength: security?.strength) {
+                largeType = LargeTypeItem(value: $0)
             }
         }
-        .accessibilityElement(children: .combine)
+        if !urls.isEmpty { WebsitesBlock(itemId: d.id, fields: urls) }
+        ForEach(fields.filter { $0.purpose == "notes" }, id: \.id) { NotesBlock(field: $0) }
     }
 
-    private func vaultName(_ id: String) -> String {
-        Self.vaultLabel(model.vaults.first { $0.id == id }?.name ?? "")
+    private func header(_ d: ItemDetail) -> some View {
+        HStack(spacing: KV.Space.s4) {
+            SiteIcon(title: d.title, url: d.fields.first { $0.kind == "url" }?.value.expose(), size: 60)
+            Text(d.title.isEmpty ? tr("（无标题）") : d.title)
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(KV.Colors.fgPrimary)
+                .textSelection(.enabled)
+        }
+        .help("\(ItemTypeInfo.name(d.itemType)) · \(Self.vaultLabel(model.vaults.first { $0.id == d.vaultId }?.name ?? ""))")
+        .accessibilityElement(children: .combine)
     }
 
     /// "个人" → "个人保险库"，"dev" → "dev 保险库"。
@@ -208,20 +227,37 @@ struct ItemDetailView: View {
         return name.unicodeScalars.last.map(\.isASCII) == true ? tr("{} 保险库", "\(name)") : tr("{}保险库", "\(name)")
     }
 
+    /// "› 最后编辑 2026年11月23日 星期一 18:23"，点开后显示历史版本的入口（设计稿）。
     private func footer(_ d: ItemDetail) -> some View {
-        HStack(spacing: KV.Space.s2) {
-            ForEach(d.tags, id: \.self) { Pill(text: $0) }
-            Spacer(minLength: KV.Space.s3)
-            Text(tr("{}修改 ·", Self.relative(d.updatedMs)))
+        VStack(alignment: .leading, spacing: KV.Space.s2) {
+            Button { withAnimation(.easeOut(duration: 0.15)) { showingEdited.toggle() } } label: {
+                HStack(spacing: KV.Space.s1_5) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .rotationEffect(.degrees(showingEdited ? 90 : 0))
+                    Text(tr("最后编辑 {}", Self.fullDate(d.updatedMs)))
+                }
                 .font(KV.Typography.footnote)
                 .foregroundStyle(KV.Colors.fgSecondary)
-            Button(tr("{} 个历史版本", "\(d.revisionCount)")) { showingHistory = true }
-                .buttonStyle(.plain)
-                .font(KV.Typography.footnote)
-                .foregroundStyle(KV.Colors.accentFg)
-                .help(tr("查看与恢复历史版本（⌘Y）"))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if showingEdited {
+                Button(tr("{} 个历史版本", "\(d.revisionCount)")) { showingHistory = true }
+                    .buttonStyle(.kvLink)
+                    .help(tr("查看与恢复历史版本（⌘Y）"))
+                    .padding(.leading, 18)
+            }
         }
+        .padding(.horizontal, 14)
         .padding(.top, KV.Space.s1)
+    }
+
+    /// 完整的日期与时间，按界面语言显示（"2026年11月23日 星期一 18:23"）。
+    static func fullDate(_ ms: UInt64) -> String {
+        let date = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
+        let locale = Locale(identifier: UILanguage.current == .zh ? "zh_Hans" : "en_US")
+        return date.formatted(.dateTime.year().month(.wide).day().weekday(.wide).hour().minute().locale(locale))
     }
 
     /// "刚刚"、"5 分钟前"、"3 天前"，更早的显示日期。

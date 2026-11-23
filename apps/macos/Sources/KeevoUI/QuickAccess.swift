@@ -542,22 +542,21 @@ struct GeneralSettings: View {
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: KV.Space.s5) {
-            SettingsSection(title: tr("快速访问与菜单栏")) {
+            SettingsSection(title: "") {
                 SettingsRow(
-                    title: tr("快速访问的快捷键"),
+                    title: tr("快速访问"),
                     detail: model.quickAccessShortcutTaken
-                        ? tr("这个组合键已被其他应用占用，请换一个。")
-                        : tr("在任何应用中按下，搜索并复制密码。点一下后按新的组合键即可修改。")
+                        ? tr("这个组合键已被其他应用占用，请换一个")
+                        : tr("在任何应用中搜索并复制密码")
                 ) {
                     ShortcutRecorder()
                 }
                 CardRowDivider()
-                SettingsRow(title: tr("在菜单栏显示 Keevo"), detail: tr("显示锁定状态，提供快速访问、生成密码与立即锁定。关闭窗口后 Keevo 继续在菜单栏中运行。")) {
+                SettingsRow(title: tr("在菜单栏显示 Keevo"), detail: tr("关闭窗口后继续在菜单栏运行")) {
                     Toggle(tr("在菜单栏显示 Keevo"), isOn: $model.menuBarEnabled).kvSwitch(tr("在菜单栏显示 Keevo"))
                 }
-            }
-            SettingsSection(title: tr("语言"), footer: tr("可选：跟随系统、简体中文、English。")) {
-                SettingsRow(title: tr("界面语言"), detail: tr("更改后重新打开 Keevo 生效。")) {
+                CardRowDivider()
+                SettingsRow(title: tr("界面语言"), detail: tr("重新打开后生效")) {
                     Picker(tr("界面语言"), selection: $language) {
                         ForEach(AppLanguage.allCases) { Text($0.title).tag($0) }
                     }
@@ -566,9 +565,8 @@ struct GeneralSettings: View {
                     .fixedSize()
                     .onChange(of: language) { AppLanguage.current = language }
                 }
-            }
-            SettingsSection(title: tr("提醒")) {
-                SettingsRow(title: tr("提醒我练习主密码"), detail: tr("第 3 天、第 7 天，之后每月一次。只在开启了 Touch ID 时提醒。")) {
+                CardRowDivider()
+                SettingsRow(title: tr("提醒我练习主密码"), detail: tr("开启 Touch ID 后定期提醒")) {
                     Toggle(tr("提醒我练习主密码"), isOn: $practice)
                         .kvSwitch(tr("提醒我练习主密码"))
                         .onChange(of: practice) { PracticeSchedule.enabled = practice }

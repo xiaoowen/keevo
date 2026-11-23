@@ -232,10 +232,10 @@ struct PairingCode: View {
 
 // MARK: - 按钮
 
-/// 设计稿中的按钮（design/README.md）：主操作为品牌色填充；"编辑""锁定"为描边按钮；次要操作为浅底描边；
-/// "显示"等行内操作为品牌色文字。
+/// 设计稿中的按钮（design/README.md）：主操作为品牌色填充；顶部栏的收藏、编辑、更多、锁定、取消等为无边框按钮
+/// （悬停时浅底，设计稿"条目的展示、编辑与新建"）；次要操作为浅底描边；"显示"等行内操作为品牌色文字。
 struct KVButtonStyle: ButtonStyle {
-    enum Kind { case primary, bordered, secondary, link, danger }
+    enum Kind { case primary, bordered, secondary, link, danger, toolbar, toolbarAccent }
 
     var kind: Kind
     var fullWidth = false
@@ -311,6 +311,16 @@ struct KVButtonStyle: ButtonStyle {
                     .font(KV.Typography.footnote.weight(.semibold))
                     .foregroundStyle(KV.Colors.accentFg.opacity(pressed ? 0.7 : 1))
                     .padding(KV.Space.s0_5)
+            case .toolbar, .toolbarAccent:
+                configuration.label
+                    .font(kind == .toolbarAccent ? KV.Typography.bodyStrong : KV.Typography.body.weight(.medium))
+                    .foregroundStyle(kind == .toolbarAccent ? KV.Colors.accentFg : KV.Colors.fgPrimary)
+                    .padding(.horizontal, KV.Space.s2)
+                    .frame(minWidth: 28, minHeight: 28)
+                    .background(
+                        pressed ? KV.Colors.fgPrimary.opacity(0.12) : (hovering ? KV.Colors.bgHover : Color.clear),
+                        in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    )
             }
         }
     }
@@ -322,6 +332,38 @@ extension ButtonStyle where Self == KVButtonStyle {
     static var kvSecondary: KVButtonStyle { KVButtonStyle(kind: .secondary) }
     static var kvLink: KVButtonStyle { KVButtonStyle(kind: .link) }
     static var kvDanger: KVButtonStyle { KVButtonStyle(kind: .danger) }
+    /// 顶部栏的无边框按钮：悬停时浅底，按下时加深。
+    static var kvToolbar: KVButtonStyle { KVButtonStyle(kind: .toolbar) }
+    /// 顶部栏的无边框文字按钮，品牌色（"编辑"）。
+    static var kvToolbarAccent: KVButtonStyle { KVButtonStyle(kind: .toolbarAccent) }
+}
+
+/// 一组单选行（设置的分类、导入来源、导出格式）：行本身不进入 Tab 顺序，鼠标点击不留焦点框；整组可以获得焦点，
+/// 用上下方向键切换选中项。
+struct ArrowSelection<Value: Hashable>: ViewModifier {
+    let values: [Value]
+    let selection: Value
+    let select: (Value) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .focusable()
+            .focusEffectDisabled()
+            .onMoveCommand { direction in
+                guard let i = values.firstIndex(of: selection) else { return }
+                switch direction {
+                case .up where i > 0: select(values[i - 1])
+                case .down where i + 1 < values.count: select(values[i + 1])
+                default: break
+                }
+            }
+    }
+}
+
+extension View {
+    func arrowSelection<Value: Hashable>(_ values: [Value], selection: Value, select: @escaping (Value) -> Void) -> some View {
+        modifier(ArrowSelection(values: values, selection: selection, select: select))
+    }
 }
 
 /// 只有图标的行内按钮（复制、大字显示）：品牌色，悬停时加浅底。
@@ -436,17 +478,28 @@ struct GroupTitle: View {
 
 // MARK: - 标签与徽标
 
-/// 标签胶囊：品牌色浅底。
+/// 标签胶囊：浅灰底（设计稿"条目的展示、编辑与新建"）。
 struct Pill: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(KV.Typography.body)
+            .foregroundStyle(KV.Colors.fgPrimary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 3)
+            .background(KV.Colors.bgSunken, in: Capsule())
+    }
+}
+
+/// 条目中各块的小标签（"网站""标签""附件"）：品牌色小字，与字段行的标签一致。
+struct FieldLabel: View {
     let text: String
 
     var body: some View {
         Text(text)
             .font(KV.Typography.footnote)
             .foregroundStyle(KV.Colors.accentFg)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 2)
-            .background(KV.Colors.accentSubtle, in: Capsule())
     }
 }
 
@@ -526,6 +579,12 @@ struct KVInputStyle: ViewModifier {
 
 extension View {
     func kvInput(mono: Bool = false) -> some View { modifier(KVInputStyle(mono: mono)) }
+    /// 卡片或浅灰块中的无边框输入框（设计稿"条目的展示、编辑与新建"）。
+    func kvInline(mono: Bool = false) -> some View {
+        textFieldStyle(.plain)
+            .font(mono ? KV.Typography.mono : KV.Typography.body)
+            .foregroundStyle(KV.Colors.fgPrimary)
+    }
 }
 
 /// 流式布局：一行放不下时换行（标签）。
@@ -670,7 +729,7 @@ struct SettingsSection<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: KV.Space.s2) {
-            GroupTitle(text: title)
+            if !title.isEmpty { GroupTitle(text: title) }
             KVCard { content }
             if let footer {
                 Text(footer)

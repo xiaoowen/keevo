@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later（附加 App Store 许可，见仓库根目录 LICENSE）
 //
-// 详情中的字段（docs/ux.md §2、§5，设计稿"macOS · 主窗口"）：字段卡片中的一行一个字段——左侧标签、中间值、
-// 右侧操作。普通字段、秘密字段、一次性密码（验证码与倒计时环）、网址、键值对、恢复码各有对应的行。
+// 详情中的字段（docs/ux.md §2、§5，设计稿"条目的展示、编辑与新建"）：字段卡片中的一行一个字段——标签在上、
+// 值在下，操作只在悬停时出现。普通字段、秘密字段、一次性密码（验证码与倒计时环）、键值对、恢复码各有对应的行；
+// 网址与备注在卡片下方单独显示。
 
 import AppKit
 import KeevoKit
@@ -13,13 +14,18 @@ struct FieldCard: View {
     let fields: [FieldEntry]
     let revealed: Set<String>
     let toggle: (String) -> Void
+    /// 密码强度：显示在用途为"密码"的那一行右侧。
+    var strength: PasswordStrengthInfo?
     let largeType: (String) -> Void
 
     var body: some View {
         KVCard {
             ForEach(Array(fields.enumerated()), id: \.element.id) { index, field in
                 if index > 0 { CardRowDivider() }
-                FieldDisplay(itemId: itemId, field: field, revealed: revealed, toggle: toggle, largeType: largeType)
+                FieldDisplay(
+                    itemId: itemId, field: field, revealed: revealed, toggle: toggle,
+                    strength: field.purpose == "password" ? strength : nil, largeType: largeType
+                )
             }
         }
     }
@@ -31,6 +37,7 @@ struct FieldDisplay: View {
     let field: FieldEntry
     let revealed: Set<String>
     let toggle: (String) -> Void
+    var strength: PasswordStrengthInfo?
     let largeType: (String) -> Void
 
     var body: some View {
@@ -47,6 +54,7 @@ struct FieldDisplay: View {
                 field: field,
                 revealed: revealed.contains(field.id),
                 toggle: { toggle(field.id) },
+                strength: strength,
                 largeType: { largeType(field.value.expose()) }
             )
             .contextMenu { ReferenceMenu(itemId: itemId, fieldId: field.id) }
@@ -60,6 +68,119 @@ struct FieldDisplay: View {
         case "recovery_codes": !field.codes.isEmpty
         default: !field.value.isEmpty()
         }
+    }
+}
+
+/// 条目字段的一行（设计稿"条目的展示、编辑与新建"）：标签在上（品牌色小字），值在下；右侧的附加信息（强度、
+/// 倒计时）一直显示，复制、显示等操作只在悬停时出现。点一下值即可复制的行由各自的值视图处理。
+struct ItemFieldRow<Value: View, Accessory: View, Actions: View>: View {
+    let label: String
+    var highlighted = false
+    @ViewBuilder let value: Value
+    @ViewBuilder let accessory: Accessory
+    @ViewBuilder let actions: Actions
+    @ViewState private var hovering = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: KV.Space.s2) {
+            VStack(alignment: .leading, spacing: 2) {
+                // 字段名是保险库中的数据：模板的默认名称按界面语言显示
+                Text(tr(label))
+                    .font(KV.Typography.footnote)
+                    .foregroundStyle(KV.Colors.accentFg)
+                    .lineLimit(1)
+                value
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            accessory
+            HStack(spacing: KV.Space.s1) { actions }
+                .opacity(hovering ? 1 : 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(highlighted ? KV.Colors.bgSelected : (hovering ? KV.Colors.bgSurface : Color.clear))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+    }
+}
+
+extension ItemFieldRow where Accessory == EmptyView {
+    init(label: String, highlighted: Bool = false, @ViewBuilder value: () -> Value, @ViewBuilder actions: () -> Actions) {
+        self.init(label: label, highlighted: highlighted, value: value, accessory: { EmptyView() }, actions: actions)
+    }
+}
+
+/// 密码强度的简短标记：文字与小圆环一起表示（不只靠颜色，docs/ux.md §8）。
+struct StrengthBadge: View {
+    let strength: PasswordStrengthInfo
+
+    var body: some View {
+        let (level, label, color) = SecurityText.strengthLabel(strength.score)
+        HStack(spacing: KV.Space.s1_5) {
+            Text(label)
+                .font(KV.Typography.footnote)
+                .foregroundStyle(color)
+            ZStack {
+                Circle().stroke(KV.Colors.borderSubtle, lineWidth: 2.5)
+                Circle()
+                    .trim(from: 0, to: Double(level) / 4)
+                    .stroke(color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
+            .frame(width: 14, height: 14)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(tr("强度：{}", "\(label)"))
+    }
+}
+
+/// 卡片下方的"网站"（设计稿）：每个网址一行链接，悬停时可以复制。
+struct WebsitesBlock: View {
+    let itemId: String
+    let fields: [FieldEntry]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(fields.enumerated()), id: \.element.id) { index, field in
+                ItemFieldRow(label: index == 0 ? field.label : "") {
+                    if let url = URL(string: field.value.expose()), url.scheme == "https" || url.scheme == "http" {
+                        Link(FieldRow.display(url), destination: url)
+                            .font(KV.Typography.body)
+                            .foregroundStyle(KV.Colors.accentFg)
+                            .help(url.absoluteString)
+                            .lineLimit(1)
+                    } else {
+                        Text(field.value.expose())
+                            .font(KV.Typography.body)
+                            .foregroundStyle(KV.Colors.fgPrimary)
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                    }
+                } actions: {
+                    CopyButton(label: field.label) { field.value.expose() }
+                }
+                .contextMenu { ReferenceMenu(itemId: itemId, fieldId: field.id) }
+            }
+        }
+    }
+}
+
+/// 卡片下方的"备注"（设计稿）。
+struct NotesBlock: View {
+    let field: FieldEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(tr(field.label))
+                .font(KV.Typography.footnote)
+                .foregroundStyle(KV.Colors.accentFg)
+            Text(field.value.expose())
+                .font(KV.Typography.body)
+                .foregroundStyle(KV.Colors.fgPrimary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 14)
     }
 }
 
@@ -97,6 +218,7 @@ struct FieldRow: View {
     let field: FieldEntry
     let revealed: Bool
     let toggle: () -> Void
+    var strength: PasswordStrengthInfo?
     let largeType: () -> Void
 
     private var multiline: Bool {
@@ -104,13 +226,18 @@ struct FieldRow: View {
     }
 
     var body: some View {
-        CardRow(label: field.label, multiline: multiline, highlighted: field.concealed && revealed) {
+        ItemFieldRow(label: field.label, highlighted: field.concealed && revealed) {
             valueView
+        } accessory: {
+            if let strength { StrengthBadge(strength: strength) }
         } actions: {
             if field.concealed {
-                Button(revealed ? tr("隐藏") : tr("显示"), action: toggle)
-                    .buttonStyle(.kvLink)
-                    .help(revealed ? tr("隐藏") : tr("显示（30 秒后自动隐藏）"))
+                IconButton(
+                    systemImage: revealed ? "eye.slash" : "eye",
+                    label: revealed ? tr("隐藏") : tr("显示"),
+                    help: revealed ? tr("隐藏") : tr("显示（30 秒后自动隐藏）"),
+                    action: toggle
+                )
                 LargeTypeButton(action: largeType)
             }
             CopyButton(label: field.label) { field.value.expose() }
@@ -123,15 +250,11 @@ struct FieldRow: View {
             SecretText(secret: field.value, revealed: revealed, multiline: multiline)
         } else if field.kind == "url", let url = URL(string: field.value.expose()),
                   url.scheme == "https" || url.scheme == "http" {
-            HStack(spacing: KV.Space.s2) {
-                Link(Self.display(url), destination: url)
-                    .font(KV.Typography.body)
-                    .foregroundStyle(KV.Colors.accentFg)
-                    .help(url.absoluteString)
-                    .lineLimit(1)
-                OutlineBadge(text: Self.matchMode(url))
-                    .help(tr("填充时按这个方式匹配网址（docs/architecture.md §5.3）"))
-            }
+            Link(Self.display(url), destination: url)
+                .font(KV.Typography.body)
+                .foregroundStyle(KV.Colors.accentFg)
+                .help(url.absoluteString)
+                .lineLimit(1)
         } else {
             Text(field.value.expose())
                 .font(Self.looksLikeKey(field.value.expose()) ? KV.Typography.mono : KV.Typography.body)
@@ -194,28 +317,28 @@ struct OtpRow: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let remaining = max(0, expiresAt.timeIntervalSince(context.date))
-            CardRow(label: field.label) {
+            ItemFieldRow(label: field.label) {
                 if invalid {
                     Text(tr("配置无效，请在编辑器中检查")).font(KV.Typography.footnote).foregroundStyle(KV.Colors.statusDangerFg)
                 } else if let code {
-                    HStack(spacing: 10) {
-                        CountdownRing(fraction: remaining / Double(code.period), seconds: Int(remaining.rounded(.up)))
+                    let seconds = Int(remaining.rounded(.up))
+                    HStack(spacing: KV.Space.s2) {
                         Text(Self.grouped(code.code.expose()))
-                            .font(.system(size: 17, weight: .medium, design: .monospaced))
+                            .font(.system(size: 16, weight: .medium, design: .monospaced))
                             .tracking(1)
                             .foregroundStyle(KV.Colors.fgPrimary)
                             .textSelection(.enabled)
                             .accessibilityLabel(tr("验证码 {}", "\(code.code.expose().map(String.init).joined(separator: " "))"))
+                        CountdownRing(fraction: remaining / Double(code.period), seconds: seconds)
+                        Text("\(seconds)")
+                            .font(KV.Typography.footnote)
+                            .monospacedDigit()
+                            .foregroundStyle(seconds <= 5 ? KV.Colors.statusWarningFg : KV.Colors.fgSecondary)
+                            .accessibilityHidden(true)
                     }
                 }
             } actions: {
                 if let code, !invalid {
-                    let seconds = Int(remaining.rounded(.up))
-                    Text(tr("{} 秒", "\(seconds)"))
-                        .font(KV.Typography.footnote)
-                        .monospacedDigit()
-                        .foregroundStyle(seconds <= 5 ? KV.Colors.statusWarningFg : KV.Colors.fgSecondary)
-                        .padding(.trailing, KV.Space.s1)
                     CopyButton(label: field.label) { code.code.expose() }
                 }
             }
@@ -412,15 +535,18 @@ struct CodesRows: View {
     private var remaining: Int { field.codes.filter { !$0.used }.count }
 
     var body: some View {
-        CardRow(label: field.label) {
+        ItemFieldRow(label: field.label) {
             Text(tr("剩余 {} / {}", "\(remaining)", "\(field.codes.count)"))
-                .font(KV.Typography.footnote)
-                .foregroundStyle(remaining < 3 ? KV.Colors.statusWarningFg : KV.Colors.fgSecondary)
+                .font(KV.Typography.body)
+                .foregroundStyle(remaining < 3 ? KV.Colors.statusWarningFg : KV.Colors.fgPrimary)
         } actions: {
-            Button(revealed.contains(field.id) ? tr("隐藏") : tr("显示")) { toggle(field.id) }.buttonStyle(.kvLink)
+            IconButton(
+                systemImage: revealed.contains(field.id) ? "eye.slash" : "eye",
+                label: revealed.contains(field.id) ? tr("隐藏") : tr("显示")
+            ) { toggle(field.id) }
         }
         if remaining < 3 {
-            Banner(kind: .warning, message: tr("恢复码只剩 {} 个。请到网站上重新生成一组，并更新这里。", "\(remaining)"))
+            Banner(kind: .warning, message: tr("恢复码只剩 {} 个，请到网站上重新生成", "\(remaining)"))
                 .padding(.horizontal, 14)
                 .padding(.bottom, 10)
         }

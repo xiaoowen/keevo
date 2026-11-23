@@ -53,6 +53,8 @@ struct MainView: View {
     @FocusState private var searchFocused: Bool
     @FocusState private var listFocused: Bool
     @ViewState private var showingNewLogin = false
+    /// 在新建登录的面板中返回并选了其他类型：面板关闭后打开那个类型的新建面板。
+    @ViewState private var pendingChoice: NewItemChoice?
     @ViewState private var newItem: NewItemChoice?
     @ViewState private var showingGenerator = false
     /// 刚新建的条目：显示时直接打开编辑器。
@@ -95,7 +97,7 @@ struct MainView: View {
     }
 
     private func count(_ s: SidebarItem) -> Int {
-        if s == .security { return Int(model.securityReport?.affectedItems ?? 0) }
+        if s == .security { return model.visibleAffectedItems }
         return model.items.reduce(0) { $0 + (matches($1, s) ? 1 : 0) }
     }
 
@@ -119,8 +121,13 @@ struct MainView: View {
         }
         .background(KV.Colors.bgCanvas)
         .ignoresSafeArea(.container, edges: .top)
-        .sheet(isPresented: $showingNewLogin) {
-            NewLoginSheet(defaultVault: defaultVault) { id in selectedItem = id }
+        .sheet(isPresented: $showingNewLogin, onDismiss: {
+            if let choice = pendingChoice {
+                pendingChoice = nil
+                newItem = choice
+            }
+        }) {
+            NewLoginSheet(defaultVault: defaultVault, chooseType: { pendingChoice = $0 }) { id in selectedItem = id }
         }
         .sheet(item: $newItem) { choice in
             NewItemSheet(choice: choice, defaultVault: defaultVault) { id in
@@ -244,13 +251,13 @@ struct MainView: View {
     @ViewBuilder
     private var emptyState: some View {
         if !search.isEmpty {
-            EmptyState(symbol: "magnifyingglass", title: tr("没有符合的条目"), message: tr("换个关键词，或用 type: tag: vault: url: 过滤。"))
+            EmptyState(symbol: "magnifyingglass", title: tr("没有符合的条目"), message: tr("换个关键词试试"))
         } else if sidebar == .trash {
-            EmptyState(symbol: "trash", title: tr("回收站是空的"), message: tr("移入回收站的条目会出现在这里，可以恢复。"))
+            EmptyState(symbol: "trash", title: tr("回收站是空的"))
         } else if sidebar == .favorites {
             EmptyState(symbol: "star", title: tr("还没有收藏"), message: tr("在条目详情中点星标即可收藏。"))
         } else {
-            EmptyState(symbol: "key", title: tr("还没有条目"), message: tr("点击 + 添加第一个登录，或从其他密码管理器导入。"))
+            EmptyState(symbol: "key", title: tr("还没有条目"), message: tr("点 + 添加，或从其他密码管理器导入"))
         }
     }
 
@@ -276,7 +283,7 @@ struct MainView: View {
         } else {
             VStack(spacing: 0) {
                 DetailTopBar { EmptyView() }
-                EmptyState(symbol: "rectangle.on.rectangle", title: tr("选择一个条目"), message: tr("在左侧选择条目查看详情，或按 ⌘N 新建。"))
+                EmptyState(symbol: "rectangle.on.rectangle", title: tr("选择一个条目"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -420,6 +427,8 @@ struct SidebarRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // 鼠标点击按钮不会移走键盘焦点：行本身不进入 Tab 顺序，否则焦点框一直停在第一行
+        .focusable(false)
         .onHover { hovering = $0 }
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityValue(count > 0 ? tr("{} 个", "\(count)") : "")
@@ -485,9 +494,9 @@ struct DetailTopBar<Actions: View>: View {
                 Spacer()
                 actions
                 Button { model.lock() } label: {
-                    Image(systemName: "lock").font(.system(size: 12, weight: .semibold)).frame(width: 14)
+                    Image(systemName: "lock").font(.system(size: 14, weight: .medium))
                 }
-                .buttonStyle(.kvBordered)
+                .buttonStyle(.kvToolbar)
                 .help(tr("立即锁定（⇧⌘L）"))
                 .accessibilityLabel(tr("锁定"))
             }
@@ -516,7 +525,7 @@ private struct EditingShield: View {
 struct EmptyState: View {
     let symbol: String
     let title: String
-    let message: String
+    var message: String?
 
     var body: some View {
         VStack(spacing: KV.Space.s2) {
@@ -525,11 +534,13 @@ struct EmptyState: View {
                 .foregroundStyle(KV.Colors.fgTertiary)
                 .padding(.bottom, KV.Space.s1)
             Text(title).font(KV.Typography.headline).foregroundStyle(KV.Colors.fgPrimary)
-            Text(message)
-                .font(KV.Typography.footnote)
-                .foregroundStyle(KV.Colors.fgSecondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 260)
+            if let message {
+                Text(message)
+                    .font(KV.Typography.footnote)
+                    .foregroundStyle(KV.Colors.fgSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 260)
+            }
         }
         .padding(KV.Space.s6)
     }
@@ -583,60 +594,260 @@ struct ItemRow: View {
     }
 }
 
+/// 新建登录（设计稿"条目的展示、编辑与新建"）：与编辑同一套表单。左上角返回类型选择，右上角关闭；
+/// 填了标题才能保存。保存时先按模板新建，再一次写入其余的网站、备注、新增字段与标签。
 struct NewLoginSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let defaultVault: String?
+    /// 返回后选了其他类型：交给按类型新建的面板。
+    let chooseType: (NewItemChoice) -> Void
     let created: (String) -> Void
     @ViewState private var title = ""
     @ViewState private var username = ""
     @ViewState private var password = ""
-    @ViewState private var url = ""
+    @ViewState private var urls: [String] = [""]
+    @ViewState private var notes = ""
+    @ViewState private var tags: [String] = []
+    @ViewState private var newTag = ""
+    @ViewState private var extra: [DraftField] = []
     @ViewState private var generating = false
+    @ViewState private var choosingType = false
     @FocusState private var titleFocused: Bool
 
     private var canSave: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty && defaultVault != nil }
 
     var body: some View {
-        SheetScaffold(title: tr("新建登录"), systemImage: "person.badge.key", width: 460) {
-            VStack(alignment: .leading, spacing: KV.Space.s3) {
-                LabeledInput(label: tr("标题")) {
-                    TextField("", text: $title, prompt: DraftFieldRow.prompt(tr("例如 GitHub"))).focused($titleFocused)
+        VStack(spacing: 0) {
+            HStack {
+                Button { choosingType.toggle() } label: {
+                    Image(systemName: choosingType ? "chevron.right" : "arrow.left").font(.system(size: 14, weight: .medium))
                 }
-                LabeledInput(label: tr("用户名")) {
-                    TextField("", text: $username, prompt: DraftFieldRow.prompt(tr("用户名或邮箱")))
+                .buttonStyle(.kvToolbar)
+                .help(choosingType ? tr("返回") : tr("选择其他类型"))
+                .accessibilityLabel(choosingType ? tr("返回") : tr("选择其他类型"))
+                Spacer()
+                Text(choosingType ? tr("新建条目") : tr("新建登录")).font(.system(size: 14, weight: .bold))
+                Spacer()
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark").font(.system(size: 13, weight: .medium))
                 }
-                VStack(alignment: .trailing, spacing: KV.Space.s1) {
-                    LabeledInput(label: tr("密码")) {
-                        SecureField("", text: $password)
+                .buttonStyle(.kvToolbar)
+                .keyboardShortcut(.cancelAction)
+                .help(tr("关闭（esc）"))
+                .accessibilityLabel(tr("关闭"))
+            }
+            .padding(.horizontal, KV.Space.s3)
+            .frame(height: 50)
+            Rectangle().fill(KV.Colors.borderSubtle).frame(height: 1)
+            if choosingType {
+                typeList
+            } else {
+                form
+                Rectangle().fill(KV.Colors.borderSubtle).frame(height: 1)
+                HStack {
+                    Spacer()
+                    Button(tr("保存"), action: save)
+                        .buttonStyle(.kvPrimary)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(!canSave)
+                }
+                .padding(.horizontal, KV.Space.s5)
+                .padding(.vertical, KV.Space.s3)
+            }
+        }
+        .frame(width: 600, height: 660)
+        .background(KV.Colors.bgCanvas)
+        .onAppear { titleFocused = true }
+    }
+
+    private var form: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: KV.Space.s4) {
+                    Image(systemName: "person.badge.key")
+                        .font(.system(size: 24))
+                        .foregroundStyle(KV.Colors.accentFg)
+                        .frame(width: 60, height: 60)
+                        .background(KV.Colors.accentSubtle, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+                    TitleField(title: $title, focused: $titleFocused)
+                }
+                KVCard {
+                    inputRow(tr("用户名")) {
+                        TextField("", text: $username, prompt: DraftFieldRow.prompt(tr("用户名或邮箱"))).kvInline()
                     }
-                    Button { generating = true } label: { Label(tr("生成强密码"), systemImage: "wand.and.stars") }
-                        .buttonStyle(.kvLink)
-                        .popover(isPresented: $generating) {
-                            GeneratorView { password = $0 }
+                    CardRowDivider()
+                    HStack(spacing: KV.Space.s1) {
+                        inputRow(tr("密码")) {
+                            SecureField("", text: $password, prompt: DraftFieldRow.prompt(tr("密码"))).kvInline()
                         }
+                        IconButton(systemImage: "wand.and.stars", label: tr("生成密码")) { generating = true }
+                            .padding(.trailing, KV.Space.s2)
+                            .popover(isPresented: $generating) { GeneratorView { password = $0 } }
+                    }
                 }
-                LabeledInput(label: tr("网站")) {
-                    TextField("", text: $url, prompt: DraftFieldRow.prompt("https://…"))
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(urls.indices, id: \.self) { i in
+                        HStack(spacing: KV.Space.s1) {
+                            inputRow(i == 0 ? tr("网站") : "") {
+                                TextField("", text: Binding(get: { urls[i] }, set: { urls[i] = $0 }), prompt: DraftFieldRow.prompt("https://example.com"))
+                                    .kvInline()
+                            }
+                            if urls.count > 1 {
+                                Button { urls.remove(at: i) } label: {
+                                    Image(systemName: "minus.circle").font(.system(size: 14, weight: .medium)).foregroundStyle(KV.Colors.statusDangerFg)
+                                }
+                                .buttonStyle(.kvToolbar)
+                                .padding(.trailing, KV.Space.s2)
+                                .accessibilityLabel(tr("删除网站"))
+                            }
+                        }
+                        Rectangle().fill(KV.Colors.borderSubtle).frame(height: 1)
+                    }
+                    Button { urls.append("") } label: {
+                        Label(tr("添加另一个网站"), systemImage: "plus")
+                            .font(KV.Typography.body.weight(.medium))
+                            .foregroundStyle(KV.Colors.accentFg)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                if !extra.isEmpty {
+                    KVCard {
+                        ForEach(Array(extra.enumerated()), id: \.element.id) { index, field in
+                            if index > 0 { CardRowDivider() }
+                            DraftFieldRow(
+                                field: Binding(
+                                    get: { extra.first { $0.id == field.id } ?? field },
+                                    set: { v in if let i = extra.firstIndex(where: { $0.id == field.id }) { extra[i] = v } }
+                                ),
+                                sections: [],
+                                canMoveUp: false,
+                                canMoveDown: false,
+                                move: { _ in },
+                                moveTo: { _ in },
+                                remove: { extra.removeAll { $0.id == field.id } }
+                            )
+                        }
+                    }
+                }
+                AddMoreMenu(add: { kind in
+                    if kind == "url" { urls.append("") } else { extra.append(DraftField(newKind: kind, section: nil)) }
+                }, addSection: {})
+                VStack(alignment: .leading, spacing: 4) {
+                    FieldLabel(text: tr("备注"))
+                    TextField("", text: $notes, prompt: DraftFieldRow.prompt(tr("添加备注")), axis: .vertical)
+                        .lineLimit(2...10)
+                        .kvInline()
+                        .accessibilityLabel(tr("备注"))
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                TagEditor(tags: $tags, newTag: $newTag, add: addTag)
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 22)
+        }
+    }
+
+    /// 类型选择：返回之后的列表。选登录回到表单，选其他类型交给按类型新建的面板。
+    private var typeList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(NewItemChoice.all) { choice in
+                    Button {
+                        if choice.itemType == "login" {
+                            choosingType = false
+                        } else {
+                            chooseType(choice)
+                            dismiss()
+                        }
+                    } label: {
+                        HStack(spacing: KV.Space.s3) {
+                            Image(systemName: choice.symbol)
+                                .font(.system(size: 15))
+                                .foregroundStyle(KV.Colors.accentFg)
+                                .frame(width: 34, height: 34)
+                                .background(KV.Colors.accentSubtle, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            Text(choice.name).font(KV.Typography.body)
+                            Spacer()
+                        }
+                        .padding(.horizontal, KV.Space.s3)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-        } footer: {
-            Button(tr("取消")) { dismiss() }
-                .buttonStyle(.kvSecondary)
-                .keyboardShortcut(.cancelAction)
-            Button(tr("保存"), action: save)
-                .buttonStyle(.kvPrimary)
-                .keyboardShortcut(.defaultAction)
-                .disabled(!canSave)
+            .padding(KV.Space.s4)
         }
-        .onAppear { titleFocused = true }
+    }
+
+    private func inputRow<Field: View>(_ label: String, @ViewBuilder field: () -> Field) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if !label.isEmpty {
+                Text(label).font(KV.Typography.footnote).foregroundStyle(KV.Colors.accentFg)
+            }
+            field()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func addTag() {
+        let tag = newTag.trimmingCharacters(in: .whitespaces)
+        if !tag.isEmpty, !tags.contains(tag) { tags.append(tag) }
+        newTag = ""
     }
 
     private func save() {
         guard canSave, let vault = defaultVault else { return }
-        if let id = model.createLogin(vaultId: vault, title: title, username: username, password: password, url: url) {
-            created(id)
+        addTag()
+        let links = urls.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard let id = model.createLogin(vaultId: vault, title: title, username: username, password: password, url: links.first ?? "")
+        else { return }
+        // 模板之外的内容：一次写入（spec/revisions.md §5.4）
+        var edits: [ItemEdit] = []
+        if let detail = model.detail(of: id) {
+            if !notes.isEmpty, let field = detail.fields.first(where: { $0.purpose == "notes" }) {
+                edits.append(.setFieldValue(fieldId: field.id, value: notes))
+            }
+            for link in links.dropFirst() {
+                edits.append(.addFieldToSection(
+                    sectionId: nil, kind: "url", label: DraftField.defaultLabel("url"), purpose: nil, value: link, kv: [], codes: []
+                ))
+            }
+            for f in extra {
+                let empty = f.value.isEmpty && f.kv.isEmpty && f.codes.isEmpty
+                if empty { continue }
+                // 模板中已有空的一次性密码字段：填入它，不另加
+                if f.kind == "totp", let otp = detail.fields.first(where: { $0.kind == "totp" && $0.value.isEmpty() }) {
+                    edits.append(.setFieldValue(fieldId: otp.id, value: f.value))
+                    continue
+                }
+                edits.append(.addFieldToSection(
+                    sectionId: nil, kind: f.kind, label: f.label, purpose: f.purpose, value: f.value,
+                    kv: f.kv.map { KvInput(key: $0.key, value: $0.value, concealed: $0.concealed) },
+                    codes: f.codes.map { CodeInput(code: $0.code, used: $0.used) }
+                ))
+            }
+            for tag in tags { edits.append(.addTag(tag: tag)) }
         }
+        if !edits.isEmpty {
+            do {
+                try model.update(itemId: id, edits: edits, force: true)
+            } catch {
+                model.report(error)
+            }
+        }
+        created(id)
         dismiss()
     }
 }

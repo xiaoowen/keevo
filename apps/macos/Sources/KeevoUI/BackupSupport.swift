@@ -80,7 +80,7 @@ extension AppModel {
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.prompt = tr("选择")
-        panel.message = tr("选择存放 Keevo 备份的文件夹，例如外部硬盘或同步盘中的文件夹。")
+        panel.message = tr("选择存放备份的文件夹")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         customBackupFolder = url.path == defaultBackupFolder ? nil : url.path
         refreshBackups()
@@ -115,7 +115,7 @@ extension AppModel {
             return false
         }
         lock()
-        lockNotice = tr("已恢复到 {} 的备份。请用备份时的主密码解锁；恢复前的保险库已另存一份备份。", "\(BackupText.when(backup.createdMs))")
+        lockNotice = tr("已恢复到 {} 的备份，请用备份时的主密码解锁", "\(BackupText.when(backup.createdMs))")
         refreshBackups()
         return true
     }
@@ -211,9 +211,9 @@ struct BackupSettings: View {
         VStack(alignment: .leading, spacing: KV.Space.s5) {
             SettingsSection(
                 title: tr("自动备份"),
-                footer: tr("备份与保险库同等加密：需要主密码与账户密钥才能打开。可以选一个外部硬盘或同步盘中的文件夹。")
+                footer: tr("备份同样加密，需要主密码与账户密钥才能打开")
             ) {
-                SettingsRow(title: tr("每天自动备份"), detail: tr("Keevo 运行时每天一次；导入与恢复之前也会备份。")) {
+                SettingsRow(title: tr("每天自动备份"), detail: tr("每天一次，导入与恢复前也会备份")) {
                     Toggle(tr("每天自动备份"), isOn: $model.autoBackupEnabled)
                         .kvSwitch(tr("每天自动备份"))
                 }
@@ -316,7 +316,7 @@ struct RestorePickerSheet: View {
     var body: some View {
         SheetScaffold(
             title: tr("选择要恢复的备份"),
-            subtitle: tr("也可以从其他位置选择一个 Keevo 备份文件（.keevo-backup）。"),
+            subtitle: nil,
             systemImage: "archivebox",
             width: 520
         ) {
@@ -447,7 +447,7 @@ struct RestoreConfirmSheet: View {
                 }
                 Banner(
                     kind: .warning,
-                    message: tr("备份之后的修改会被替换掉（可以从恢复前自动生成的备份找回）。这台 Mac 上的浏览器配对、命令行授权、SSH Agent 的使用方式与解锁设置保持现在的状态。")
+                    message: tr("备份之后的修改会被替换（恢复前会自动再备份一份）；浏览器配对、命令行授权、SSH Agent 与解锁设置保持不变")
                 )
                 ErrorText()
             }

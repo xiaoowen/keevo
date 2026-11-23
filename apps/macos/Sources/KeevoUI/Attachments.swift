@@ -119,11 +119,16 @@ struct AttachmentsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: KV.Space.s2) {
             HStack {
-                GroupTitle(text: fields.isEmpty ? tr("附件") : tr("附件（{}）", "\(fields.count)"))
+                FieldLabel(text: tr("附件"))
                 Spacer()
-                Button { choose() } label: { Label(tr("添加附件…"), systemImage: "plus") }
-                    .buttonStyle(.kvLink)
+                Button { choose() } label: {
+                    Image(systemName: "plus").font(.system(size: 13, weight: .semibold)).foregroundStyle(KV.Colors.accentFg)
+                }
+                .buttonStyle(.kvToolbar)
+                .help(tr("添加附件，或把文件拖到这里"))
+                .accessibilityLabel(tr("添加附件"))
             }
+            .padding(.leading, 14)
             if !fields.isEmpty {
                 KVCard {
                     ForEach(Array(fields.enumerated()), id: \.element.id) { index, f in
@@ -132,10 +137,6 @@ struct AttachmentsSection: View {
                     }
                 }
             }
-            Text(tr("附件与条目一起加密保存在这台 Mac 上；单个文件最大 50 MB。也可以把文件拖到这里。"))
-                .font(KV.Typography.footnote)
-                .foregroundStyle(KV.Colors.fgSecondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .quickLookPreview($preview)
         .onChange(of: preview) { if preview == nil { model.clearPreviews() } }
@@ -234,7 +235,7 @@ struct TooBigAttachmentSheet: View {
             tint: KV.Colors.statusWarningFg,
             width: 460
         ) {
-            Text(tr("大文件请放在加密磁盘或其他位置；在条目中记录它的位置即可。"))
+            Text(tr("大文件请放在加密磁盘中，在条目里记下位置"))
                 .font(KV.Typography.footnote)
                 .foregroundStyle(KV.Colors.fgSecondary)
                 .fixedSize(horizontal: false, vertical: true)

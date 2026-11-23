@@ -168,7 +168,7 @@ private struct WelcomeStep: View {
             }
             .buttonStyle(KVButtonStyle(kind: .secondary, fullWidth: true))
         }
-        Text(tr("加入已有账户（在多台设备间同步）将在后续版本提供。"))
+        Text(tr("加入已有账户将在后续版本提供"))
             .font(KV.Typography.footnote)
             .foregroundStyle(KV.Colors.fgTertiary)
     }
@@ -240,7 +240,7 @@ private struct PasswordStep: View {
     private var canContinue: Bool { problem == nil && confirm == password && !model.busy }
 
     var body: some View {
-        Headline(title: tr("设置主密码"), subtitle: tr("它是打开保险库的唯一钥匙。建议用几个随机的词组成一句话。"))
+        Headline(title: tr("设置主密码"), subtitle: tr("建议用几个随机的词组成一句话"))
         VStack(alignment: .leading, spacing: 10) {
             LabeledInput(label: tr("主密码"), focused: focus == .password) {
                 HStack {
@@ -272,7 +272,7 @@ private struct PasswordStep: View {
                     .onSubmit(create)
             }
         }
-        Banner(kind: .warning, message: tr("忘记主密码、同时丢失应急包时，数据将无法恢复。没有人能帮你重置，包括 Keevo。"))
+        Banner(kind: .warning, message: tr("忘记主密码又丢了应急包，数据就无法恢复，Keevo 也无法帮你重置"))
         Button(action: create) {
             HStack(spacing: KV.Space.s2) {
                 if model.busy { ProgressView().controlSize(.small).tint(.white) }
@@ -291,7 +291,7 @@ private struct PasswordStep: View {
     }
 
     private var detail: String {
-        if password.isEmpty { return tr("至少 {} 个字符；推荐使用生成的口令短语。", "\(MasterPasswordRule.minLength)") }
+        if password.isEmpty { return tr("至少 {} 个字符", "\(MasterPasswordRule.minLength)") }
         if let bits = generatedBits { return tr("约 {} 比特熵 · 4 个随机单词", "\(Int(bits.rounded()))") }
         if let problem { return problem }
         return tr("约 {} 比特熵", "\(Int((strength?.bits ?? 0).rounded()))")
@@ -324,20 +324,20 @@ private struct KitStep: View {
     @ViewState private var asking = false
 
     var body: some View {
-        Headline(title: tr("保存你的应急包"), subtitle: tr("在新设备上登录、或从备份恢复时，需要主密码和账户密钥。"))
+        Headline(title: tr("保存你的应急包"), subtitle: tr("在新设备上登录或从备份恢复时需要它"))
         if let key = model.pendingSecretKey {
             KitPreview(secretKey: key.expose())
             KitActions(secretKey: key, accountId: model.accountId)
         } else {
             // 中途锁定或退出过：内存中的账户密钥已清除，验证后重新取出
-            Banner(kind: .info, message: tr("为了安全，Keevo 锁定时清除了内存中的账户密钥。验证身份后重新显示。"))
+            Banner(kind: .info, message: tr("验证身份后显示账户密钥"))
             Button(tr("显示应急包…")) { asking = true }
                 .buttonStyle(KVButtonStyle(kind: .secondary, fullWidth: true))
         }
         VStack(alignment: .leading, spacing: 8) {
             NumberedStep(n: 1, text: tr("打印出来，或抄写账户密钥。"))
             NumberedStep(n: 2, text: tr("和主密码分开存放在安全的地方。"))
-            NumberedStep(n: 3, text: tr("不要存进其他云端笔记或截图。保存的 PDF 打印后请删除。"))
+            NumberedStep(n: 3, text: tr("打印后删除保存的 PDF，不要截图或存进云端笔记"))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         Toggle(tr("我已妥善保存应急包"), isOn: $saved)
@@ -428,7 +428,7 @@ struct KitActions: View {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = tr("Keevo 应急包.pdf")
         panel.allowedContentTypes = [.pdf]
-        panel.message = tr("PDF 中有账户密钥。打印或存到 U 盘后，请删除电脑上的这份。")
+        panel.message = tr("打印或存到 U 盘后，请删除电脑上的这份 PDF")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try pdf.write(to: url, options: [.atomic, .completeFileProtection])
@@ -521,9 +521,9 @@ private struct BrowserStep: View {
 
     var body: some View {
         HeroIcon(systemImage: "puzzlepiece.extension")
-        Headline(title: tr("连接浏览器"), subtitle: tr("安装 Keevo 扩展后，在网页上一键填充、保存新的登录。"))
+        Headline(title: tr("连接浏览器"), subtitle: tr("在网页上一键填充与保存登录"))
         if installed.isEmpty {
-            Banner(kind: .info, message: tr("这台 Mac 上没有找到 Chrome。安装 Chrome 后，可以在「设置 → 浏览器」中连接。"))
+            Banner(kind: .info, message: tr("没有找到 Chrome。安装后可以在「设置 → 浏览器」中连接"))
         } else {
             KVCard {
                 ForEach(Array(installed.enumerated()), id: \.element.id) { index, b in
@@ -533,7 +533,7 @@ private struct BrowserStep: View {
             }
         }
         if let message { Banner(kind: .warning, message: message) }
-        Text(tr("扩展装好后会请求与 Keevo 配对：核对 6 个词即可。"))
+        Text(tr("装好后核对 6 个词完成配对"))
             .font(KV.Typography.footnote)
             .foregroundStyle(KV.Colors.fgSecondary)
         VStack(spacing: 8) {
@@ -779,7 +779,7 @@ struct EmergencyKitSheet: View {
     var body: some View {
         SheetScaffold(
             title: tr("应急包"),
-            subtitle: tr("在新设备上登录、或从备份恢复时，需要主密码和账户密钥。"),
+            subtitle: tr("在新设备上登录或从备份恢复时需要它"),
             systemImage: "lifepreserver",
             width: 500
         ) {
@@ -788,7 +788,7 @@ struct EmergencyKitSheet: View {
                     KitPreview(secretKey: key.expose())
                     KitActions(secretKey: key, accountId: model.accountId)
                 }
-                Text(tr("保存的 PDF 中有账户密钥：打印或存到 U 盘后，请删除电脑上的这份。"))
+                Text(tr("打印或存到 U 盘后，请删除电脑上的这份 PDF"))
                     .font(KV.Typography.footnote)
                     .foregroundStyle(KV.Colors.fgSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -867,7 +867,7 @@ extension AppModel {
             showToast(tr("主密码正确"))
             return true
         } catch KeevoError.WrongCredentials {
-            errorMessage = tr("主密码不正确，再试一次。如果想不起来，请用应急包中的信息，并尽快在「设置 → 安全」中修改主密码。")
+            errorMessage = tr("主密码不正确。想不起来时请用应急包，并尽快修改主密码")
             return false
         } catch {
             errorMessage = Self.describe(error)
@@ -879,21 +879,25 @@ extension AppModel {
 struct PracticeSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @FocusState private var passwordFocused: Bool
     @ViewState private var password = ""
     @ViewState private var working = false
 
     var body: some View {
         SheetScaffold(
             title: tr("练习一次主密码"),
-            subtitle: tr("你最近一直用 Touch ID 解锁。输入一次主密码，确认自己还记得它。"),
+            subtitle: tr("输入一次主密码，确认你还记得它"),
             systemImage: "key",
             width: 460
         ) {
             VStack(alignment: .leading, spacing: KV.Space.s3) {
-                LabeledInput(label: tr("主密码"), focused: true) {
-                    SecureField("", text: $password).onSubmit(check)
+                LabeledInput(label: tr("主密码"), focused: passwordFocused) {
+                    SecureField("", text: $password)
+                        .focused($passwordFocused)
+                        .onSubmit(check)
+                        .onAppear { passwordFocused = true }
                 }
-                Text(tr("只在这台 Mac 上核对，不会保存。第 3 天、第 7 天，之后每月提醒一次。"))
+                Text(tr("只在这台 Mac 上核对，不会保存"))
                     .font(KV.Typography.footnote)
                     .foregroundStyle(KV.Colors.fgSecondary)
                 ErrorText()

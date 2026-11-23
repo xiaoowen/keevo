@@ -24,7 +24,7 @@ struct HistorySheet: View {
     var body: some View {
         SheetScaffold(
             title: tr("历史版本"),
-            subtitle: tr("最近 20 个版本，以及 90 天内（按 Keevo 的运行时间计）的全部版本会保留内容；更早的只保留修订记录。"),
+            subtitle: tr("保留最近 20 个版本与 90 天内的全部版本"),
             systemImage: "clock.arrow.circlepath",
             width: 760
         ) {

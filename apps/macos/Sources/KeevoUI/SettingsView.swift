@@ -48,6 +48,7 @@ struct SettingsView: View {
                 }
                 Spacer()
             }
+            .arrowSelection(Array(Page.allCases), selection: page) { page = $0 }
             .padding(KV.Space.s2)
             .padding(.top, KV.Space.s2)
             .frame(width: 180)
@@ -96,9 +97,9 @@ private struct SecuritySettings: View {
         VStack(alignment: .leading, spacing: KV.Space.s5) {
             SettingsSection(
                 title: tr("自动锁定"),
-                footer: tr("睡眠、锁定屏幕、启动屏幕保护程序或切换用户时会立即锁定。")
+                footer: tr("睡眠、锁屏、屏幕保护或切换用户时立即锁定")
             ) {
-                SettingsRow(title: tr("闲置后锁定"), detail: tr("这台 Mac 在这段时间内没有任何键盘、鼠标或触控板操作时锁定。")) {
+                SettingsRow(title: tr("闲置后锁定"), detail: tr("这段时间内没有任何操作时锁定")) {
                     Picker(tr("闲置后锁定"), selection: $model.autoLockMinutes) {
                         ForEach(AppModel.autoLockChoices, id: \.self) { minutes in
                             Text(minutes < 60 ? tr("{} 分钟", "\(minutes)") : tr("1 小时")).tag(minutes)
@@ -111,7 +112,7 @@ private struct SecuritySettings: View {
             }
             SettingsSection(
                 title: tr("解锁"),
-                footer: tr("以下情况必须输入主密码：Mac 重启后的首次解锁、超过上面的天数、Touch ID 连续 3 次未能识别、指纹有变化。这样你不会忘记主密码。")
+                footer: tr("重启后、超过上面的天数、连续 3 次未识别或指纹变化时，仍需输入主密码")
             ) {
                 SettingsRow(title: tr("使用 Touch ID 解锁"), detail: touchIDDetail) {
                     Toggle(tr("使用 Touch ID 解锁"), isOn: Binding(
@@ -140,9 +141,9 @@ private struct SecuritySettings: View {
             }
             SettingsSection(
                 title: tr("应急包"),
-                footer: tr("在新设备上登录、或从备份恢复时，需要主密码和应急包中的账户密钥。")
+                footer: tr("在新设备上登录或从备份恢复时需要它")
             ) {
-                SettingsRow(title: tr("重新保存应急包"), detail: tr("先确认是你本人，然后可以保存 PDF 或打印。")) {
+                SettingsRow(title: tr("重新保存应急包"), detail: nil) {
                     Button(tr("保存应急包…")) { askKit = true }
                         .buttonStyle(.kvBordered)
                         .disabled(model.phase != .unlocked)
@@ -150,11 +151,11 @@ private struct SecuritySettings: View {
             }
             SettingsSection(
                 title: tr("隐私"),
-                footer: tr("并非所有截屏方式都遵守这一设置，它不能防范这台 Mac 上的恶意软件。")
+                footer: tr("部分截屏软件不遵守这一设置，也防不了这台 Mac 上的恶意软件")
             ) {
                 SettingsRow(
                     title: tr("不允许截屏或屏幕共享 Keevo 的窗口"),
-                    detail: tr("遵守 macOS 窗口共享设置的截屏、录屏与屏幕共享软件看不到 Keevo，避免共享屏幕时意外露出密码。")
+                    detail: tr("共享屏幕时不会意外露出密码")
                 ) {
                     Toggle(tr("不允许截屏或屏幕共享"), isOn: $model.hideFromScreenCapture)
                         .kvSwitch(tr("不允许截屏或屏幕共享 Keevo 的窗口"))
@@ -180,7 +181,7 @@ private struct SecuritySettings: View {
     }
 
     private var touchIDDetail: String? {
-        if !model.touchIDAvailable { return tr("这台 Mac 没有可用的 Touch ID，或还没有登记指纹。") }
+        if !model.touchIDAvailable { return tr("没有可用的 Touch ID，或还没有登记指纹") }
         if model.phase != .unlocked { return tr("解锁 Keevo 之后才能更改。") }
         return nil
     }
@@ -226,7 +227,7 @@ private struct DisableTouchIDSheet: View {
     var body: some View {
         ReverifySheet(
             title: tr("关闭 Touch ID"),
-            message: tr("请先确认是你本人。关闭后，解锁时需要输入主密码。"),
+            message: tr("关闭后，解锁时需要输入主密码"),
             confirmTitle: tr("关闭 Touch ID")
         ) { password in
             await model.disableTouchID(password: password)

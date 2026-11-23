@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later（附加 App Store 许可，见仓库根目录 LICENSE）
 //
-// 条目编辑器：在详情栏中直接编辑（参考 1Password 的编辑模式），顶部为取消与保存。
+// 条目编辑器：在详情栏中直接编辑（设计稿"条目的展示、编辑与新建"），顶部为带斜纹的编辑栏、取消与保存；
+// 常用字段在卡片里，网站、"添加更多"、备注在卡片下方的浅灰块里，标签在最后。
 // 保存时把改动算成一组编辑，一次写入（spec/revisions.md §5.4 写时收敛）。
 // 存在冲突、撤销删除或来源不一致的内容时，编辑界面顶部展示冲突面板（同上，"界面要求"）。
 //
@@ -211,13 +212,9 @@ struct ItemEditor: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            DetailTopBar {
-                Text(tr("正在编辑"))
-                    .font(KV.Typography.footnote)
-                    .foregroundStyle(KV.Colors.fgSecondary)
-                    .padding(.trailing, KV.Space.s1)
+            EditBar(title: tr("编辑")) {
                 Button(tr("取消")) { close() }
-                    .buttonStyle(.kvBordered)
+                    .buttonStyle(.kvToolbar)
                     .keyboardShortcut(.cancelAction)
                     .help(tr("放弃修改（esc）"))
                 Button(tr("保存")) { save() }
@@ -227,7 +224,7 @@ struct ItemEditor: View {
                     .help(tr("保存（⌘S）"))
             }
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 14) {
                     header
                     if needsAttention {
                         VStack(alignment: .leading, spacing: KV.Space.s2) {
@@ -236,12 +233,12 @@ struct ItemEditor: View {
                         }
                     }
                     ForEach(groups) { group in
-                        groupView(group)
+                        if group.section == nil {
+                            defaultGroupEditor(group.fields)
+                        } else {
+                            groupView(group)
+                        }
                     }
-                    Button { addSection() } label: {
-                        Label(tr("添加分区"), systemImage: "plus.rectangle.on.rectangle")
-                    }
-                    .buttonStyle(.kvLink)
                     tagEditor
                     if let error {
                         HStack(spacing: KV.Space.s2) {
@@ -252,7 +249,7 @@ struct ItemEditor: View {
                         }
                     }
                 }
-                .padding(.horizontal, 28)
+                .padding(.horizontal, 32)
                 .padding(.vertical, KV.Space.s6)
                 .frame(maxWidth: 760, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -268,37 +265,56 @@ struct ItemEditor: View {
     }
 
     private var header: some View {
-        HStack(spacing: 14) {
-            SiteIcon(title: title, url: fields.first { $0.kind == "url" && !removed.contains($0.id) }?.value, size: 48)
-            VStack(alignment: .leading, spacing: 4) {
-                TextField(tr("标题"), text: $title)
-                    .textFieldStyle(.plain)
-                    .font(KV.Typography.title)
-                    .foregroundStyle(KV.Colors.fgPrimary)
-                    .focused($titleFocused)
-                    .padding(.horizontal, KV.Space.s2)
-                    .padding(.vertical, 3)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .strokeBorder(titleFocused ? KV.Colors.focusRing : KV.Colors.borderSubtle, lineWidth: titleFocused ? 2 : 1)
-                    )
-                    .accessibilityLabel(tr("标题"))
-                Text("\(ItemTypeInfo.name(base.itemType)) · \(ItemDetailView.vaultLabel(model.vaults.first { $0.id == base.vaultId }?.name ?? ""))")
-                    .font(KV.Typography.footnote)
-                    .foregroundStyle(KV.Colors.fgSecondary)
-                    .padding(.leading, KV.Space.s2)
-            }
+        HStack(spacing: KV.Space.s4) {
+            SiteIcon(title: title, url: fields.first { $0.kind == "url" && !removed.contains($0.id) }?.value, size: 60)
+            TitleField(title: $title, focused: $titleFocused)
             Button { favorite.toggle() } label: {
                 Image(systemName: favorite ? "star.fill" : "star")
-                    .font(.system(size: 16))
-                    .foregroundStyle(favorite ? KV.Colors.statusWarningFg : KV.Colors.fgTertiary)
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(favorite ? KV.Colors.statusWarningFg : KV.Colors.fgSecondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.kvToolbar)
             .help(favorite ? tr("取消收藏") : tr("收藏"))
             .accessibilityLabel(favorite ? tr("取消收藏") : tr("收藏"))
         }
+    }
+
+    private func row(_ field: DraftField, website: Bool = false) -> some View {
+        DraftFieldRow(
+            field: binding(field),
+            sections: sections.filter { !removedSections.contains($0.id) },
+            website: website,
+            canMoveUp: canMove(field.id, by: -1),
+            canMoveDown: canMove(field.id, by: 1),
+            move: { move(field.id, by: $0) },
+            moveTo: { moveTo(field.id, section: $0) },
+            remove: { remove(field.id) }
+        )
+    }
+
+    /// 默认分区（设计稿）：常用字段在卡片里；网站、"添加更多"、备注是卡片下方的浅灰块。
+    @ViewBuilder
+    private func defaultGroupEditor(_ list: [DraftField]) -> some View {
+        let card = list.filter { $0.kind != "url" && $0.purpose != "notes" }
+        let urls = list.filter { $0.kind == "url" }
+        if !card.isEmpty {
+            KVCard {
+                ForEach(Array(card.enumerated()), id: \.element.id) { index, field in
+                    if index > 0 { CardRowDivider() }
+                    row(field)
+                }
+            }
+        }
+        if !urls.isEmpty || base.itemType == "login" {
+            WebsitesEditor(
+                fields: urls,
+                row: { row($0, website: true) },
+                add: { fields.append(DraftField(newKind: "url", section: nil)) },
+                reorder: moveBefore
+            )
+        }
+        AddMoreMenu(add: { fields.append(DraftField(newKind: $0, section: nil)) }, addSection: addSection)
+        ForEach(list.filter { $0.purpose == "notes" }) { NotesEditor(field: binding($0)) }
     }
 
     private func groupView(_ group: EditorGroup) -> some View {
@@ -317,15 +333,7 @@ struct ItemEditor: View {
             KVCard {
                 ForEach(Array(group.fields.enumerated()), id: \.element.id) { index, field in
                     if index > 0 { CardRowDivider() }
-                    DraftFieldRow(
-                        field: binding(field),
-                        sections: sections.filter { !removedSections.contains($0.id) },
-                        canMoveUp: canMove(field.id, by: -1),
-                        canMoveDown: canMove(field.id, by: 1),
-                        move: { move(field.id, by: $0) },
-                        moveTo: { moveTo(field.id, section: $0) },
-                        remove: { remove(field.id) }
-                    )
+                    row(field)
                 }
                 if !group.fields.isEmpty { CardRowDivider() }
                 AddFieldMenu { kind in
@@ -336,34 +344,7 @@ struct ItemEditor: View {
     }
 
     private var tagEditor: some View {
-        VStack(alignment: .leading, spacing: KV.Space.s2) {
-            GroupTitle(text: tr("标签"))
-            FlowLayout {
-                ForEach(tags, id: \.self) { tag in
-                    HStack(spacing: KV.Space.s1) {
-                        Text(tag).font(KV.Typography.footnote).foregroundStyle(KV.Colors.accentFg)
-                        Button { tags.removeAll { $0 == tag } } label: {
-                            Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(KV.Colors.accentFg)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(tr("移除标签{}", "\(tag)"))
-                    }
-                    .padding(.leading, 10)
-                    .padding(.trailing, KV.Space.s2)
-                    .padding(.vertical, 3)
-                    .background(KV.Colors.accentSubtle, in: Capsule())
-                }
-                TextField(tr("添加标签"), text: $newTag)
-                    .textFieldStyle(.plain)
-                    .font(KV.Typography.footnote)
-                    .frame(width: 120)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 3)
-                    .overlay(Capsule().strokeBorder(KV.Colors.borderSubtle, style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
-                    .onSubmit(addTag)
-                    .help(tr("输入后按回车添加"))
-            }
-        }
+        TagEditor(tags: $tags, newTag: $newTag, add: addTag)
     }
 
     // MARK: - 排列
@@ -424,6 +405,19 @@ struct ItemEditor: View {
         } else {
             removedSections.insert(id)
         }
+    }
+
+    /// 拖动网站排序：把 `id` 移到同一分区中 `target` 之前（新字段保存前不能移动）。
+    private func moveBefore(_ id: String, _ target: String) {
+        guard id != target,
+              let from = fields.firstIndex(where: { $0.id == id }),
+              let to = fields.firstIndex(where: { $0.id == target }),
+              !fields[from].isNew, !fields[to].isNew,
+              fields[from].sectionId == fields[to].sectionId
+        else { return }
+        let field = fields.remove(at: from)
+        let index = fields.firstIndex { $0.id == target } ?? to
+        fields.insert(field, at: index)
     }
 
     private func addTag() {
@@ -595,10 +589,12 @@ struct AddFieldMenu: View {
     }
 }
 
-/// 编辑器中的一行字段：名称在上（可改），值在下；右侧为显示、生成、导入与"⋯"菜单。
+/// 编辑器中的一行字段（设计稿）：名称在上（品牌色小字，可改），值在下，输入框无边框；右侧为显示、生成、导入与
+/// "⋯"菜单。网站一行另有匹配方式与删除按钮，其余操作在右键菜单中。
 struct DraftFieldRow: View {
     @Binding var field: DraftField
     let sections: [DraftSection]
+    var website = false
     let canMoveUp: Bool
     let canMoveDown: Bool
     let move: (Int) -> Void
@@ -608,30 +604,29 @@ struct DraftFieldRow: View {
     @ViewState private var generating = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: KV.Space.s2) {
-                TextField(tr("字段名称"), text: $field.label)
-                    .textFieldStyle(.plain)
-                    .font(KV.Typography.footnote)
-                    .foregroundStyle(KV.Colors.fgSecondary)
-                    .accessibilityLabel(tr("字段名称"))
-                Spacer(minLength: 0)
-                fieldMenu
-            }
-            if !FieldKindInfo.structured(field.kind) {
-                HStack(alignment: .top, spacing: KV.Space.s1) {
-                    valueEditor
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center, spacing: KV.Space.s1) {
+                VStack(alignment: .leading, spacing: 2) {
+                    TextField(tr("字段名称"), text: $field.label)
+                        .textFieldStyle(.plain)
+                        .font(KV.Typography.footnote)
+                        .foregroundStyle(KV.Colors.accentFg)
+                        .accessibilityLabel(tr("字段名称"))
+                    if !FieldKindInfo.structured(field.kind) { valueEditor }
                 }
+                actions
             }
             switch field.kind {
             case "kv_list": KvEditor(entries: $field.kv)
             case "recovery_codes": CodesEditor(codes: $field.codes)
-            case "totp": OtpPreview(text: field.loaded ? field.value : "", unchanged: !field.loaded && field.value.isEmpty)
+            case "totp": OtpPreview(text: field.loaded ? field.value : "")
             default: FormatHint(kind: field.kind, value: field.value)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.leading, 14)
+        .padding(.trailing, KV.Space.s2)
+        .padding(.vertical, 9)
+        .contextMenu { if website { menuItems } }
         .popover(isPresented: $generating) {
             GeneratorView { field.replace(with: $0) }
         }
@@ -642,38 +637,73 @@ struct DraftFieldRow: View {
         if field.hidesValue {
             Group {
                 if revealed {
-                    TextField("", text: $field.value, prompt: DraftFieldRow.prompt(tr("值"))).kvInput(mono: true)
+                    TextField("", text: $field.value, prompt: Self.prompt(tr("值"))).kvInline(mono: true)
                 } else {
-                    SecureField("", text: $field.value, prompt: Self.prompt(field.loaded ? "" : tr("保持不变"))).kvInput()
+                    // 没有取出原值时显示圆点：不修改就保持原值，输入即替换
+                    SecureField("", text: $field.value, prompt: Self.prompt(field.loaded ? "" : "••••••••••")).kvInline()
                 }
             }
             .accessibilityLabel(field.label)
+        } else if field.kind == "multiline" {
+            TextField("", text: $field.value, prompt: Self.prompt(tr("值")), axis: .vertical)
+                .lineLimit(1...12)
+                .kvInline()
+                .accessibilityLabel(field.label)
+        } else {
+            TextField("", text: $field.value, prompt: Self.prompt(placeholder))
+                .kvInline()
+                .accessibilityLabel(field.label)
+        }
+    }
+
+    @ViewBuilder
+    private var actions: some View {
+        if field.hidesValue {
             IconButton(systemImage: revealed ? "eye.slash" : "eye", label: revealed ? tr("隐藏") : tr("显示")) {
                 field.load()
                 revealed.toggle()
             }
-            .padding(.top, 3)
             if field.kind == "concealed" {
                 IconButton(systemImage: "wand.and.stars", label: tr("生成密码")) { generating = true }
-                    .padding(.top, 3)
             }
             if field.kind == "totp" {
                 OtpImportMenu { text in
                     field.replace(with: text)
                     revealed = true
                 }
-                .padding(.top, 3)
             }
-        } else if field.kind == "multiline" {
-            TextField("", text: $field.value, prompt: Self.prompt(tr("值")), axis: .vertical)
-                .lineLimit(3...12)
-                .kvInput()
-                .accessibilityLabel(field.label)
-        } else {
-            TextField("", text: $field.value, prompt: Self.prompt(placeholder))
-                .kvInput()
-                .accessibilityLabel(field.label)
         }
+        if website {
+            Menu {
+                Text(Self.matchMode(field.value))
+            } label: {
+                Image(systemName: "slider.horizontal.3").font(.system(size: 13, weight: .medium))
+            }
+            .menuStyle(.button)
+            .buttonStyle(.kvToolbar)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help(Self.matchMode(field.value))
+            .accessibilityLabel(tr("匹配方式"))
+            Button(action: remove) {
+                Image(systemName: "minus.circle")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(KV.Colors.statusDangerFg)
+            }
+            .buttonStyle(.kvToolbar)
+            .help(tr("删除"))
+            .accessibilityLabel(tr("删除{}", "\(field.label)"))
+        } else {
+            IconMenu(label: field.isNew ? tr("字段操作（新字段保存后才能调整位置）") : tr("字段操作")) { menuItems }
+        }
+    }
+
+    /// 填充时的匹配方式（自动决定，docs/architecture.md §5.3）。
+    static func matchMode(_ value: String) -> String {
+        guard let url = URL(string: value.trimmingCharacters(in: .whitespaces)), url.host != nil else {
+            return tr("填充时按域名匹配")
+        }
+        return tr("填充时{}", FieldRow.matchMode(url))
     }
 
     static func prompt(_ text: String) -> Text {
@@ -683,36 +713,262 @@ struct DraftFieldRow: View {
     private var placeholder: String {
         switch field.kind {
         case "date": tr("例如 2026-11-18")
-        case "url": "https://…"
+        case "url": "https://example.com"
         case "email": "name@example.com"
         default: tr("值")
         }
     }
 
-    private var fieldMenu: some View {
-        IconMenu(label: field.isNew ? tr("字段操作（新字段保存后才能调整位置）") : tr("字段操作")) {
-            Button(tr("上移")) { move(-1) }.disabled(!canMoveUp)
-            Button(tr("下移")) { move(1) }.disabled(!canMoveDown)
-            if !field.isNew {
-                Menu(tr("移到分区")) {
-                    Button(tr("默认分区")) { moveTo(nil) }.disabled(field.sectionId == nil)
-                    ForEach(sections) { s in
-                        Button(s.label) { moveTo(s.id) }.disabled(field.sectionId == s.id)
-                    }
+    @ViewBuilder
+    private var menuItems: some View {
+        Button(tr("上移")) { move(-1) }.disabled(!canMoveUp)
+        Button(tr("下移")) { move(1) }.disabled(!canMoveDown)
+        if !field.isNew {
+            Menu(tr("移到分区")) {
+                Button(tr("默认分区")) { moveTo(nil) }.disabled(field.sectionId == nil)
+                ForEach(sections) { s in
+                    Button(s.label) { moveTo(s.id) }.disabled(field.sectionId == s.id)
                 }
             }
-            Menu(tr("自动填充用途")) {
-                ForEach(FieldKindInfo.purposes, id: \.0) { purpose, name in
-                    Button {
-                        field.purpose = purpose
-                    } label: {
-                        if field.purpose == purpose { Label(name, systemImage: "checkmark") } else { Text(name) }
-                    }
+        }
+        Menu(tr("自动填充用途")) {
+            ForEach(FieldKindInfo.purposes, id: \.0) { purpose, name in
+                Button {
+                    field.purpose = purpose
+                } label: {
+                    if field.purpose == purpose { Label(name, systemImage: "checkmark") } else { Text(name) }
                 }
+            }
+        }
+        Divider()
+        Button(tr("删除字段"), role: .destructive, action: remove)
+    }
+}
+
+/// 编辑栏（设计稿）：浅色斜纹底，左侧"编辑"，右侧取消与保存。
+struct EditBar<Actions: View>: View {
+    let title: String
+    @ViewBuilder let actions: Actions
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: KV.Space.s2) {
+                Text(title)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(KV.Colors.accentFg)
+                Spacer()
+                actions
+            }
+            .padding(.leading, 20)
+            .padding(.trailing, KV.Space.s4)
+            .frame(height: 54)
+            .background(StripedBackground())
+            Rectangle().fill(KV.Colors.bgSelected).frame(height: 1)
+        }
+    }
+}
+
+/// 浅色斜纹：编辑状态的标记。
+struct StripedBackground: View {
+    var body: some View {
+        Canvas { context, size in
+            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(KV.Colors.accentSubtle))
+            var x: CGFloat = -size.height
+            while x < size.width {
+                var stripe = Path()
+                stripe.move(to: CGPoint(x: x, y: size.height))
+                stripe.addLine(to: CGPoint(x: x + 10, y: size.height))
+                stripe.addLine(to: CGPoint(x: x + 10 + size.height, y: 0))
+                stripe.addLine(to: CGPoint(x: x + size.height, y: 0))
+                stripe.closeSubpath()
+                context.fill(stripe, with: .color(KV.Colors.bgSelected.opacity(0.45)))
+                x += 20
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// 大号标题输入框（设计稿）：浅灰底，聚焦时显示焦点框。
+struct TitleField: View {
+    @Binding var title: String
+    var focused: FocusState<Bool>.Binding
+
+    var body: some View {
+        TextField("", text: $title, prompt: DraftFieldRow.prompt(tr("输入标题")))
+            .textFieldStyle(.plain)
+            .font(.system(size: 22, weight: .bold))
+            .foregroundStyle(KV.Colors.fgPrimary)
+            .focused(focused)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(focused.wrappedValue ? KV.Colors.focusRing : Color.clear, lineWidth: 2)
+            )
+            .accessibilityLabel(tr("标题"))
+    }
+}
+
+/// 网站（设计稿）：浅灰块，每个网址一行，左侧把手拖动排序，末尾"添加另一个网站"。
+struct WebsitesEditor<Row: View>: View {
+    let fields: [DraftField]
+    @ViewBuilder let row: (DraftField) -> Row
+    let add: () -> Void
+    let reorder: (String, String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(fields) { field in
+                row(field)
+                    .overlay(alignment: .leading) {
+                        if !field.isNew {
+                            Image(systemName: "line.3.horizontal")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(KV.Colors.fgSecondary)
+                                .frame(width: 18, height: 28)
+                                .contentShape(Rectangle())
+                                .offset(x: -24)
+                                .draggable(field.id)
+                                .help(tr("拖动排序"))
+                                .accessibilityLabel(tr("拖动排序"))
+                        }
+                    }
+                    .dropDestination(for: String.self) { ids, _ in
+                        guard let id = ids.first else { return false }
+                        reorder(id, field.id)
+                        return true
+                    }
+                Rectangle().fill(KV.Colors.borderSubtle).frame(height: 1)
+            }
+            Button(action: add) {
+                Label(tr("添加另一个网站"), systemImage: "plus")
+                    .font(KV.Typography.body.weight(.medium))
+                    .foregroundStyle(KV.Colors.accentFg)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+/// "添加更多"（设计稿）：浅灰块，点开选择字段类型或添加分区。
+struct AddMoreMenu: View {
+    let add: (String) -> Void
+    let addSection: () -> Void
+
+    var body: some View {
+        Menu {
+            ForEach(FieldKindInfo.addable, id: \.self) { kind in
+                Button(FieldKindInfo.name(kind)) { add(kind) }
             }
             Divider()
-            Button(tr("删除字段"), role: .destructive, action: remove)
+            Button(tr("添加分区"), action: addSection)
+        } label: {
+            HStack(spacing: KV.Space.s1_5) {
+                Image(systemName: "plus").font(.system(size: 12, weight: .semibold))
+                Text(tr("添加更多")).font(KV.Typography.body.weight(.medium))
+                Spacer()
+                Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold)).foregroundStyle(KV.Colors.fgSecondary)
+            }
+            .foregroundStyle(KV.Colors.accentFg)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .contentShape(Rectangle())
         }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+    }
+}
+
+/// 备注（设计稿）：浅灰块，标签在上，多行输入。
+struct NotesEditor: View {
+    @Binding var field: DraftField
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(tr(field.label))
+                .font(KV.Typography.footnote)
+                .foregroundStyle(KV.Colors.accentFg)
+            TextField("", text: $field.value, prompt: DraftFieldRow.prompt(tr("添加备注")), axis: .vertical)
+                .lineLimit(3...12)
+                .kvInline()
+                .accessibilityLabel(tr(field.label))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+/// 标签（设计稿）：浅灰胶囊，点开可移除；"添加标签"点开后输入，回车添加。
+struct TagEditor: View {
+    @Binding var tags: [String]
+    @Binding var newTag: String
+    let add: () -> Void
+    @ViewState private var adding = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            FieldLabel(text: tr("标签"))
+            FlowLayout {
+                ForEach(tags, id: \.self) { tag in
+                    Menu {
+                        Button(tr("移除"), role: .destructive) { tags.removeAll { $0 == tag } }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(tag).font(KV.Typography.body).foregroundStyle(KV.Colors.fgPrimary)
+                            Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(KV.Colors.fgSecondary)
+                        }
+                        .padding(.leading, 10)
+                        .padding(.trailing, KV.Space.s2)
+                        .padding(.vertical, 3)
+                        .background(KV.Colors.bgSunken, in: Capsule())
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .accessibilityLabel(tr("标签{}", "\(tag)"))
+                }
+                if adding {
+                    TextField("", text: $newTag, prompt: DraftFieldRow.prompt(tr("标签名称")))
+                        .textFieldStyle(.plain)
+                        .font(KV.Typography.body)
+                        .frame(width: 120)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 3)
+                        .background(KV.Colors.bgSunken, in: Capsule())
+                        .focused($focused)
+                        .onSubmit {
+                            add()
+                            adding = false
+                        }
+                        .onAppear { focused = true }
+                } else {
+                    Button { adding = true } label: {
+                        Label(tr("添加标签"), systemImage: "plus")
+                            .font(KV.Typography.body.weight(.medium))
+                            .foregroundStyle(KV.Colors.accentFg)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 3)
+                            .background(KV.Colors.accentSubtle, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
     }
 }
 
@@ -749,13 +1005,9 @@ struct FormatHint: View {
 /// 一次性密码的预览：解析后显示发行方、账户与参数，不显示密钥。
 struct OtpPreview: View {
     let text: String
-    let unchanged: Bool
 
     var body: some View {
-        if unchanged {
-            Text(tr("保持不变。可以粘贴 otpauth:// 链接或密钥，也可以从二维码导入。"))
-                .font(KV.Typography.caption).foregroundStyle(KV.Colors.fgSecondary)
-        } else if !text.isEmpty {
+        if !text.isEmpty {
             if let info = try? parseOtp(text: text) {
                 let who = [info.issuer, info.account].compactMap { $0 }.joined(separator: " · ")
                 Text(tr("{}：{} 位，每 {} 秒，{}", "\(who.isEmpty ? tr("一次性密码") : who)", "\(info.digits)", "\(info.period)", "\(info.algorithm)"))
