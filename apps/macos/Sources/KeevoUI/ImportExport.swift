@@ -593,19 +593,22 @@ struct ExportStrengthMeter: View {
         let strength = password.isEmpty ? nil : exportPasswordStrength(password: password)
         VStack(alignment: .leading, spacing: 4) {
             MasterStrengthMeter(strength: strength)
-            Text(reason(strength))
-                .font(KV.Typography.footnote)
-                .foregroundStyle(KV.Colors.fgSecondary)
-                .fixedSize(horizontal: false, vertical: true)
+            // 已经够强时不再说明，强度条上的"很强"就够了
+            if let reason = reason(strength) {
+                Text(reason)
+                    .font(KV.Typography.footnote)
+                    .foregroundStyle(KV.Colors.fgSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
-    private func reason(_ s: PasswordStrengthInfo?) -> String {
+    private func reason(_ s: PasswordStrengthInfo?) -> String? {
         guard let s else { return tr("需达到很强") }
         if password.unicodeScalars.count < 10 { return tr("至少 10 个字符") }
         if password.allSatisfy(\.isWhitespace) { return tr("不能全是空格") }
         if s.score < 4 { return tr("还不够强：加长，或多加几个随机的词") }
-        return tr("约 {} 比特熵", "\(Int(s.bits.rounded()))")
+        return nil
     }
 }
 

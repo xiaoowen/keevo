@@ -261,9 +261,11 @@ private struct PasswordStep: View {
                 }
             }
             MasterStrengthMeter(strength: strength)
-            Text(detail)
-                .font(KV.Typography.caption)
-                .foregroundStyle(problem != nil && !password.isEmpty ? KV.Colors.statusWarningFg : KV.Colors.fgSecondary)
+            if let detail {
+                Text(detail)
+                    .font(KV.Typography.caption)
+                    .foregroundStyle(problem != nil && !password.isEmpty ? KV.Colors.statusWarningFg : KV.Colors.fgSecondary)
+            }
             Button { generate() } label: { Label(tr("换一个生成的口令短语"), systemImage: "wand.and.stars") }
                 .buttonStyle(.kvLink)
             LabeledInput(label: tr("再输入一次"), hint: confirm.isEmpty || confirm == password ? nil : tr("两次输入不一致"), focused: focus == .confirm) {
@@ -290,11 +292,11 @@ private struct PasswordStep: View {
             .onChange(of: password) { if password != generatedValue { generatedBits = nil } }
     }
 
-    private var detail: String {
+    /// 强度条下的说明：还差什么，或生成的口令短语的构成；够强时不显示（强度条上已经写着级别）。
+    private var detail: String? {
         if password.isEmpty { return tr("至少 {} 个字符", "\(MasterPasswordRule.minLength)") }
-        if let bits = generatedBits { return tr("约 {} 比特熵 · 4 个随机单词", "\(Int(bits.rounded()))") }
-        if let problem { return problem }
-        return tr("约 {} 比特熵", "\(Int((strength?.bits ?? 0).rounded()))")
+        if generatedBits != nil { return tr("4 个随机单词") }
+        return problem
     }
 
     private func generate() {

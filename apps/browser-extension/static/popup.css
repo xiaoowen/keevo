@@ -295,7 +295,6 @@ mark { color: inherit; background: var(--kv-status-warning-bg); border-radius: 2
 .meter.warning .bar.on, .meter.warning .level { background-color: var(--kv-status-warning-fg); color: var(--kv-status-warning-fg); }
 .meter.success .bar.on, .meter.success .level { background-color: var(--kv-status-success-fg); color: var(--kv-status-success-fg); }
 .meter .level { background: none !important; font-weight: 600; margin-left: 2px; }
-.meter .bits { color: var(--kv-fg-secondary); }
 .gen-card { margin-top: var(--kv-space-3); border: 1px solid var(--kv-border-subtle); border-radius: var(--kv-radius-lg); }
 .gen-row { display: flex; align-items: center; gap: var(--kv-space-2); padding: var(--kv-space-2) var(--kv-space-3); font: var(--kv-type-body); }
 .gen-row + .gen-row { border-top: 1px solid var(--kv-border-subtle); }

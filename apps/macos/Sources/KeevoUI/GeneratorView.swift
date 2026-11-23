@@ -206,7 +206,8 @@ struct GeneratorView: View {
     }
 }
 
-/// 熵与强度。强度同时用文字、四段条与颜色表示（docs/ux.md §8）。
+/// 生成的密码的强度：按熵分为弱、一般、强、很强，同时用文字、四段条与颜色表示（docs/ux.md §8）。不显示熵的数值：
+/// "比特"对大多数人没有意义。
 struct StrengthMeter: View {
     let bits: Double
 
@@ -229,10 +230,9 @@ struct StrengthMeter: View {
                 }
             }
             Text(level.1).font(KV.Typography.footnote.weight(.semibold)).foregroundStyle(level.2)
-            Text(tr("约 {} 比特熵", "\(Int(bits.rounded()))")).font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(tr("强度：{}，约 {} 比特熵", "\(level.1)", "\(Int(bits.rounded()))"))
+        .accessibilityLabel(tr("强度：{}", "\(level.1)"))
     }
 }
 

@@ -214,20 +214,20 @@ struct ScoreMeter: View {
 
     var body: some View {
         let (level, label, color) = SecurityText.strengthLabel(strength.score)
+        // 有具体问题时（如"常见密码"）跟在级别后面，否则只显示级别
         let reason = SecurityText.warning(strength.warning, strength.warningDetail)
-            ?? tr("约 {} 比特熵", "\(Int(strength.bits.rounded()))")
         HStack(spacing: KV.Space.s2) {
             HStack(spacing: 3) {
                 ForEach(0 ..< 4, id: \.self) { i in
                     Capsule().fill(i < level ? color : KV.Colors.borderSubtle).frame(width: 18, height: 4)
                 }
             }
-            Text("\(label) · \(reason)")
+            Text(reason.map { "\(label) · \($0)" } ?? label)
                 .font(KV.Typography.footnote.weight(.semibold))
                 .foregroundStyle(color)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(tr("强度：{}，{}", "\(label)", "\(reason)"))
+        .accessibilityLabel(reason.map { tr("强度：{}，{}", "\(label)", "\($0)") } ?? tr("强度：{}", "\(label)"))
     }
 }
 

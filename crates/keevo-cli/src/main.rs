@@ -535,7 +535,14 @@ fn generate_cmd(mut args: Args) -> Result<i32, CliError> {
     out(&generated.value);
     out("\n");
     if std::io::stderr().is_terminal() {
-        eprint(&format!("约 {:.0} 比特熵", generated.entropy_bits));
+        // 与 Keevo.app 的生成器同一划分；不显示熵的数值
+        let level = match generated.entropy_bits {
+            b if b < 40.0 => "弱",
+            b if b < 60.0 => "一般",
+            b if b < 80.0 => "强",
+            _ => "很强",
+        };
+        eprint(&format!("强度：{level}"));
     }
     Ok(0)
 }

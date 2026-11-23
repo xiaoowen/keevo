@@ -675,9 +675,9 @@ function meter(bits: number): HTMLElement {
     bits < 40 ? [1, t("弱"), "danger"] : bits < 60 ? [2, t("一般"), "warning"] : bits < 80 ? [3, t("强"), "success"] : [4, t("很强"), "success"];
   const box = el("div", undefined, `meter ${cls}`);
   box.setAttribute("role", "img");
-  box.setAttribute("aria-label", t("强度：{}，约 {} 比特熵", String(label), String(Math.round(bits))));
+  box.setAttribute("aria-label", t("强度：{}", String(label)));
   for (let i = 1; i <= 4; i++) box.append(el("span", undefined, i <= level ? "bar on" : "bar"));
-  box.append(el("span", label, "level"), el("span", t("约 {} 比特熵", String(Math.round(bits))), "bits"));
+  box.append(el("span", label, "level"));
   return box;
 }
 

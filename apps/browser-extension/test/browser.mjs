@@ -711,7 +711,7 @@ const send = (msg) => popup.eval(`chrome.runtime.sendMessage(${JSON.stringify(ms
   await waitFor(() => popup.eval(`!!document.querySelector(".gen-value output .classified")`), "生成密码页");
   const gen = await popup.eval(`({ title: document.querySelector("header h1").textContent, meter: document.querySelector(".meter").getAttribute("aria-label") })`);
   assert.equal(gen.title, "生成密码");
-  assert.match(gen.meter, /^强度：.+，约 \d+ 比特熵$/);
+  assert.match(gen.meter, /^强度：(弱|一般|强|很强)$/);
   await shot(popup, "popup-generator");
   await popup.eval(`document.querySelector("header button").click()`);
   await popup.eval(`[...document.querySelectorAll(".links button")].find((b) => b.textContent === "新建登录").click()`);
