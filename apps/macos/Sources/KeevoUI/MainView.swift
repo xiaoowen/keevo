@@ -342,15 +342,19 @@ private struct Sidebar: View {
                 .padding(.bottom, KV.Space.s3)
             }
             .scrollIndicators(.never)
-            HStack(spacing: 6) {
-                Circle().fill(KV.Colors.fgTertiary).frame(width: 7, height: 7)
-                Text(tr("仅在这台 Mac 上 · 未开启同步"))
-                    .font(KV.Typography.footnote)
-                    .foregroundStyle(KV.Colors.fgSecondary)
+            VStack(alignment: .leading, spacing: 10) {
+                UpdateNotice()
+                HStack(spacing: 6) {
+                    Circle().fill(KV.Colors.fgTertiary).frame(width: 7, height: 7)
+                    Text(tr("仅在这台 Mac 上 · 未开启同步"))
+                        .font(KV.Typography.footnote)
+                        .foregroundStyle(KV.Colors.fgSecondary)
+                }
+                .accessibilityElement(children: .combine)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 18)
             .padding(.vertical, 14)
-            .accessibilityElement(children: .combine)
         }
         .background(KV.Colors.bgSurface)
     }

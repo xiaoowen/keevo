@@ -573,6 +573,7 @@ struct GeneralSettings: View {
                         .onChange(of: practice) { PracticeSchedule.enabled = practice }
                 }
             }
+            UpdateSettingsSection()
         }
     }
 }

@@ -569,6 +569,44 @@ pub fn generate_password(recipe: GeneratorRecipe) -> Result<GeneratedPassword, K
     })
 }
 
+/// Keevo 的版本（取自 Cargo 工作区），如 `0.1.0-alpha.1`。应用包的短版本只有三段数字，显示与检查更新用这个。
+#[uniffi::export]
+#[must_use]
+pub fn keevo_version() -> String {
+    env!("CARGO_PKG_VERSION").to_owned()
+}
+
+/// 一个可以提示给用户的新版本（检查更新）。
+#[derive(uniffi::Record)]
+pub struct ReleaseInfo {
+    /// 版本号，如 `0.1.0-alpha.2`。
+    pub version: String,
+    /// 发布页，必定在 `https://github.com/<仓库>/releases/` 之下。
+    pub url: String,
+}
+
+/// 从 GitHub API `GET /repos/<repo>/releases` 的响应中挑出比当前版本新的版本（`keevo_core::update`）。
+/// 没有更新的版本时为 `None`。只解析、不联网。
+///
+/// # Errors
+/// 响应不是预期的格式时返回 [`KeevoError::InvalidInput`]（算作检查失败）。
+#[uniffi::export]
+pub fn newest_release(
+    releases_json: String,
+    repo: String,
+) -> Result<Option<ReleaseInfo>, KeevoError> {
+    keevo_core::update::newest(env!("CARGO_PKG_VERSION"), &releases_json, &repo)
+        .map(|r| {
+            r.map(|r| ReleaseInfo {
+                version: r.version,
+                url: r.url,
+            })
+        })
+        .map_err(|e| KeevoError::InvalidInput {
+            message: e.to_string(),
+        })
+}
+
 /// 生成一个新的随机 ID（十六进制），用于在同一批编辑中新建分区并引用它。
 ///
 /// # Errors

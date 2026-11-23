@@ -22,6 +22,7 @@ pub mod security;
 pub mod ssh_agent;
 pub mod strength;
 pub mod templates;
+pub mod update;
 pub mod url_match;
 mod vault;
 

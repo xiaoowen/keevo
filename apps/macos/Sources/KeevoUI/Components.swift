@@ -753,6 +753,8 @@ struct SettingsSection<Content: View>: View {
 struct SettingsRow<Control: View>: View {
     let title: String
     var detail: String?
+    /// 说明用品牌色加粗（例如"有新版本"）。
+    var emphasizeDetail = false
     @ViewBuilder let control: Control
 
     var body: some View {
@@ -761,8 +763,8 @@ struct SettingsRow<Control: View>: View {
                 Text(title).font(KV.Typography.body).foregroundStyle(KV.Colors.fgPrimary)
                 if let detail {
                     Text(detail)
-                        .font(KV.Typography.footnote)
-                        .foregroundStyle(KV.Colors.fgSecondary)
+                        .font(emphasizeDetail ? KV.Typography.footnote.weight(.semibold) : KV.Typography.footnote)
+                        .foregroundStyle(emphasizeDetail ? KV.Colors.accentFg : KV.Colors.fgSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }

@@ -28,6 +28,12 @@ public struct KeevoApp: App {
         .defaultSize(width: 1200, height: 760)
         .commands {
             CommandGroup(after: .appInfo) {
+                // 打开"设置 → 通用"中的"更新"一节，并立即检查（设计稿"强度、双击复制、排序与检查更新"）
+                Button(tr("检查更新…")) {
+                    model.openSettings(page: .general)
+                    Task { await UpdateChecker.shared.check() }
+                }
+                Divider()
                 Button(tr("立即锁定")) { model.lock() }
                     .keyboardShortcut("l", modifiers: [.command, .shift])
             }
@@ -152,6 +158,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
+        // 自动检查更新（默认开启，"设置 → 通用"中可以关闭；docs/governance.md §5）
+        MainActor.assumeIsolated { UpdateChecker.shared.start() }
         // 退到后台之后，普通窗口再次出现（菜单栏"打开 Keevo"、浏览器的确认界面、再次打开应用、设置、生成器）时
         // 恢复程序坞图标与应用菜单。快速访问是不激活应用的浮窗（NSPanel），不算在内
         NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { note in
