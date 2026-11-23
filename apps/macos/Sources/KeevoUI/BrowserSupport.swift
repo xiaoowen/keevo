@@ -97,7 +97,8 @@ func presentAndWait(
     DispatchQueue.main.async { [weak model] in
         if case .pairing = item { model?.pairingNotice = nil }
         model?.browserDialog = item
-        NSApp.activate()
+        // 确认界面是主窗口上的 sheet：主窗口被关闭或最小化时，先打开或还原它，否则界面无处显示、到期按拒绝处理
+        model?.showMainWindow()
     }
     guard answered.wait(timeout: until) == .success else {
         DispatchQueue.main.async { [weak model] in

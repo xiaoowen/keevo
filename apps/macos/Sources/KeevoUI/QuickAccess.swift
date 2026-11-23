@@ -418,10 +418,11 @@ extension Array {
 // MARK: - 模型
 
 extension AppModel {
-    /// 打开主窗口并把 Keevo 带到前台（快速访问、菜单栏）。
+    /// 打开主窗口并把 Keevo 带到前台（快速访问、菜单栏、浏览器与命令行工具的确认界面）。最小化的先还原，关闭了的重新打开。
     func showMainWindow() {
         NSApp.activate()
         if let window = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix("main") == true && $0.canBecomeMain }) {
+            if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
         } else {
             openMainWindow?()
