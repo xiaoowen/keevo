@@ -768,10 +768,13 @@ extension View {
     }
 }
 
-/// 分段控件：浅灰底，选中的一段为白色浮起。
+/// 分段控件（设计稿）：浅灰槽中选中的一段为白底。整体只占一个焦点位置，与系统的分段控件相同：开启全键盘控制
+/// 后 Tab 进入，焦点框围住整个控件，← → 切换（设计稿"密码生成器：焦点与复制反馈"）。各段本身不接受焦点，否则
+/// 焦点框会停在第一段上，点别的段也不移动。
 struct KVSegmented<Value: Hashable>: View {
     let options: [(Value, String)]
     @Binding var selection: Value
+    @FocusState private var focused: Bool
 
     var body: some View {
         HStack(spacing: 2) {
@@ -793,11 +796,33 @@ struct KVSegmented<Value: Hashable>: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .focusable(false)
                 .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
         .padding(2)
         .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        // 只在全键盘控制下用 Tab 获得焦点（点击不获得），与按钮相同
+        .focusable(interactions: .activate)
+        .focused($focused)
+        .focusEffectDisabled()
+        .overlay {
+            if focused {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(KV.Colors.focusRing, lineWidth: 2.5)
+                    .padding(-3)
+            }
+        }
+        .onKeyPress(.leftArrow) { move(-1) }
+        .onKeyPress(.rightArrow) { move(1) }
+    }
+
+    private func move(_ step: Int) -> KeyPress.Result {
+        guard let index = options.firstIndex(where: { $0.0 == selection }) else { return .ignored }
+        let next = index + step
+        guard options.indices.contains(next) else { return .handled }
+        selection = options[next].0
+        return .handled
     }
 }
 

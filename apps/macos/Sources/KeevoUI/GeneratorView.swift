@@ -41,7 +41,11 @@ struct GeneratorView: View {
 
     @ViewState private var result: GeneratedPassword?
     @ViewState private var failed = false
+    /// 预览中的密码已复制（强度旁的说明）：到重新生成或剪贴板清除时为止。
     @ViewState private var copied = false
+    /// 刚点过"复制"：按钮显示"已复制"，2 秒后恢复。
+    @ViewState private var justCopied = false
+    @ViewState private var copyFeedback: Task<Void, Never>?
 
     private var mode: Mode { Mode(rawValue: modeRaw) ?? .password }
 
@@ -70,11 +74,16 @@ struct GeneratorView: View {
                     .onChange(of: recipe.description) { regenerate() }
             }
         } footer: {
-            Button(tr("复制")) {
-                if let result {
-                    Clipboard.copy(result.value.expose())
-                    copied = true
+            Button(action: copy) {
+                // 宽度固定，"复制"与"已复制"之间不跳动
+                HStack(spacing: 5) {
+                    if justCopied {
+                        Image(systemName: "checkmark").font(.system(size: 11, weight: .bold))
+                    }
+                    Text(justCopied ? tr("已复制") : tr("复制"))
                 }
+                .foregroundStyle(justCopied ? KV.Colors.accentFg : KV.Colors.fgPrimary)
+                .frame(minWidth: 64)
             }
             .buttonStyle(.kvSecondary)
             .disabled(result == nil)
@@ -92,8 +101,34 @@ struct GeneratorView: View {
                     .keyboardShortcut(.defaultAction)
             }
         }
+        // 打开时焦点给面板本身：否则开启全键盘控制后焦点框停在第一个控件上
+        .kvContainerFocus()
         .onAppear(perform: regenerate)
-        .onDisappear { result = nil }
+        .onDisappear {
+            result = nil
+            copyFeedback?.cancel()
+        }
+    }
+
+    /// 复制预览中的密码：按钮变为"已复制"，强度旁说明剪贴板何时清除（生成器也可能开在独立窗口中，看不到主窗口
+    /// 底部的提示）。
+    private func copy() {
+        guard let result else { return }
+        Clipboard.copy(result.value.expose())
+        copied = true
+        justCopied = true
+        AccessibilityNotification.Announcement(
+            tr("已复制，{} 秒后从剪贴板清除", "\(Int(Clipboard.clearAfter))")
+        ).post()
+        copyFeedback?.cancel()
+        copyFeedback = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            justCopied = false
+            try? await Task.sleep(for: .seconds(Clipboard.clearAfter - 2))
+            guard !Task.isCancelled else { return }
+            copied = false
+        }
     }
 
     @ViewBuilder
@@ -189,7 +224,21 @@ struct GeneratorView: View {
             .padding(.vertical, KV.Space.s3)
             .background(KV.Colors.bgSunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             if let result {
-                StrengthMeter(bits: result.entropyBits)
+                HStack(spacing: KV.Space.s2) {
+                    StrengthMeter(bits: result.entropyBits)
+                    Spacer(minLength: 0)
+                    if copied {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(KV.Colors.accentFg)
+                            Text(tr("已复制 · {} 秒后从剪贴板清除", "\(Int(Clipboard.clearAfter))"))
+                        }
+                        .font(KV.Typography.footnote)
+                        .foregroundStyle(KV.Colors.fgSecondary)
+                        .accessibilityElement(children: .combine)
+                    }
+                }
             }
         }
     }
@@ -198,7 +247,10 @@ struct GeneratorView: View {
         do {
             result = try generatePassword(recipe: recipe)
             failed = false
+            // 剪贴板里已不是预览中的密码
             copied = false
+            justCopied = false
+            copyFeedback?.cancel()
         } catch {
             result = nil
             failed = true
