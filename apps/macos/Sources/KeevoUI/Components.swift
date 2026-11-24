@@ -821,6 +821,47 @@ struct KVSegmented<Value: Hashable>: View {
     }
 }
 
+// MARK: - 口令强度
+
+/// 在后台估计口令强度：输入时不在主线程上计算（个别输入要一两百毫秒），停顿片刻后更新，只采用最后一次输入的
+/// 结果（第 24 小时模糊测试的慢输入）。
+@MainActor
+@Observable
+final class StrengthEstimator {
+    /// 最近一次估计的结果，以及它对应的口令。
+    private(set) var result: PasswordStrengthInfo?
+    private(set) var estimatedFor: String?
+    private var task: Task<Void, Never>?
+
+    /// 口令改变时调用。空口令立即清空。
+    func update(_ password: String, using estimate: @escaping (String) -> PasswordStrengthInfo) {
+        task?.cancel()
+        guard !password.isEmpty else {
+            result = nil
+            estimatedFor = password
+            return
+        }
+        task = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(60))
+            guard !Task.isCancelled else { return }
+            let strength = await Task.detached(priority: .userInitiated) { estimate(password) }.value
+            guard !Task.isCancelled else { return }
+            self?.result = strength
+            self?.estimatedFor = password
+        }
+    }
+
+    /// 已经算出 `password` 的强度：没有算出之前，依赖强度的判断（能否继续）不放行。
+    func isCurrent(for password: String) -> Bool {
+        estimatedFor == password
+    }
+
+    /// `password` 的强度；还没算出时为 nil（界面显示上一次的结果会误导）。
+    func strength(for password: String) -> PasswordStrengthInfo? {
+        isCurrent(for: password) ? result : nil
+    }
+}
+
 // MARK: - 焦点
 
 /// 打开时焦点给容器本身（不画焦点框）。开启全键盘操作时，没有输入框的面板、弹出框会把焦点框放在第一个按钮、

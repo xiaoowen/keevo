@@ -14,6 +14,7 @@
     reason = "下标与长度不超过 MAX_ANALYZED（64），猜测次数用 f64 计算，不会溢出或 panic"
 )]
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::OnceLock;
 
@@ -83,9 +84,45 @@ pub enum Warning {
     Date,
 }
 
+/// 片段 → 它的 zxcvbn 分析（猜测次数与匹配序列）。
+type AnalysisCache = HashMap<Vec<char>, (f64, Vec<Match>)>;
+
+thread_local! {
+    /// 一次估计之内，同一片段的 zxcvbn 分析结果（[`analyze`]）。LZ77 分解与近似周期会对同一个基础片段各分析
+    /// 一次，近似周期的候选之间也常有相同的片段。每次估计开始与结束时清空，不在两次估计之间留下口令的片段。
+    static ANALYZED: RefCell<AnalysisCache> = RefCell::new(HashMap::new());
+}
+
+/// 一段字符的 zxcvbn 分析（不超过 [`MAX_ANALYZED`] 个字符），同一次估计中相同的片段只分析一次。
+fn analyze(w: &[char]) -> Analysis {
+    let hit = ANALYZED.with(|cache| {
+        cache.borrow().get(w).map(|(guesses, sequence)| Analysis {
+            guesses: *guesses,
+            sequence: sequence.clone(),
+        })
+    });
+    if let Some(hit) = hit {
+        return hit;
+    }
+    let result = most_guessable(w, omnimatch(w), false);
+    ANALYZED.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert(w.to_vec(), (result.guesses, result.sequence.clone()));
+    });
+    result
+}
+
 /// 评估密码强度。空密码为 0 分。
 #[must_use]
 pub fn estimate(password: &str) -> Strength {
+    ANALYZED.with(|cache| cache.borrow_mut().clear());
+    let strength = estimate_uncached(password);
+    ANALYZED.with(|cache| cache.borrow_mut().clear());
+    strength
+}
+
+fn estimate_uncached(password: &str) -> Strength {
     // 超过 MAX_WINDOWS 段（1024 个字符）的部分不计入：只会低估
     let chars: Vec<char> = password
         .chars()
@@ -126,7 +163,7 @@ pub fn estimate(password: &str) -> Strength {
 fn estimate_chars(chars: &[char]) -> (f64, Option<Analysis>) {
     let mut best = lz_estimate(chars);
     if chars.len() <= MAX_ANALYZED {
-        let whole = most_guessable(chars, omnimatch(chars), false);
+        let whole = analyze(chars);
         if whole.guesses <= best.0 {
             best = (whole.guesses, Some(whole));
         }
@@ -596,7 +633,7 @@ fn cheapest(
 fn base_estimate(chars: &[char]) -> (f64, Option<Analysis>) {
     let lz = lz_estimate(chars);
     if chars.len() <= MAX_ANALYZED {
-        let whole = most_guessable(chars, omnimatch(chars), false);
+        let whole = analyze(chars);
         if whole.guesses <= lz.0 {
             return (whole.guesses, Some(whole));
         }
@@ -721,7 +758,7 @@ fn lz_estimate(chars: &[char]) -> (f64, Option<Analysis>) {
         let take = literal.len().min(budget);
         budget -= take;
         for w in literal.get(..take).unwrap_or_default().chunks(MAX_ANALYZED) {
-            let result = most_guessable(w, omnimatch(w), false);
+            let result = analyze(w);
             *guesses = (*guesses * result.guesses).min(f64::MAX);
             if first.is_none() {
                 *first = Some(result);
@@ -931,16 +968,67 @@ fn lower(c: char) -> char {
     c.to_lowercase().next().unwrap_or(c)
 }
 
+/// 用哈希集合判断的前缀的最大长度（字符数）；更长的前缀在排好序的词表中二分查找。
+const SHORT_PREFIX: usize = 3;
+
+/// 一个词典的前缀索引：判断某个前缀还能不能延伸成词。
+struct Prefixes {
+    /// 全部词中长度不超过 [`SHORT_PREFIX`] 个字符的前缀。绝大多数子串在两三个字符时就被排除，一次哈希查找即可。
+    short: std::collections::HashSet<&'static str>,
+    /// 全部词，按字节序排序。
+    sorted: Vec<&'static str>,
+}
+
+impl Prefixes {
+    fn contains(&self, prefix: &str, chars: usize) -> bool {
+        if chars <= SHORT_PREFIX {
+            return self.short.contains(prefix);
+        }
+        let i = self.sorted.partition_point(|w| *w < prefix);
+        self.sorted.get(i).is_some_and(|w| w.starts_with(prefix))
+    }
+}
+
+/// 各词典的前缀索引（与 [`ranked`] 的顺序相同）。
+fn prefixes() -> &'static [Prefixes] {
+    static PREFIXES: OnceLock<Vec<Prefixes>> = OnceLock::new();
+    PREFIXES.get_or_init(|| {
+        ranked()
+            .iter()
+            .map(|(_, map)| {
+                let mut sorted: Vec<&'static str> = map.keys().copied().collect();
+                sorted.sort_unstable();
+                let short = sorted
+                    .iter()
+                    .flat_map(|w| {
+                        w.char_indices()
+                            .map(|(i, c)| i.saturating_add(c.len_utf8()))
+                            .take(SHORT_PREFIX)
+                            .filter_map(|end| w.get(..end))
+                    })
+                    .collect();
+                Prefixes { short, sorted }
+            })
+            .collect()
+    })
+}
+
 fn dictionary_match(pw: &[char]) -> Vec<Match> {
     let lowered: Vec<char> = pw.iter().map(|c| lower(*c)).collect();
     let mut out = Vec::new();
     let mut word = String::new();
-    for (dict, map) in ranked() {
+    for ((dict, map), prefixes) in ranked().iter().zip(prefixes()) {
         for i in 0..pw.len() {
             word.clear();
             for j in i..pw.len() {
                 if let Some(c) = lowered.get(j) {
                     word.push(*c);
+                }
+                let chars = j.saturating_sub(i).saturating_add(1);
+                // 词典中没有以它开头的词：更长的也不会是词。只跳过不可能的匹配，结果不变；对 l33t 字符多的输入，
+                // 每种替换组合都要再查一遍词典，逐个比较全部子串很慢（第 24 小时模糊测试的慢输入）
+                if !prefixes.contains(&word, chars) {
+                    break;
                 }
                 if let Some(&rank) = map.get(word.as_str()) {
                     out.push(Match {
@@ -2152,6 +2240,14 @@ mod tests {
                 "above threshold, three copies",
                 "le%mein123!le#mein123!le&mein123!".to_owned(),
             ),
+            // 第 24 小时模糊测试的慢输入的最长情形（改进前约 2.2 秒）：64 个字符的 l33t 片段，两份在同一位置都被改动
+            ("l33t two copies, 128", {
+                let base: Vec<char> = "@$14+%|#(7{3}0!5".repeat(4).chars().collect();
+                let (mut a, mut b) = (base.clone(), base);
+                a[32] = 'Q';
+                b[32] = 'Z';
+                a.into_iter().chain(b).collect()
+            }),
         ] {
             let mut times = Vec::new();
             for _ in 0..7 {
@@ -2404,6 +2500,12 @@ mod tests {
                 (0..32)
                     .map(|i| format!("4@8({{[<3691!|70$5+%2{i:02}"))
                     .collect(),
+            ),
+            // 第 24 小时模糊测试的慢输入（release 构建下原来要 1 秒）：两份 l33t 字符密集的片段，同一位置都被改动
+            (
+                "fuzz_l33t_two_copies",
+                "\u{0}\u{0}\u{0}s\u{0}\u{0}0\u{0}\u{0}\u{0}3+\u{0}\u{0}%|#+\u{0}@$14\u{0}-7({7\u{2}\u{0}\u{0}s\u{0}\u{0}0\u{0}\u{0}\u{0}3+\u{0}\u{0}%|#+\u{0}@$14\u{0}-7({7"
+                    .to_owned(),
             ),
         ] {
             let start = std::time::Instant::now();

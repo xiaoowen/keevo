@@ -587,10 +587,11 @@ struct ExportSheet: View {
 /// 导出密码的强度（设计稿"预审修复 · 导出"）：四段条与文字，下面一行说明还差什么。
 struct ExportStrengthMeter: View {
     let password: String
+    @ViewState private var estimator = StrengthEstimator()
 
     var body: some View {
-        // 按进入 KDF 的形式（NFKD）评估，与能否导出的判定一致
-        let strength = password.isEmpty ? nil : exportPasswordStrength(password: password)
+        // 按进入 KDF 的形式（NFKD）评估，与能否导出的判定一致；在后台进行，输入时不卡顿
+        let strength = estimator.strength(for: password)
         VStack(alignment: .leading, spacing: 4) {
             MasterStrengthMeter(strength: strength)
             // 已经够强时不再说明，强度条上的"很强"就够了
@@ -601,6 +602,7 @@ struct ExportStrengthMeter: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .onChange(of: password, initial: true) { estimator.update(password) { exportPasswordStrength(password: $0) } }
     }
 
     private func reason(_ s: PasswordStrengthInfo?) -> String? {

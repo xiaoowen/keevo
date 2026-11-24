@@ -231,13 +231,17 @@ private struct PasswordStep: View {
     /// 由生成器生成时的熵（比特）；手动输入或修改后为 nil。
     @ViewState private var generatedBits: Double?
     @ViewState private var generatedValue = ""
+    @ViewState private var estimator = StrengthEstimator()
     @FocusState private var focus: Field?
 
     private enum Field { case password, confirm }
 
-    private var strength: PasswordStrengthInfo? { password.isEmpty ? nil : passwordStrength(password: password) }
+    private var strength: PasswordStrengthInfo? { estimator.strength(for: password) }
     private var problem: String? { MasterPasswordRule.problem(password, strength: strength) }
-    private var canContinue: Bool { problem == nil && confirm == password && !model.busy }
+    /// 强度还没算出时不能继续：否则太弱的主密码可能在估计完成前被提交。
+    private var canContinue: Bool {
+        problem == nil && estimator.isCurrent(for: password) && confirm == password && !model.busy
+    }
 
     var body: some View {
         Headline(title: tr("设置主密码"), subtitle: tr("建议用几个随机的词组成一句话"))
@@ -290,6 +294,7 @@ private struct PasswordStep: View {
         ErrorText()
             .onAppear { focus = .password }
             .onChange(of: password) { if password != generatedValue { generatedBits = nil } }
+            .onChange(of: password, initial: true) { estimator.update(password) { passwordStrength(password: $0) } }
     }
 
     /// 强度条下的说明：还差什么，或生成的口令短语的构成；够强时不显示（强度条上已经写着级别）。
