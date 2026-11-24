@@ -21,6 +21,15 @@ enum UnlockWaiter {
         case .browser(let name, let bundleID, _): tr("「{}」正在等待解锁。解锁后会回到 {}。", "\(name)", "\(browserName(bundleID))")
         }
     }
+
+    /// 锁屏胶囊中的图标。
+    var systemImage: String {
+        switch self {
+        case .cli: "terminal"
+        case .ssh: "key"
+        case .browser: "globe"
+        }
+    }
 }
 
 /// 一次 SSH 签名（"设置 → 开发者 → 最近使用"）。

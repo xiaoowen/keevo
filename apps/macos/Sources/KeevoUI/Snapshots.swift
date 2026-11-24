@@ -257,6 +257,12 @@ public enum Snapshots {
         await shooter.shoot("lock-waiting", size: CGSize(width: 960, height: 640)) { RootView() }
         model.unlockWaiter = nil
         await shooter.shoot("lock", size: CGSize(width: 960, height: 640)) { RootView() }
+        // 用错误的主密码解锁一次：输入框下说明"主密码不正确"
+        if shooter.wants("lock-wrong") {
+            await model.unlock(password: "不是这个密码", secretKey: "")
+            await shooter.shoot("lock-wrong", size: CGSize(width: 960, height: 640)) { RootView() }
+            model.wrongCredentials = false
+        }
         await shooter.shoot("enclave-unavailable", size: CGSize(width: 960, height: 640)) { EnclaveUnavailableView() }
         print("截图完成：\(shooter.count) 张，保存在 \(out.path)")
         return 0

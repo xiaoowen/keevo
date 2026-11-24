@@ -168,6 +168,10 @@ final class AppModel {
 
     /// 本机没有可用的账户密钥，解锁时需要用户从应急包输入。
     private(set) var needsSecretKey = false
+    /// 上一次解锁因主密码（或账户密钥）不正确而失败：锁屏在输入框下说明，不用横幅。编辑输入时清除。
+    var wrongCredentials = false
+    /// 解锁失败的次数：锁屏据此让输入框抖动一次。
+    private(set) var failedUnlocks = 0
     /// Touch ID 已启用且未失效。
     private(set) var touchIDEnabled = false
     /// 此时不能用 Touch ID 的原因；为 `nil` 时可以用 Touch ID 解锁（docs/ux.md §3.2）。
@@ -290,10 +294,12 @@ final class AppModel {
         }
     }
 
-    /// 解锁。`secretKey` 为空时只用主密码，账户密钥取自本机包裹。
+    /// 解锁。`secretKey` 为空时只用主密码，账户密钥取自本机包裹。主密码不正确、需要账户密钥时不设错误信息，
+    /// 由锁屏就地说明（设计稿"锁屏改版"）。
     func unlock(password: String, secretKey: String) async {
         guard let vault else { return }
         let manual = secretKey.trimmingCharacters(in: .whitespaces)
+        wrongCredentials = false
         await run {
             do {
                 try await Task.detached {
@@ -303,9 +309,14 @@ final class AppModel {
                         try vault.unlock(password: password, secretKey: manual)
                     }
                 }.value
+            } catch KeevoError.WrongCredentials {
+                self.wrongCredentials = true
+                self.failedUnlocks += 1
+                return
             } catch KeevoError.SecretKeyRequired {
+                // 锁屏随之显示账户密钥输入框与原因
                 self.needsSecretKey = true
-                throw KeevoError.SecretKeyRequired
+                return
             } catch KeevoError.KdfNeedsConfirmation {
                 self.pendingKdf = try? vault.kdfParams()
                 return
@@ -319,12 +330,19 @@ final class AppModel {
         guard let vault else { return }
         pendingKdf = nil
         let manual = secretKey.trimmingCharacters(in: .whitespaces)
+        wrongCredentials = false
         await run {
-            try await Task.detached {
-                try vault.unlockConfirmingKdf(
-                    password: password, secretKey: manual.isEmpty ? nil : manual, confirmed: confirmed
-                )
-            }.value
+            do {
+                try await Task.detached {
+                    try vault.unlockConfirmingKdf(
+                        password: password, secretKey: manual.isEmpty ? nil : manual, confirmed: confirmed
+                    )
+                }.value
+            } catch KeevoError.WrongCredentials {
+                self.wrongCredentials = true
+                self.failedUnlocks += 1
+                return
+            }
             try self.didUnlock()
         }
     }
@@ -461,6 +479,7 @@ final class AppModel {
     /// 锁定：Rust 端清除全部密钥，界面同时丢弃所有已解密的数据。
     func lock() {
         vault?.lock()
+        wrongCredentials = false
         vaults = []
         items = []
         sshKeys = []
@@ -805,7 +824,7 @@ final class AppModel {
     var passwordReasonText: String? {
         guard touchIDEnabled || passwordReason == .invalidated else { return nil }
         switch passwordReason {
-        case .restarted: return tr("Mac 重启后需要输入一次主密码。")
+        case .restarted: return tr("Mac 重启后需要输入一次主密码，之后可以用 Touch ID。")
         case .intervalElapsed: return tr("距上次输入主密码已超过 {} 天，请输入一次主密码。", "\(passwordIntervalDays)")
         case .tooManyFailures: return tr("Touch ID 连续多次未能识别，请输入主密码。")
         case .invalidated: return tr("Touch ID 已失效（例如指纹有变化）。输入主密码后会自动恢复。")
