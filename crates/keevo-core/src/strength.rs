@@ -15,7 +15,7 @@
 )]
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::OnceLock;
 
 /// 每段分析这么多个字符（[`estimate`]）。
@@ -413,6 +413,9 @@ fn near_period_estimate(chars: &[char], limit: f64) -> Option<(f64, Option<Analy
     }
     let mut found = Vec::new();
     let mut pairs: Vec<(Vec<char>, Vec<char>)> = Vec::new();
+    // 不同的两份常还原出相同的基础片段（修复后重跑模糊测试的慢输入：几乎全是同一个字符时，同一个片段被核对四次）。
+    // 同一个片段的核对结果相同，`cheapest` 本来也会去重，所以每个片段只核对一次，结果不变
+    let mut seen = HashSet::new();
     {
         let low = (n.saturating_sub(MAX_EDITS) / 3).max(1);
         for p in low..=longest.min(n).min(MAX_ANALYZED) {
@@ -433,7 +436,7 @@ fn near_period_estimate(chars: &[char], limit: f64) -> Option<(f64, Option<Analy
                     if !bases.is_empty() && p.saturating_mul(2).saturating_add(MAX_EDITS) >= n {
                         pairs.push((first.to_vec(), other.to_vec()));
                     }
-                    verify_bases(chars, bases, &mut found);
+                    verify_new_bases(chars, bases, &mut seen, &mut found);
                 }
             }
         }
@@ -457,8 +460,11 @@ fn near_period_estimate(chars: &[char], limit: f64) -> Option<(f64, Option<Analy
     // 一旦低于门槛就停下：能否导出已经确定
     if best.as_ref().is_none_or(|b| b.0 >= TOP_SCORE_GUESSES) && !pairs.is_empty() {
         let mut wild = Vec::new();
+        let mut seen = HashSet::new();
+        pairs.sort_unstable();
+        pairs.dedup();
         for (first, other) in &pairs {
-            verify_bases(chars, between(first, other, true), &mut wild);
+            verify_new_bases(chars, between(first, other, true), &mut seen, &mut wild);
         }
         let limit = best.as_ref().map_or(limit, |b| b.0);
         if let Some(found) = cheapest(chars, wild, limit, Some(TOP_SCORE_GUESSES), MAX_WILD_EVALS)
@@ -578,6 +584,20 @@ fn common_word_candidates(chars: &[char], longest: usize) -> Vec<(usize, usize, 
 }
 
 /// 对还原出的基础片段（与原文的开头对齐）核对编辑距离，成功的记下：(改动处数, 周期, 基础片段)。
+/// 同 [`verify_bases`]，跳过 `seen` 中已经核对过的基础片段。
+fn verify_new_bases(
+    chars: &[char],
+    bases: Vec<Vec<char>>,
+    seen: &mut HashSet<Vec<char>>,
+    found: &mut Vec<(usize, usize, Vec<char>)>,
+) {
+    let fresh: Vec<Vec<char>> = bases
+        .into_iter()
+        .filter(|b| seen.insert(b.clone()))
+        .collect();
+    verify_bases(chars, fresh, found);
+}
+
 fn verify_bases(chars: &[char], bases: Vec<Vec<char>>, found: &mut Vec<(usize, usize, Vec<char>)>) {
     for base in bases {
         let len = base.len();
@@ -974,7 +994,7 @@ const SHORT_PREFIX: usize = 3;
 /// 一个词典的前缀索引：判断某个前缀还能不能延伸成词。
 struct Prefixes {
     /// 全部词中长度不超过 [`SHORT_PREFIX`] 个字符的前缀。绝大多数子串在两三个字符时就被排除，一次哈希查找即可。
-    short: std::collections::HashSet<&'static str>,
+    short: HashSet<&'static str>,
     /// 全部词，按字节序排序。
     sorted: Vec<&'static str>,
 }
@@ -1117,7 +1137,7 @@ fn enumerate_l33t_subs(pw: &[char]) -> Vec<Vec<(char, char)>> {
             }
         }
         // 去重：按排序后的映射
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         subs = next
             .into_iter()
             .filter(|s| {
@@ -2218,6 +2238,16 @@ mod tests {
         );
     }
 
+    /// 修复后重跑模糊测试记下的慢输入（2026-11-24，插桩构建中 10 秒）：109 个字符，几乎全是 NUL，中间夹着
+    /// 五个其他字符。
+    fn nul_runs_109() -> String {
+        let mut chars = vec!['\0'; 109];
+        for (pos, c) in [(1, '\u{1}'), (2, '*'), (5, '\u{1}'), (7, '<'), (38, '\t')] {
+            chars[pos] = c;
+        }
+        chars.into_iter().collect()
+    }
+
     #[test]
     #[ignore = "release measurement; no timing assertion"]
     fn review5h_c1_release_performance_samples() {
@@ -2248,6 +2278,7 @@ mod tests {
                 b[32] = 'Z';
                 a.into_iter().chain(b).collect()
             }),
+            ("fuzz rerun, NUL runs, 109", nul_runs_109()),
         ] {
             let mut times = Vec::new();
             for _ in 0..7 {
@@ -2507,6 +2538,8 @@ mod tests {
                 "\u{0}\u{0}\u{0}s\u{0}\u{0}0\u{0}\u{0}\u{0}3+\u{0}\u{0}%|#+\u{0}@$14\u{0}-7({7\u{2}\u{0}\u{0}s\u{0}\u{0}0\u{0}\u{0}\u{0}3+\u{0}\u{0}%|#+\u{0}@$14\u{0}-7({7"
                     .to_owned(),
             ),
+            // 修复后重跑模糊测试的慢输入（release 构建下原来要 0.3 秒）：几乎全是 NUL
+            ("fuzz_nul_runs_109", nul_runs_109()),
         ] {
             let start = std::time::Instant::now();
             let strength = super::estimate(&password);
