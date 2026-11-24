@@ -144,7 +144,7 @@
 | 状态 | 交付物 | 说明 |
 |---|---|---|
 | ✅ | 规范 | [spec/secret-refs.md](../spec/secret-refs.md)（`keevo://` 引用的语法、名称匹配、连接串，歧义即报错）、[spec/cli.md](../spec/cli.md)（CLI 与服务的协议、终端会话授权、退出码）、[spec/ssh-agent.md](../spec/ssh-agent.md)（消息、密钥、授权策略、session-bind、锁定时的行为）；vault-format 1.3 新增属性 `ssh_agent` |
-| ✅ | 密钥引用 | `keevo-core` 的 `secret_ref`：解析（百分号编码、`attribute=otp`、`profile=`）、按名称解析到值（ID → 完全相同 → 忽略大小写，多于一个即报错）、键值对的键、数据库条目的 `connection_string`、为字段生成引用；界面中右键"复制 keevo:// 引用"。模糊测试目标 `secret_ref_parse` |
+| ✅ | 密钥引用 | `keevo-core` 的 `secret_ref`：解析（百分号编码、`attribute=otp`、`profile=`）、按名称解析到值（ID → 完全相同 → 忽略大小写，多于一个即报错）、键值对的键、数据库条目的 `connection_string`、为字段生成引用；界面中字段的下拉菜单与右键菜单"复制…引用"。模糊测试目标 `secret_ref_parse` |
 | ✅ | 命令行工具 `keevo` | `status`、`read`、`run`（`.env.keevo`、遮蔽输出、退出码透传）、`inject`（输出 0600）、`item list/get/create/edit`、`totp`、`generate`、`lock`、`ssh config`、`ssh-sign`；退出码稳定。随 Keevo.app 打包（`Contents/Helpers/keevo`），cdhash 编译进主程序；"设置 → 开发者"中安装到 `~/.local/bin`。端到端测试运行真实的 `keevo` 二进制 |
 | ✅ | CLI 服务与终端会话授权 | 单独的 socket；会话键由内核读取（终端设备与最早的同终端祖先，启动时间防 pid 复用）；第一次在 Keevo.app 中确认（Touch ID 或主密码），闲置 10 分钟 / 最长 12 小时失效，锁定时失效；拒绝后 10 秒内不再弹窗；锁定时请应用显示解锁界面并等待 60 秒。"设置 → 开发者"列出并可撤销已授权的会话 |
 | ✅ | SSH Agent | `keevo-ssh`：OpenSSH 私钥与公钥格式、指纹、agent 消息、session-bind（Ed25519 主机密钥验证签名）；Ed25519 签名基于 curve25519-dalek，RFC 8032 已知答案。只提供开启了的 Ed25519 密钥，按密钥的策略（每次确认 / 每个会话一次 / 解锁期间自动）在原生界面确认并显示来源（应用、命令、启动者、目标主机）；转发的连接一律逐次确认并警告；拒绝 `ssh-add` 添加外部密钥；锁定时请应用解锁并等待 30 秒（只在程序坞提示，30 秒内最多一次）；"设置 → 开发者"列出最近使用（只在内存中）。互通测试由系统的 `ssh-add -L`、`ssh-keygen -Y sign/verify` 驱动 |

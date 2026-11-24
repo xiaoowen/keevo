@@ -43,8 +43,7 @@ struct FieldDisplay: View {
     var body: some View {
         switch field.kind {
         case "totp":
-            OtpRow(itemId: itemId, field: field)
-                .contextMenu { ReferenceMenu(itemId: itemId, fieldId: field.id, otp: true) }
+            OtpRow(itemId: itemId, field: field, largeType: largeType)
         case "kv_list":
             KvRows(itemId: itemId, field: field, revealed: revealed, toggle: toggle)
         case "recovery_codes":
@@ -58,7 +57,6 @@ struct FieldDisplay: View {
                 strength: strength,
                 largeType: { largeType(field.value.expose()) }
             )
-            .contextMenu { ReferenceMenu(itemId: itemId, fieldId: field.id) }
         }
     }
 
@@ -72,20 +70,18 @@ struct FieldDisplay: View {
     }
 }
 
-/// 条目字段的一行（设计稿"条目的展示、编辑与新建"）：标签在上（品牌色小字），值在下；右侧的附加信息（强度、
-/// 倒计时）一直显示，复制、显示等操作只在悬停时出现。`copy` 不为空时双击整行即复制（设计稿"强度、双击复制、
-/// 排序与检查更新"）。
-struct ItemFieldRow<Value: View, Accessory: View, Actions: View>: View {
+/// 条目字段的一行（设计稿"条目的展示、编辑与新建"）：标签在上（品牌色小字），值在下。悬停时的操作见
+/// `HoverActionRow`。
+struct ItemFieldRow<Value: View, Accessory: View, MenuItems: View>: View {
     let label: String
     var highlighted = false
     var copy: (() -> Void)?
     @ViewBuilder let value: Value
     @ViewBuilder let accessory: Accessory
-    @ViewBuilder let actions: Actions
-    @ViewState private var hovering = false
+    @ViewBuilder let menu: MenuItems
 
     var body: some View {
-        HStack(alignment: .center, spacing: KV.Space.s2) {
+        HoverActionRow(label: label, highlighted: highlighted, copy: copy) {
             VStack(alignment: .leading, spacing: 2) {
                 // 字段名是保险库中的数据：模板的默认名称按界面语言显示
                 Text(tr(label))
@@ -95,16 +91,11 @@ struct ItemFieldRow<Value: View, Accessory: View, Actions: View>: View {
                 value
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+        } accessory: {
             accessory
-            HStack(spacing: KV.Space.s1) { actions }
-                .opacity(hovering ? 1 : 0)
+        } menu: {
+            menu
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(highlighted ? KV.Colors.bgSelected : (hovering ? KV.Colors.bgSurface : Color.clear))
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .doubleClickToCopy(copy)
     }
 }
 
@@ -114,9 +105,124 @@ extension ItemFieldRow where Accessory == EmptyView {
         highlighted: Bool = false,
         copy: (() -> Void)? = nil,
         @ViewBuilder value: () -> Value,
-        @ViewBuilder actions: () -> Actions
+        @ViewBuilder menu: () -> MenuItems
     ) {
-        self.init(label: label, highlighted: highlighted, copy: copy, value: value, accessory: { EmptyView() }, actions: actions)
+        self.init(label: label, highlighted: highlighted, copy: copy, value: value, accessory: { EmptyView() }, menu: menu)
+    }
+}
+
+/// 详情中的一行（设计稿"条目详情的字段行（参照 1Password）"）：右侧的附加信息（强度、"秘密"标记）一直显示；
+/// 悬停时整行变浅灰底，附加信息让位给"复制"与占满行高的下拉按钮。下拉菜单（显示、放大显示、复制引用等）同时是
+/// 右键菜单。`copy` 不为空时双击整行即复制（设计稿"强度、双击复制、排序与检查更新"）。
+struct HoverActionRow<Content: View, Accessory: View, MenuItems: View>: View {
+    /// 字段名：用于复制按钮与下拉按钮的读屏标签。
+    let label: String
+    var highlighted = false
+    var copy: (() -> Void)?
+    @ViewBuilder let content: Content
+    @ViewBuilder let accessory: Accessory
+    @ViewBuilder let menu: MenuItems
+    @ViewState private var hovering = false
+
+    private var hasMenu: Bool { MenuItems.self != EmptyView.self }
+    private var hasActions: Bool { copy != nil || hasMenu }
+
+    var body: some View {
+        let row = HStack(alignment: .center, spacing: 0) {
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 14)
+                .padding(.trailing, hasActions || Accessory.self != EmptyView.self ? KV.Space.s2 : 14)
+                .padding(.vertical, 9)
+            // 附加信息与悬停操作叠在一起，宽度取两者中较大的：悬停前后布局不变
+            ZStack(alignment: .trailing) {
+                accessory
+                    .padding(.trailing, 14)
+                    .opacity(hovering && hasActions ? 0 : 1)
+                if hasActions {
+                    HStack(spacing: 0) {
+                        if let copy { RowCopyButton(label: label, action: copy) }
+                        if hasMenu {
+                            // 撑满行高：行用 fixedSize 取内容的高度
+                            RowMenuButton(label: label) { menu }
+                                .frame(width: 40)
+                                .frame(maxHeight: .infinity)
+                        }
+                    }
+                    .opacity(hovering ? 1 : 0)
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .background(highlighted ? KV.Colors.bgSelected : (hovering ? KV.Colors.bgSurface : Color.clear))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .doubleClickToCopy(copy)
+        if hasMenu {
+            row.contextMenu { menu }
+        } else {
+            row
+        }
+    }
+}
+
+extension HoverActionRow where Accessory == EmptyView {
+    init(
+        label: String,
+        highlighted: Bool = false,
+        copy: (() -> Void)? = nil,
+        @ViewBuilder content: () -> Content,
+        @ViewBuilder menu: () -> MenuItems
+    ) {
+        self.init(label: label, highlighted: highlighted, copy: copy, content: content, accessory: { EmptyView() }, menu: menu)
+    }
+}
+
+/// 悬停时出现的"复制"：文字按钮，复制后提示清除倒计时（docs/ux.md §5）。
+struct RowCopyButton: View {
+    let label: String
+    let action: () -> Void
+    @ViewState private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(tr("复制"))
+                .font(KV.Typography.footnote.weight(.semibold))
+                .foregroundStyle(hovering ? KV.Colors.accentFg : KV.Colors.fgPrimary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(tr("复制（{} 秒后自动清除）", "\(Int(Clipboard.clearAfter))"))
+        .accessibilityLabel(tr("复制{}", "\(tr(label))"))
+    }
+}
+
+/// 字段行最右侧的下拉按钮：占满行高、浅灰底，左侧一条分隔线。
+struct RowMenuButton<Items: View>: View {
+    let label: String
+    @ViewBuilder let items: Items
+
+    var body: some View {
+        Menu {
+            items
+        } label: {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(KV.Colors.fgSecondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(KV.Colors.bgHover)
+        .overlay(alignment: .leading) { Rectangle().fill(KV.Colors.borderSubtle).frame(width: 1) }
+        .help(tr("更多操作"))
+        .accessibilityLabel(tr("{}的更多操作", "\(tr(label))"))
     }
 }
 
@@ -166,37 +272,72 @@ struct StrengthBadge: View {
     }
 }
 
-/// 卡片下方的"网站"（设计稿）：每个网址一行链接，悬停时可以复制，双击行的空白处也可以复制。
+/// 卡片下方的"网站"（设计稿"条目详情的字段行"）：每个网址一行，各有"网站"标签，显示完整网址。
 struct WebsitesBlock: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openURL) private var openURL
     let itemId: String
     let fields: [FieldEntry]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(Array(fields.enumerated()), id: \.element.id) { index, field in
+            ForEach(fields, id: \.id) { field in
                 ItemFieldRow(
-                    label: index == 0 ? field.label : "",
+                    label: field.label,
                     copy: { model.copyField(label: field.label, value: field.value.expose(), itemId: itemId) }
                 ) {
-                    if let url = URL(string: field.value.expose()), url.scheme == "https" || url.scheme == "http" {
-                        Link(FieldRow.display(url), destination: url)
-                            .font(KV.Typography.body)
-                            .foregroundStyle(KV.Colors.accentFg)
-                            .help(url.absoluteString)
-                            .lineLimit(1)
-                    } else {
-                        Text(field.value.expose())
-                            .font(KV.Typography.body)
-                            .foregroundStyle(KV.Colors.fgPrimary)
-                            .lineLimit(1)
+                    WebsiteText(value: field.value.expose())
+                } menu: {
+                    if let url = WebsiteText.webURL(field.value.expose()) {
+                        Button(tr("在浏览器中打开")) { openURL(url) }
                     }
-                } actions: {
-                    CopyButton(label: field.label, itemId: itemId) { field.value.expose() }
+                    ReferenceMenu(itemId: itemId, fieldId: field.id, label: field.label)
                 }
-                .contextMenu { ReferenceMenu(itemId: itemId, fieldId: field.id) }
+                .clipShape(RoundedRectangle(cornerRadius: KV.Radius.md, style: .continuous))
             }
         }
+    }
+}
+
+/// 网址（设计稿"条目详情的字段行"）：完整显示，协议与路径为次要文字色，主机名为链接色，点主机名在浏览器中打开。
+/// 不是 http(s) 网址的按原文显示。
+struct WebsiteText: View {
+    let value: String
+
+    var body: some View {
+        if let url = Self.webURL(value), let parts = Self.parts(value) {
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                Text(parts.head)
+                    .foregroundStyle(KV.Colors.fgSecondary)
+                    .fixedSize()
+                Link(parts.host, destination: url)
+                    .foregroundStyle(KV.Colors.accentFg)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                Text(parts.tail)
+                    .foregroundStyle(KV.Colors.fgSecondary)
+                    .lineLimit(1)
+            }
+            .font(KV.Typography.body)
+            .help(url.absoluteString)
+        } else {
+            Text(value)
+                .font(KV.Typography.body)
+                .foregroundStyle(KV.Colors.fgPrimary)
+                .lineLimit(1)
+        }
+    }
+
+    /// http(s) 网址；其他方案与没有方案的文本返回 `nil`。
+    static func webURL(_ value: String) -> URL? {
+        guard let url = URL(string: value), url.scheme == "https" || url.scheme == "http", url.host() != nil else { return nil }
+        return url
+    }
+
+    /// 按主机名切成三段："https://"、"account.aliyun.com"、"/login/login.htm"（端口、查询等都在第三段）。
+    static func parts(_ value: String) -> (head: String, host: String, tail: String)? {
+        guard let range = URLComponents(string: value)?.rangeOfHost, !range.isEmpty else { return nil }
+        return (String(value[..<range.lowerBound]), String(value[range]), String(value[range.upperBound...]))
     }
 }
 
@@ -255,6 +396,7 @@ struct CardRow<Value: View, Actions: View>: View {
 /// 普通字段与秘密字段。
 struct FieldRow: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openURL) private var openURL
     var itemId: String?
     let field: FieldEntry
     let revealed: Bool
@@ -275,17 +417,15 @@ struct FieldRow: View {
             valueView
         } accessory: {
             if let strength { StrengthBadge(strength: strength) }
-        } actions: {
+        } menu: {
             if field.concealed {
-                IconButton(
-                    systemImage: revealed ? "eye.slash" : "eye",
-                    label: revealed ? tr("隐藏") : tr("显示"),
-                    help: revealed ? tr("隐藏") : tr("显示（30 秒后自动隐藏）"),
-                    action: toggle
-                )
-                LargeTypeButton(action: largeType)
+                Button(revealed ? tr("隐藏") : tr("显示"), action: toggle)
             }
-            CopyButton(label: field.label, itemId: itemId) { field.value.expose() }
+            if field.kind == "url", let url = WebsiteText.webURL(field.value.expose()) {
+                Button(tr("在浏览器中打开")) { openURL(url) }
+            }
+            Button(tr("放大显示"), action: largeType)
+            if let itemId { ReferenceMenu(itemId: itemId, fieldId: field.id, label: field.label) }
         }
     }
 
@@ -293,13 +433,8 @@ struct FieldRow: View {
     private var valueView: some View {
         if field.concealed {
             SecretText(secret: field.value, revealed: revealed, multiline: multiline, selectable: false)
-        } else if field.kind == "url", let url = URL(string: field.value.expose()),
-                  url.scheme == "https" || url.scheme == "http" {
-            Link(Self.display(url), destination: url)
-                .font(KV.Typography.body)
-                .foregroundStyle(KV.Colors.accentFg)
-                .help(url.absoluteString)
-                .lineLimit(1)
+        } else if field.kind == "url" {
+            WebsiteText(value: field.value.expose())
         } else {
             Text(field.value.expose())
                 .font(Self.looksLikeKey(field.value.expose()) ? KV.Typography.mono : KV.Typography.body)
@@ -312,15 +447,6 @@ struct FieldRow: View {
     /// 公钥、指纹、PEM 等需要逐字核对的值用等宽字体。
     static func looksLikeKey(_ value: String) -> Bool {
         ["ssh-", "ecdsa-", "SHA256:", "MD5:", "-----BEGIN", "age1"].contains { value.hasPrefix($0) }
-    }
-
-    /// 网址的显示：主机名（含非默认端口）加路径，不显示方案与查询。
-    static func display(_ url: URL) -> String {
-        var host = url.host() ?? url.absoluteString
-        if host.hasPrefix("www.") { host.removeFirst(4) }
-        if let port = url.port { host += ":\(port)" }
-        let path = url.path()
-        return path.isEmpty || path == "/" ? host : host + path
     }
 
     /// 匹配方式（docs/architecture.md §5.3）：默认按可注册域名；IP 地址与 localhost 按主机与端口。
@@ -350,11 +476,13 @@ struct CopyButton: View {
     }
 }
 
-/// 一次性密码：倒计时环、当前验证码、剩余秒数（设计稿）。到期时重新向 Rust 取码。
+/// 一次性密码（设计稿"条目详情的字段行"）：当前验证码（"712 • 199"），倒计时环与剩余秒数在旁边的胶囊中。
+/// 到期时重新向 Rust 取码。
 struct OtpRow: View {
     @Environment(AppModel.self) private var model
     let itemId: String
     let field: FieldEntry
+    let largeType: (String) -> Void
     @ViewState private var code: OtpCodeEntry?
     @ViewState private var expiresAt = Date.distantPast
     @ViewState private var invalid = false
@@ -374,22 +502,29 @@ struct OtpRow: View {
                     let seconds = Int(remaining.rounded(.up))
                     HStack(spacing: KV.Space.s2) {
                         Text(Self.grouped(code.code.expose()))
-                            .font(.system(size: 16, weight: .medium, design: .monospaced))
-                            .tracking(1)
+                            .font(.system(size: 15, weight: .medium))
+                            .monospacedDigit()
                             .foregroundStyle(KV.Colors.fgPrimary)
                             .accessibilityLabel(tr("验证码 {}", "\(code.code.expose().map(String.init).joined(separator: " "))"))
-                        CountdownRing(fraction: remaining / Double(code.period), seconds: seconds)
-                        Text("\(seconds)")
-                            .font(KV.Typography.footnote)
-                            .monospacedDigit()
-                            .foregroundStyle(seconds <= 5 ? KV.Colors.statusWarningFg : KV.Colors.fgSecondary)
-                            .accessibilityHidden(true)
+                        HStack(spacing: KV.Space.s1) {
+                            CountdownRing(fraction: remaining / Double(code.period), seconds: seconds, size: 13)
+                            Text("\(seconds)")
+                                .font(KV.Typography.caption)
+                                .monospacedDigit()
+                                .foregroundStyle(seconds <= 5 ? KV.Colors.statusWarningFg : KV.Colors.fgSecondary)
+                                .accessibilityHidden(true)
+                        }
+                        .padding(.leading, 4)
+                        .padding(.trailing, 7)
+                        .padding(.vertical, 2)
+                        .background(KV.Colors.bgSunken, in: Capsule())
                     }
                 }
-            } actions: {
+            } menu: {
                 if let code, !invalid {
-                    CopyButton(label: field.label, itemId: itemId) { code.code.expose() }
+                    Button(tr("放大显示")) { largeType(code.code.expose()) }
                 }
+                ReferenceMenu(itemId: itemId, fieldId: field.id, label: field.label, otp: true)
             }
             .onChange(of: context.date) { refreshIfNeeded(context.date) }
         }
@@ -407,21 +542,22 @@ struct OtpRow: View {
         expiresAt = now.addingTimeInterval(Double(next.remainingMs) / 1000)
     }
 
-    /// 每三位一组，便于读出（"123 456"、"1234 5678"）。
+    /// 每三位一组，便于读出（"123 • 456"、"1234 • 5678"）。
     static func grouped(_ code: String) -> String {
         let size = code.count == 8 ? 4 : 3
         return stride(from: 0, to: code.count, by: size).map { i in
             let start = code.index(code.startIndex, offsetBy: i)
             let end = code.index(start, offsetBy: min(size, code.count - i))
             return String(code[start..<end])
-        }.joined(separator: " ")
+        }.joined(separator: " • ")
     }
 }
 
-/// 倒计时环（18pt）。剩余时间少于 5 秒时变为警示色；秒数另以文字给出，不只靠颜色（docs/ux.md §8）。
+/// 倒计时环（默认 18pt）。剩余时间少于 5 秒时变为警示色；秒数另以文字给出，不只靠颜色（docs/ux.md §8）。
 struct CountdownRing: View {
     let fraction: Double
     let seconds: Int
+    var size: CGFloat = 18
 
     var body: some View {
         ZStack {
@@ -431,7 +567,7 @@ struct CountdownRing: View {
                 .stroke(seconds <= 5 ? KV.Colors.statusWarningFg : KV.Colors.accentFill, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                 .rotationEffect(.degrees(-90))
         }
-        .frame(width: 18, height: 18)
+        .frame(width: size, height: size)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(tr("还剩 {} 秒", "\(seconds)"))
     }
@@ -460,28 +596,33 @@ struct KvRows: View {
             if index > 0 { CardRowDivider() }
             let key = "\(field.id)/kv/\(index)"
             let shown = revealed.contains(key)
-            CardRow(
+            HoverActionRow(
                 label: entry.key,
-                labelFont: .system(size: 13, weight: .semibold, design: .monospaced),
-                labelColor: KV.Colors.fgPrimary,
-                labelWidth: 180,
                 highlighted: entry.concealed && shown,
                 copy: { model.copyField(label: entry.key, value: entry.value.expose(), itemId: itemId) }
             ) {
-                if entry.concealed && !shown {
-                    Text(String(repeating: "•", count: 10))
-                        .font(KV.Typography.mono)
-                        .tracking(1)
-                        .foregroundStyle(KV.Colors.fgSecondary)
-                        .accessibilityLabel(tr("已隐藏"))
-                } else {
-                    Text(entry.value.expose())
-                        .font(KV.Typography.mono)
+                HStack(spacing: 10) {
+                    Text(entry.key)
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
                         .foregroundStyle(KV.Colors.fgPrimary)
+                        .frame(width: 180, alignment: .leading)
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                    if entry.concealed && !shown {
+                        Text(String(repeating: "•", count: 10))
+                            .font(KV.Typography.mono)
+                            .tracking(1)
+                            .foregroundStyle(KV.Colors.fgSecondary)
+                            .accessibilityLabel(tr("已隐藏"))
+                    } else {
+                        Text(entry.value.expose())
+                            .font(KV.Typography.mono)
+                            .foregroundStyle(KV.Colors.fgPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
-            } actions: {
+                .padding(.vertical, 2)
+            } accessory: {
                 if entry.concealed {
                     if shown {
                         Text(tr("已显示 · 30 秒后隐藏"))
@@ -490,29 +631,39 @@ struct KvRows: View {
                     } else {
                         OutlineBadge(text: tr("秘密"))
                     }
-                    Button(shown ? tr("隐藏") : tr("显示")) { toggle(key) }.buttonStyle(.kvLink)
                 }
-                CopyButton(label: entry.key, itemId: itemId) { entry.value.expose() }
+            } menu: {
+                if entry.concealed {
+                    Button(shown ? tr("隐藏") : tr("显示")) { toggle(key) }
+                }
+                ReferenceMenu(itemId: itemId, fieldId: field.id, kvKey: entry.key, label: entry.key)
             }
-            .contextMenu { ReferenceMenu(itemId: itemId, fieldId: field.id, kvKey: entry.key) }
         }
     }
 }
 
-/// 右键菜单："复制 keevo:// 引用"（spec/secret-refs.md §5）。引用不含秘密，可以写进代码与配置。
+/// 下拉菜单与右键菜单中的"复制「密码」引用"（spec/secret-refs.md §5）：复制字段的 `keevo://` 引用。引用不含秘密，
+/// 可以写进代码与配置。
 struct ReferenceMenu: View {
     @Environment(AppModel.self) private var model
     let itemId: String
     let fieldId: String
     var kvKey: String?
-    /// 一次性密码：另外提供取当前验证码的引用。
+    /// 字段名（键值对为键）：菜单项中显示。
+    let label: String
+    /// 一次性密码：分别提供当前验证码与密钥（字段原文）的引用。
     var otp = false
 
     var body: some View {
-        Button(tr("复制 keevo:// 引用")) { model.copyReference(itemId: itemId, fieldId: fieldId, kvKey: kvKey) }
         if otp {
-            Button(tr("复制验证码的 keevo:// 引用")) {
+            Button(tr("复制验证码引用")) {
                 model.copyReference(itemId: itemId, fieldId: fieldId, kvKey: nil, suffix: "?attribute=otp")
+            }
+            Button(tr("复制密钥引用")) { model.copyReference(itemId: itemId, fieldId: fieldId, kvKey: nil) }
+        } else {
+            // 字段名是保险库中的数据：模板的默认名称按界面语言显示；键值对的键原样显示
+            Button(tr("复制「{}」引用", kvKey == nil ? tr(label) : label)) {
+                model.copyReference(itemId: itemId, fieldId: fieldId, kvKey: kvKey)
             }
         }
     }
@@ -535,6 +686,7 @@ struct EnvironmentView: View {
     let groups: [ItemDetailView.FieldGroup]
     let revealed: Set<String>
     let toggle: (String) -> Void
+    let largeType: (String) -> Void
     @ViewState private var selected: String?
 
     private var environments: [ItemDetailView.FieldGroup] { groups.filter { $0.label != nil } }
@@ -542,7 +694,7 @@ struct EnvironmentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             if let base = groups.first(where: { $0.label == nil }) {
-                FieldCard(itemId: itemId, fields: base.fields, revealed: revealed, toggle: toggle) { _ in }
+                FieldCard(itemId: itemId, fields: base.fields, revealed: revealed, toggle: toggle, largeType: largeType)
             }
             if !environments.isEmpty {
                 let current = environments.first { $0.id == selected } ?? environments[0]
@@ -565,7 +717,7 @@ struct EnvironmentView: View {
                         if field.kind == "kv_list" {
                             KvRows(itemId: itemId, field: field, revealed: revealed, toggle: toggle, showHeader: false)
                         } else {
-                            FieldDisplay(itemId: itemId, field: field, revealed: revealed, toggle: toggle, largeType: { _ in })
+                            FieldDisplay(itemId: itemId, field: field, revealed: revealed, toggle: toggle, largeType: largeType)
                         }
                     }
                 }
@@ -589,11 +741,8 @@ struct CodesRows: View {
             Text(tr("剩余 {} / {}", "\(remaining)", "\(field.codes.count)"))
                 .font(KV.Typography.body)
                 .foregroundStyle(remaining < 3 ? KV.Colors.statusWarningFg : KV.Colors.fgPrimary)
-        } actions: {
-            IconButton(
-                systemImage: revealed.contains(field.id) ? "eye.slash" : "eye",
-                label: revealed.contains(field.id) ? tr("隐藏") : tr("显示")
-            ) { toggle(field.id) }
+        } menu: {
+            Button(revealed.contains(field.id) ? tr("隐藏") : tr("显示")) { toggle(field.id) }
         }
         if remaining < 3 {
             Banner(kind: .warning, message: tr("恢复码只剩 {} 个，请到网站上重新生成", "\(remaining)"))

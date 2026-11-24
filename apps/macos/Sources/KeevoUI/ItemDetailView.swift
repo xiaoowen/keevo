@@ -148,7 +148,9 @@ struct ItemDetailView: View {
                     .font(KV.Typography.footnote)
                     .foregroundStyle(KV.Colors.fgSecondary)
             } else if d.itemType == "environment" {
-                EnvironmentView(itemId: d.id, groups: groups, revealed: revealed, toggle: toggle)
+                EnvironmentView(itemId: d.id, groups: groups, revealed: revealed, toggle: toggle) {
+                    largeType = LargeTypeItem(value: $0)
+                }
             } else {
                 ForEach(groups, id: \.id) { group in
                     if group.label == nil {
@@ -227,7 +229,7 @@ struct ItemDetailView: View {
         return name.unicodeScalars.last.map(\.isASCII) == true ? tr("{} 保险库", "\(name)") : tr("{}保险库", "\(name)")
     }
 
-    /// "› 最后编辑 2026年11月23日 星期一 18:23"，点开后显示历史版本的入口（设计稿）。
+    /// "› 最后编辑 2026年11月24日星期二 14:52:39"，点开后显示历史版本的入口（设计稿）。
     private func footer(_ d: ItemDetail) -> some View {
         VStack(alignment: .leading, spacing: KV.Space.s2) {
             Button { withAnimation(.easeOut(duration: 0.15)) { showingEdited.toggle() } } label: {
@@ -253,11 +255,11 @@ struct ItemDetailView: View {
         .padding(.top, KV.Space.s1)
     }
 
-    /// 完整的日期与时间，按界面语言显示（"2026年11月23日 星期一 18:23"）。
+    /// 完整的日期与时间，精确到秒，按界面语言显示（"2026年11月24日星期二 14:52:39"）。
     static func fullDate(_ ms: UInt64) -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(ms) / 1000)
         let locale = Locale(identifier: UILanguage.current == .zh ? "zh_Hans" : "en_US")
-        return date.formatted(.dateTime.year().month(.wide).day().weekday(.wide).hour().minute().locale(locale))
+        return date.formatted(.dateTime.year().month(.wide).day().weekday(.wide).hour().minute().second().locale(locale))
     }
 
     /// "刚刚"、"5 分钟前"、"3 天前"，更早的显示日期。

@@ -17,7 +17,7 @@ use keevo_ipc::cli::{
 use crate::client::{CliError, Client};
 
 /// 引用无法解析时附在报错后面的提示（不含"提示："标签，见 [`hint`]）。
-const REF_HINT: &str = "在 Keevo 中右键点字段，选「复制 keevo:// 引用」可以得到准确的引用；keevo item get 保险库/条目 列出字段名。";
+const REF_HINT: &str = "在 Keevo 中把指针移到字段上，从右侧的下拉菜单（或右键菜单）选「复制…引用」可以得到准确的引用；keevo item get 保险库/条目 列出字段名。";
 
 /// 一行提示："提示：…"。`color` 时"提示"二字用青色加粗，与报错区分开。
 fn hint(text: &str, color: bool) -> String {
@@ -57,7 +57,7 @@ const USAGE: &str = "keevo — Keevo 的命令行工具
                                                 （以 keevo-ssh-sign 的名字运行时相同，供 git 的 gpg.ssh.program 使用）
 
 引用：keevo://保险库/条目/字段，或 keevo://保险库/条目/分区/字段；名称有重复时，那一段改用 ID。
-  获取引用：在 Keevo 中右键点字段（或环境变量的一项），选「复制 keevo:// 引用」。
+  获取引用：在 Keevo 中把指针移到字段（或环境变量的一项）上，从右侧的下拉菜单（或右键菜单）选「复制…引用」。
   也可以用 keevo item get 保险库/条目 查看字段与分区的名称。
 
 退出码：0 成功；1 其他错误；2 用法错误；3 无法连接 Keevo；4 已锁定；5 未授权；6 引用无法解析。
@@ -587,6 +587,6 @@ mod tests {
     fn hint_is_plain_without_color() {
         assert_eq!(hint("x", false), "提示：x");
         assert_eq!(hint("x", true), "\x1b[1;36m提示\x1b[0m：x");
-        assert!(hint(REF_HINT, false).starts_with("提示：在 Keevo 中右键点字段"));
+        assert!(hint(REF_HINT, false).starts_with("提示：在 Keevo 中把指针移到字段上"));
     }
 }

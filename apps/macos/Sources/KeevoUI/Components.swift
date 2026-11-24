@@ -373,7 +373,7 @@ extension View {
     }
 }
 
-/// 只有图标的行内按钮（复制、大字显示）：品牌色，悬停时加浅底。
+/// 只有图标的行内按钮（复制等）：品牌色，悬停时加浅底。
 struct IconButton: View {
     let systemImage: String
     let label: String
@@ -394,27 +394,6 @@ struct IconButton: View {
         .onHover { hovering = $0 }
         .help(help ?? label)
         .accessibilityLabel(label)
-    }
-}
-
-/// "Aa" 大字显示按钮（设计稿）。系统的 textformat.size 图标在中文环境下显示为"大小"，这里用文字。
-struct LargeTypeButton: View {
-    let action: () -> Void
-    @ViewState private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Text("Aa")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(KV.Colors.accentFg)
-                .frame(width: 24, height: 24)
-                .background(hovering ? KV.Colors.bgHover : .clear, in: RoundedRectangle(cornerRadius: KV.Radius.sm))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .help(tr("大字显示"))
-        .accessibilityLabel(tr("大字显示"))
     }
 }
 
@@ -456,10 +435,11 @@ struct KVCard<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
+        // 底色不用 background(_:in:)：它把圆角作为容器形状传给每一行，行的背景色（悬停、已显示）会各自画成圆角
         VStack(spacing: 0) { content }
-            .background(KV.Colors.bgCanvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(KV.Colors.borderSubtle))
+            .background(KV.Colors.bgCanvas)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(KV.Colors.borderSubtle))
     }
 }
 

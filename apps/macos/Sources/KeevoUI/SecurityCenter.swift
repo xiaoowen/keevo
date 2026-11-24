@@ -575,7 +575,7 @@ struct ItemSecuritySection: View {
                                     .font(KV.Typography.body)
                                     .foregroundStyle(KV.Colors.statusWarningFg)
                                     .fixedSize(horizontal: false, vertical: true)
-                            } actions: {}
+                            } menu: {}
                         }
                     }
                     HStack(spacing: KV.Space.s3) {
