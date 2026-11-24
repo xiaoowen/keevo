@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # 长时间模糊测试（docs/roadmap.md §8 第 1 项：所有解析器连续 24 小时无崩溃）。
 #
-# 用法：scripts/fuzz-soak.sh [总时长（秒），默认 86400] [并行数，默认 CPU 核数 − 2]
+# 用法：scripts/fuzz-soak.sh [总时长（秒），默认 86400] [并行数，默认 CPU 核数 − 2] [目标，逗号分隔，默认全部]
+#
+# 例如修复后只重跑两个目标、各 4 小时：scripts/fuzz-soak.sh 14400 2 password_strength,export_open
 #
 # - 全部目标分批并行，每批同时运行"并行数"个目标；每个目标运行 总时长 ÷ 批数 秒，合计的墙钟时间约为总时长。
 #   10 核的机器默认并行 8 个：15 个目标分两批，每个目标运行 12 小时（串行时只有 96 分钟）。
@@ -20,6 +22,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TOTAL="${1:-86400}"
 JOBS="${2:-$(($(getconf _NPROCESSORS_ONLN) - 2))}"
 [ "$JOBS" -ge 1 ] || JOBS=1
+ONLY="${3:-}"
 
 # 防止休眠：整个脚本在 caffeinate 下重新运行一次
 if [ -z "${KEEVO_SOAK_AWAKE:-}" ] && command -v caffeinate >/dev/null 2>&1; then
@@ -33,8 +36,15 @@ cargo +nightly fuzz build >/dev/null 2>&1 || { cargo +nightly fuzz build; exit 1
 HOST="$(rustc +nightly -vV | sed -n 's/^host: //p')"
 BIN="$ROOT/fuzz/target/$HOST/release"
 TARGETS=()
-while IFS= read -r t; do TARGETS+=("$t"); done < <(cargo +nightly fuzz list)
+while IFS= read -r t; do
+  # 指定了目标时只运行这些（逗号分隔）
+  if [ -z "$ONLY" ] || [[ ",$ONLY," == *",$t,"* ]]; then TARGETS+=("$t"); fi
+done < <(cargo +nightly fuzz list)
 COUNT=${#TARGETS[@]}
+if [ "$COUNT" -eq 0 ]; then
+  echo "没有匹配的目标：$ONLY（cargo +nightly fuzz list 列出全部目标）" >&2
+  exit 2
+fi
 WAVES=$(((COUNT + JOBS - 1) / JOBS))
 EACH=$((TOTAL / WAVES))
 RUN="$ROOT/fuzz/soak/$(date +%Y%m%d-%H%M%S)"
