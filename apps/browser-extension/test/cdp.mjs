@@ -18,6 +18,9 @@ import { join } from "node:path";
  * Playwright 下载的 Chromium 的可执行文件；KEEVO_CHROME 可以指定其他浏览器。没有时返回 null（调用方跳过测试）。
  * 安装：npx playwright install chromium（只下载一次，放在 Playwright 的缓存目录中）。
  */
+/** 单个 DevTools 调用的时限。 */
+const CALL_TIMEOUT_MS = 30000;
+
 export function findChromium() {
   if (process.env.KEEVO_CHROME) return process.env.KEEVO_CHROME;
   const cache =
@@ -86,10 +89,24 @@ export async function launchChrome(chrome, args, env) {
       }
     }
   });
+  // 每个调用都有时限：Chrome 偶尔不回应某个调用（例如对正在切换进程的 iframe 执行脚本），没有时限时整个测试会
+  // 一直挂着，直到 CI 六小时后取消，日志中也看不出挂在哪里（2026-11-24 的 CI）。超时时报出调用的方法
   const send = (method, params = {}, sessionId) =>
     new Promise((resolve, reject) => {
       const id = next++;
-      waiting.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (waiting.delete(id)) reject(new Error(`DevTools 调用 ${CALL_TIMEOUT_MS / 1000} 秒没有回应：${method}`));
+      }, CALL_TIMEOUT_MS);
+      waiting.set(id, {
+        resolve: (v) => {
+          clearTimeout(timer);
+          resolve(v);
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+      });
       writer.write(`${JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })}\0`);
     });
   return {

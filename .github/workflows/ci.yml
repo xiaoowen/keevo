@@ -146,6 +146,8 @@ jobs:
   browser-extension:
     name: 浏览器扩展（类型检查 + WASM → native host → 开发服务 端到端测试）
     runs-on: macos-latest
+    # 平时约 4 分钟；端到端测试挂住时不必等到默认的 6 小时
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
