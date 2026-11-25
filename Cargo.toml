@@ -4,7 +4,7 @@ members = ["crates/*", "tools/*"]
 
 [workspace.package]
 # 发布版本：macOS 应用、扩展与命令行工具都取自这里（scripts/package-macos.sh、scripts/build-extension.sh）
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT OR Apache-2.0"

@@ -19,10 +19,10 @@ Keevo 不使用 Apple 开发者团队（[ADR-0003](../adr/0003-no-apple-develope
 
 发布包由本仓库的 GitHub Actions 工作流 `release.yml` 在 `v*` 标签上构建，并用 Sigstore 签名 `SHA256SUMS`。核对分两步：先确认 `SHA256SUMS` 确实来自这个工作流，再用它核对两个 zip。**只核对校验和不够**：校验和与安装包放在同一处，可以被一起替换。
 
-安装 [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)（3.0 或更新版本，发布时用 3.1.4 签名并验证），例如 `brew install cosign`。在下载文件夹中运行（把 `v0.1.0-alpha.1` 换成你下载的版本）：
+安装 [cosign](https://docs.sigstore.dev/cosign/system_config/installation/)（3.0 或更新版本，发布时用 3.1.4 签名并验证），例如 `brew install cosign`。在下载文件夹中运行（把 `v0.1.0-alpha.2` 换成你下载的版本）：
 
 ```sh
-TAG=v0.1.0-alpha.1
+TAG=v0.1.0-alpha.2
 cosign verify-blob \
   --bundle SHA256SUMS.sigstore.json \
   --certificate-identity "https://github.com/xiaoowen/keevo/.github/workflows/release.yml@refs/tags/$TAG" \
@@ -64,7 +64,7 @@ shasum -a 256 -c SHA256SUMS
 1. 按第 1、2 步下载并核对。
 2. 退出 Keevo（`⌥⌘Q`，或菜单栏图标中的"退出 Keevo"；`⌘Q` 只是退到后台），用新的 `Keevo.app` 替换旧的。第一次打开新版本时，可能需要再按第 3 步放行一次。
 3. 用新的扩展文件夹替换旧的（保持同一位置），在 `chrome://extensions` 中点 Keevo 的刷新按钮。
-4. 在"设置 → 浏览器"中再点一次"安装"（应用更新后 native host 的路径不变时显示"已安装"，可以跳过）。
+4. 在"设置 → 浏览器"中确认"允许扩展连接 Keevo"是打开的（应用放在同一位置时会保持打开）。
 
 数据保存在 `~/Library/Application Support/Keevo/`，替换应用不会影响数据，浏览器的配对也会保留。
 

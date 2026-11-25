@@ -4,7 +4,7 @@
 
 Keevo 保存你的密码、双因素验证、SSH 密钥、API 令牌、数据库凭证和环境变量。数据默认只在你的设备上；需要多设备时，通过你自己的 iCloud、云盘或 NAS 端到端加密同步。除了你，没有人能读取，包括我们。
 
-> **状态：Alpha（0.1.0-alpha.1，内测）**。macOS 应用、Chrome 扩展、SSH Agent 与命令行工具已经可以使用；数据只保存在本机，还没有同步。这是早期版本，请保管好应急包，并留意自动备份。安装前请阅读[安装说明](docs/alpha/install.md)（应用没有经过 Apple 公证，需要先用 Sigstore 核对下载的文件）。
+> **状态：Alpha（0.1.0-alpha.2，内测）**。macOS 应用、Chrome 扩展、SSH Agent 与命令行工具已经可以使用；数据只保存在本机，还没有同步。这是早期版本，请保管好应急包，并留意自动备份。安装前请阅读[安装说明](docs/alpha/install.md)（应用没有经过 Apple 公证，需要先用 Sigstore 核对下载的文件）。
 
 ## 核心理念
 
@@ -27,7 +27,7 @@ Keevo 保存你的密码、双因素验证、SSH 密钥、API 令牌、数据库
 | 威胁模型与安全设计 | [docs/security.md](docs/security.md) |
 | 规范（加密、修订模型、保险库格式、本地通信、导出等）与冻结清单 | [spec/](spec/README.md) |
 | 路线图 | [docs/roadmap.md](docs/roadmap.md) |
-| 安装与发布说明（Alpha） | [docs/alpha/install.md](docs/alpha/install.md)、[发布说明](docs/alpha/release-notes-0.1.0-alpha.1.md) |
+| 安装与发布说明（Alpha） | [docs/alpha/install.md](docs/alpha/install.md)、发布说明（[0.1.0-alpha.2](docs/alpha/release-notes-0.1.0-alpha.2.md)、[0.1.0-alpha.1](docs/alpha/release-notes-0.1.0-alpha.1.md)） |
 
 ## 仓库结构
 
