@@ -461,6 +461,10 @@ struct KitActions: View {
 private struct TouchIDStep: View {
     @Environment(AppModel.self) private var model
     @Binding var password: String
+    /// 拿不到上一步设置的主密码（中途锁定、退出后重开）：就地再输入一次（设计稿"Alpha 安装后的问题"）。在出现时
+    /// 判断一次，输入时输入框不会消失。
+    @ViewState private var askPassword = false
+    @FocusState private var focused: Bool
 
     var body: some View {
         HeroIcon(systemImage: "touchid")
@@ -479,6 +483,13 @@ private struct TouchIDStep: View {
         .padding(.vertical, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(KV.Colors.bgSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        if askPassword {
+            LabeledInput(label: tr("主密码"), hint: tr("开启 Touch ID 需要再输入一次主密码"), focused: focused) {
+                SecureField("", text: $password)
+                    .focused($focused)
+                    .onSubmit { if !password.isEmpty { enable() } }
+            }
+        }
         VStack(spacing: 8) {
             Button { enable() } label: { Label(tr("开启 Touch ID"), systemImage: "touchid") }
                 .buttonStyle(KVButtonStyle(kind: .primary, fullWidth: true))
@@ -487,9 +498,11 @@ private struct TouchIDStep: View {
             Button(tr("以后再说")) { model.goToOnboarding(.browser) }
                 .buttonStyle(KVButtonStyle(kind: .secondary, fullWidth: true))
         }
-        if password.isEmpty {
-            Text(tr("可以在「设置 → 安全」中开启。")).font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
+        .onAppear {
+            askPassword = password.isEmpty
+            if askPassword { focused = true }
         }
+        Text(tr("以后也可以在「设置 → 安全」中开启。")).font(KV.Typography.footnote).foregroundStyle(KV.Colors.fgSecondary)
         ErrorText()
     }
 
@@ -509,6 +522,8 @@ private struct TouchIDStep: View {
 private struct BrowserStep: View {
     @Environment(AppModel.self) private var model
     @ViewState private var message: String?
+    /// 点了"安装扩展"：展开安装步骤（扩展没有上架 Chrome 应用商店，设计稿"Alpha 安装后的问题"）。
+    @ViewState private var showingSteps = false
 
     private struct Browser: Identifiable {
         let id: String
@@ -540,9 +555,11 @@ private struct BrowserStep: View {
             }
         }
         if let message { Banner(kind: .warning, message: message) }
-        Text(tr("装好后核对 6 个词完成配对"))
-            .font(KV.Typography.footnote)
-            .foregroundStyle(KV.Colors.fgSecondary)
+        if !showingSteps {
+            Text(tr("装好后核对 6 个词完成配对"))
+                .font(KV.Typography.footnote)
+                .foregroundStyle(KV.Colors.fgSecondary)
+        }
         VStack(spacing: 8) {
             Button(tr("继续")) { model.goToOnboarding(.done) }
                 .buttonStyle(KVButtonStyle(kind: .primary, fullWidth: true))
@@ -558,34 +575,54 @@ private struct BrowserStep: View {
         }
     }
 
+    @ViewBuilder
     private func row(_ b: Browser) -> some View {
         let connected = model.browserPairings.contains { $0.browser == b.id }
-        let state = !b.supported ? tr("已安装 · 稍后支持") : (connected ? tr("已安装 · 扩展已连接") : tr("已安装 · 扩展未连接"))
-        return HStack(spacing: 10) {
+        let state = !b.supported ? tr("稍后支持") : (connected ? tr("扩展已配对") : tr("扩展未配对"))
+        HStack(spacing: 10) {
             Image(systemName: "globe").font(.system(size: 16)).foregroundStyle(KV.Colors.fgSecondary)
             VStack(alignment: .leading, spacing: 1) {
                 Text(b.name).font(KV.Typography.bodyStrong)
                 Text(state).font(KV.Typography.footnote).foregroundStyle(connected ? KV.Colors.statusSuccessFg : KV.Colors.fgSecondary)
             }
             Spacer()
-            if b.supported, !connected {
+            if b.supported, !connected, !showingSteps {
                 Button(tr("安装扩展")) { install() }.buttonStyle(.kvBordered)
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        // 配对之后收起
+        if b.supported, showingSteps, !connected {
+            CardRowDivider()
+            VStack(alignment: .leading, spacing: 12) {
+                Text(tr("Alpha 版的扩展还没有上架 Chrome 应用商店，按下面三步安装："))
+                    .font(KV.Typography.footnote)
+                    .foregroundStyle(KV.Colors.fgSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ChromeExtensionSteps()
+                HStack(spacing: KV.Space.s2) {
+                    ProgressView().controlSize(.mini)
+                    Text(tr("正在等待扩展连接…"))
+                }
+                .font(KV.Typography.footnote)
+                .foregroundStyle(KV.Colors.fgSecondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
+    /// 登记本机通道，并展开安装步骤（不再打开 Chrome 应用商店：扩展没有上架）。
     private func install() {
         do {
             try NativeHostManifest.install()
         } catch {
             message = tr("这个构建无法连接浏览器（需要打包后的 Keevo.app）。可以稍后在「设置 → 浏览器」中连接。")
-            return
         }
-        if let id = browserExtensionId(), let url = URL(string: "https://chromewebstore.google.com/detail/\(id)") {
-            NSWorkspace.shared.open(url)
-        }
+        showingSteps = true
     }
 }
 

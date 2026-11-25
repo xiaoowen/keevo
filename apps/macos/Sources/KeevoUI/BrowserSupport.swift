@@ -538,7 +538,67 @@ enum NativeHostManifest {
     }
 }
 
-/// "设置 → 浏览器"：已配对的扩展、解除配对、Chrome 支持。
+/// 安装 Chrome 扩展的三步（设计稿"Alpha 安装后的问题"）：Alpha 版的扩展没有上架 Chrome 应用商店，从发布页下载后以
+/// "加载已解压的扩展程序"安装（docs/alpha/install.md §4）。引导与"设置 → 浏览器"共用。
+struct ChromeExtensionSteps: View {
+    @ViewState private var copied = false
+
+    /// 这个版本的发布页：扩展与应用同一个版本。
+    static var releaseURL: URL? {
+        URL(string: "https://github.com/\(UpdateChecker.repository)/releases/tag/v\(keevoVersion())")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            step(1, tr("从发布页下载 {}，解压到长期保留的位置（例如\"应用程序\"文件夹旁）。Chrome 从这个文件夹加载扩展，删除或移动它，扩展就会失效。", "Keevo-\(keevoVersion())-chrome-extension.zip")) {
+                if let url = Self.releaseURL {
+                    Button(tr("打开发布页")) { NSWorkspace.shared.open(url) }.buttonStyle(.kvLink)
+                }
+            }
+            step(2, tr("在 Chrome 中打开 chrome://extensions，打开右上角的\"开发者模式\"，点\"加载已解压的扩展程序\"，选择解压后的文件夹。")) {
+                Button(copied ? tr("已复制") : tr("复制地址")) { copyAddress() }.buttonStyle(.kvLink)
+            }
+            step(3, tr("点 Chrome 工具栏中的 Keevo 图标，选\"与 Keevo 配对\"，核对两边的 6 个词。")) { EmptyView() }
+        }
+    }
+
+    private func step<Action: View>(_ n: Int, _ text: String, @ViewBuilder action: () -> Action) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: KV.Space.s2) {
+            Text("\(n)")
+                .font(KV.Typography.caption.weight(.semibold))
+                .foregroundStyle(KV.Colors.accentFg)
+                .frame(width: 18, height: 18)
+                .background(KV.Colors.accentSubtle, in: Circle())
+            VStack(alignment: .leading, spacing: 4) {
+                Text(text)
+                    .font(KV.Typography.body)
+                    .foregroundStyle(KV.Colors.fgPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                action()
+            }
+        }
+    }
+
+    /// Keevo 打不开 chrome:// 地址，只能复制给用户粘贴。地址不是秘密，不按秘密的方式处理剪贴板。
+    private func copyAddress() {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString("chrome://extensions", forType: .string)
+        copied = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            copied = false
+        }
+    }
+}
+
+extension AppModel {
+    /// 已配对的 Chrome 扩展（Keevo 看不到 Chrome 装了什么，扩展的状态以配对为准）。
+    var chromePairings: [BrowserPairing] { browserPairings.filter { $0.browser == "com.google.Chrome" } }
+}
+
+/// "设置 → 浏览器"（设计稿"Alpha 安装后的问题"）：扩展是否配对、是否允许扩展连接（本机通道）、安装步骤、
+/// 已配对的扩展与解除配对。
 struct BrowserSettings: View {
     @Environment(AppModel.self) private var model
     @ViewState private var revoking: BrowserPairing?
@@ -551,19 +611,17 @@ struct BrowserSettings: View {
                 title: "Chrome",
                 footer: tr("扩展第一次连接时，需要在 Keevo 中核对 6 个词并确认配对。")
             ) {
-                SettingsRow(title: tr("连接 Keevo 扩展"), detail: tr("Chrome 中的 Keevo 扩展通过本机的安全通道连接 Keevo，不经过网络。")) {
-                    if installed {
-                        HStack(spacing: KV.Space.s2) {
-                            Label(tr("已安装"), systemImage: "checkmark.circle.fill")
-                                .font(KV.Typography.footnote.weight(.semibold))
-                                .foregroundStyle(KV.Colors.statusSuccessFg)
-                            Button(tr("卸载")) { run { try NativeHostManifest.uninstall() } }
-                                .buttonStyle(.kvBordered)
-                        }
-                    } else {
-                        Button(tr("安装")) { run { try NativeHostManifest.install() } }
-                            .buttonStyle(KVButtonStyle(kind: .primary, compact: true))
-                    }
+                extensionRow
+                CardRowDivider()
+                SettingsRow(
+                    title: tr("允许扩展连接 Keevo"),
+                    detail: tr("在 Chrome 中登记本机通道，扩展经它连接 Keevo，不经过网络。")
+                ) {
+                    Toggle(tr("允许扩展连接 Keevo"), isOn: Binding(
+                        get: { installed },
+                        set: { on in run { try on ? NativeHostManifest.install() : NativeHostManifest.uninstall() } }
+                    ))
+                    .kvSwitch(tr("允许扩展连接 Keevo"))
                 }
             }
             if let installMessage {
@@ -572,11 +630,20 @@ struct BrowserSettings: View {
             if let error = model.browserServiceError {
                 Banner(kind: .warning, message: tr("浏览器服务没有启动：{}", "\(error)"))
             }
+            // 配对之后收起
+            if model.phase == .unlocked, model.chromePairings.isEmpty {
+                SettingsSection(title: tr("安装 Chrome 扩展")) {
+                    ChromeExtensionSteps()
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
             SettingsSection(title: tr("已配对的扩展")) {
                 if model.phase != .unlocked {
                     SettingsRow(title: tr("解锁 Keevo 之后才能查看。")) { EmptyView() }
                 } else if model.browserPairings.isEmpty {
-                    SettingsRow(title: tr("还没有配对的扩展"), detail: tr("在 Chrome 的 Keevo 扩展中点「连接 Keevo」开始配对。")) { EmptyView() }
+                    SettingsRow(title: tr("还没有配对的扩展"), detail: tr("在 Chrome 中点 Keevo 扩展的图标，选「与 Keevo 配对」。")) { EmptyView() }
                 } else {
                     ForEach(Array(model.browserPairings.enumerated()), id: \.element.id) { index, p in
                         if index > 0 { CardRowDivider() }
@@ -595,6 +662,13 @@ struct BrowserSettings: View {
             }
         }
         .onAppear { model.refreshBrowserPairings() }
+        // 扩展装好后会自动发起配对：设置页开着时定时刷新，配对后状态随之更新
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                model.refreshBrowserPairings()
+            }
+        }
         .sheet(item: Binding(get: { revoking.map(RevokeItem.init) }, set: { if $0 == nil { revoking = nil } })) { item in
             ReverifySheet(
                 title: tr("解除「{}」的配对", "\(item.pairing.name)"),
@@ -603,6 +677,30 @@ struct BrowserSettings: View {
                 destructive: true
             ) { password in
                 await model.revokeBrowserPairing(id: item.pairing.id, password: password)
+            }
+        }
+    }
+
+    /// "Keevo 扩展"：按是否配对显示（Keevo 看不到 Chrome 装了什么）。
+    @ViewBuilder
+    private var extensionRow: some View {
+        let paired = model.chromePairings
+        if model.phase != .unlocked {
+            SettingsRow(title: tr("Keevo 扩展"), detail: tr("解锁 Keevo 之后才能查看。")) { EmptyView() }
+        } else if paired.isEmpty {
+            SettingsRow(title: tr("Keevo 扩展"), detail: tr("还没有配对")) {
+                Text(tr("未配对"))
+                    .font(KV.Typography.footnote.weight(.semibold))
+                    .foregroundStyle(KV.Colors.statusWarningFg)
+            }
+        } else {
+            SettingsRow(
+                title: tr("Keevo 扩展"),
+                detail: tr("已配对：{}", paired.map { $0.name.isEmpty ? tr("（未命名）") : $0.name }.joined(separator: tr("、")))
+            ) {
+                Label(tr("已配对"), systemImage: "checkmark.circle.fill")
+                    .font(KV.Typography.footnote.weight(.semibold))
+                    .foregroundStyle(KV.Colors.statusSuccessFg)
             }
         }
     }
