@@ -158,7 +158,8 @@ const SAME_SITE_TOP = `https://localhost:${topServer.address().port}`;
 const env = { ...process.env, KEEVO_DEV_SOCKET: join(dir, "ipc", "k.sock") };
 const service = spawn(join(root, "target/debug/keevo-dev-service"), ["--auto-confirm", "--dir", join(dir, "svc"), "--local-url", LOCAL], {
   env,
-  stdio: ["ignore", "pipe", "pipe"],
+  // 标准输入：测试中发送 lock / unlock，模拟在 Keevo 中锁定与解锁
+  stdio: ["pipe", "pipe", "pipe"],
 });
 let serviceLog = "";
 service.stderr.on("data", (d) => (serviceLog += d));
@@ -346,6 +347,36 @@ async function shot(page, name) {
   await waitFor(async () => JSON.stringify(await values(page)) === JSON.stringify(filled), "填入用户名与密码");
   await waitFor(() => page.eval(`document.querySelectorAll("div[popover]").length <= 1`), "填充后菜单关闭");
   ok("可信点击图标与条目后填入用户名与密码，菜单关闭");
+}
+
+// 1b. 菜单打开时 Keevo 已锁定：显示"已锁定"；在 Keevo 中解锁后，菜单自动显示条目，不必关掉再点一次图标
+{
+  const page = await open(`${LOCAL}/login`);
+  await waitFor(() => page.eval(`document.readyState === "complete"`), "登录页加载");
+  service.stdin.write("lock\n");
+  await waitFor(() => serviceLog.includes("[test] 已锁定"), "开发服务锁定");
+  const input = await waitFor(async () => {
+    await page.eval(`document.getElementById("u").focus()`);
+    return page.eval(
+      `(() => { if (document.querySelectorAll("div[popover]").length < 1) return null; const r = document.getElementById("u").getBoundingClientRect(); return { right: r.right, top: r.top, height: r.height }; })()`,
+    );
+  }, "锁定时输入框旁的图标");
+  let menu = null;
+  for (let attempt = 0; attempt < 3 && !menu; attempt++) {
+    await sleep(150);
+    await click(page, input.right - 16, input.top + input.height / 2);
+    menu = await menuFrame().catch(() => null);
+  }
+  assert.ok(menu, "锁定时点击图标出现菜单");
+  await waitFor(async () => (await menu.eval(`document.body.innerText`)).includes("Keevo 已锁定"), "菜单显示已锁定");
+  assert.equal(await menu.eval(`document.querySelectorAll("button.item").length`), 0, "锁定时没有条目");
+  service.stdin.write("unlock\n");
+  await waitFor(() => serviceLog.includes("[test] 已解锁"), "开发服务解锁");
+  await waitFor(() => menu.eval(`!!document.querySelector("button.item")`), "解锁后菜单自动显示条目");
+  await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await waitFor(() => page.eval(`document.querySelectorAll("div[popover]").length <= 1`), "Esc 后菜单关闭");
+  ok("菜单打开时 Keevo 已锁定：显示已锁定；在 Keevo 中解锁后菜单自动显示条目");
 }
 
 // 2. 点击劫持：透明与遮挡

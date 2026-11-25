@@ -767,6 +767,8 @@ async function menuInit(session: InlineSession | undefined): Promise<MenuInit> {
   await settled();
   if (state.status === "unpaired") return { ...base, message: "unpaired" };
   if (state.status !== "connected") return { ...base, message: state.status === "error" ? "error" : "connecting" };
+  // 缓存的状态可能已经过时（菜单在锁定时打开，之后在 Keevo 中解锁）：重新查询
+  if (state.locked) await refreshStatus();
   if (state.locked) return { ...base, message: "locked" };
   const m = await request({ method: "candidates", params: { url: session.url } });
   if (m && "error" in m && m.error.code === "locked") return { ...base, message: "locked" };

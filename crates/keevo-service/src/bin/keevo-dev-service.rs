@@ -266,7 +266,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .position(|a| a == "--local-url")
         .and_then(|i| args.get(i.saturating_add(1)))
         .map_or("http://localhost:3000", String::as_str);
-    let vault = open_or_create_demo(&dir, local_url)?;
+    let vault = Arc::new(Mutex::new(open_or_create_demo(&dir, local_url)?));
     let key = load_or_create_service_key(&dir.join("service-key"))?;
     let prompt: Arc<dyn PairingPrompt> = if auto_confirm {
         Arc::new(AutoConfirm)
@@ -274,12 +274,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(TerminalPrompt)
     };
 
-    let svc = VaultService::new(
-        Arc::new(Mutex::new(vault)),
-        key,
-        prompt,
-        PeerPolicy::DevSameUserOnly,
-    )?;
+    if auto_confirm {
+        spawn_test_commands(Arc::clone(&vault), dir.join("dev-secret-key.txt"));
+    }
+    let svc = VaultService::new(vault, key, prompt, PeerPolicy::DevSameUserOnly)?;
     // 演示保险库已解锁：读入配对记录（存在加密数据库中，spec/ipc.md §4.2）
     svc.load_pairings()?;
     let socket = keevo_ipc::paths::socket_path()?;
@@ -290,6 +288,36 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     std::io::stdout().flush()?;
     svc.serve(&listener);
     Ok(())
+}
+
+/// 自动化测试（`--auto-confirm`）：从标准输入读 `lock` 与 `unlock`，模拟用户在 Keevo 中锁定与解锁（浏览器测试：
+/// 菜单打开时 Keevo 已锁定，解锁后菜单自动显示条目）。结果写到标准错误，测试据此等待。
+fn spawn_test_commands(vault: Arc<Mutex<Vault>>, secret_key: PathBuf) {
+    std::thread::spawn(move || {
+        for line in std::io::stdin().lock().lines() {
+            let Ok(line) = line else { break };
+            let Ok(mut vault) = vault.lock() else { break };
+            match line.trim() {
+                "lock" => {
+                    vault.lock();
+                    eprintln!("[test] 已锁定");
+                }
+                "unlock" => {
+                    let unlocked = fs::read_to_string(&secret_key)
+                        .map_err(|e| e.to_string())
+                        .and_then(|text| {
+                            AccountSecretKey::parse(text.trim()).map_err(|e| e.to_string())
+                        })
+                        .and_then(|sk| vault.unlock(DEMO_PASSWORD, &sk).map_err(|e| e.to_string()));
+                    match unlocked {
+                        Ok(()) => eprintln!("[test] 已解锁"),
+                        Err(e) => eprintln!("[test] 解锁失败：{e}"),
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
 }
 
 fn open_or_create_demo(dir: &Path, local_url: &str) -> Result<Vault, Box<dyn std::error::Error>> {

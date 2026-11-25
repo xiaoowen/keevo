@@ -166,8 +166,24 @@ addEventListener("focus", () => {
   if (document.activeElement === document.body) document.querySelector<HTMLButtonElement>("button.item")?.focus();
 });
 
-void ask({ type: "menu_init" }).then((r) => {
-  init = r.init ?? null;
-  render();
-  document.querySelector<HTMLButtonElement>("button.item")?.focus();
-});
+/** 菜单打开时 Keevo 已锁定或还在连接：每秒重新取一次，解锁后直接显示条目（安装后的反馈：解锁后菜单停在"已锁定"）。 */
+const RETRY_MS = 1000;
+const RETRY_FOR_MS = 120_000;
+const WAITING = new Set(["locked", "connecting"]);
+
+async function load(): Promise<void> {
+  const started = Date.now();
+  for (;;) {
+    const r = await ask({ type: "menu_init" });
+    const next = r.init ?? null;
+    if (JSON.stringify(next) !== JSON.stringify(init)) {
+      init = next;
+      render();
+      document.querySelector<HTMLButtonElement>("button.item")?.focus();
+    }
+    if (!init?.message || !WAITING.has(init.message) || Date.now() - started > RETRY_FOR_MS) return;
+    await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
+  }
+}
+
+void load();
