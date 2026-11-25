@@ -348,8 +348,13 @@ final class AppModel {
     }
 
     /// 用 Touch ID 解锁。用户取消时不显示错误。
+    ///
+    /// 只在仍然锁定时进行：Touch ID 窗口会让 Keevo 暂时失去前台，验证后回到前台时，回到前台的自动弹出可能排在这次
+    /// 解锁之后执行，那时已经解锁，不能再弹一次（安装后的反馈：主动点 Touch ID 解锁后，主界面里又弹出一次）。
     func unlockWithTouchID() async {
-        guard let vault, touchIDUsable, !busy else { return }
+        guard let vault, phase == .locked, touchIDUsable, !busy else { return }
+        // 已经在用 Touch ID 了：这次锁定期间不再自动弹出
+        autoPrompted = true
         await run {
             defer { self.refreshLocalState() }
             do {
@@ -363,7 +368,8 @@ final class AppModel {
 
     /// 应用回到前台时：锁定且可以用 Touch ID，就直接弹出 Touch ID（docs/ux.md §3.2"默认用 Touch ID"）。
     func appDidBecomeActive() {
-        guard phase == .locked, !autoPrompted else { return }
+        // 正在解锁（例如刚在 Touch ID 窗口中验证过）时不再弹出
+        guard phase == .locked, !autoPrompted, !busy else { return }
         refreshLocalState()
         guard touchIDUsable else { return }
         autoPrompted = true
